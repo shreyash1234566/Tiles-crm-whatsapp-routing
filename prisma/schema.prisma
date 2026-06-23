@@ -1,0 +1,2445 @@
+generator client {
+  provider      = "prisma-client-js"
+  runtime       = "nodejs"
+  output        = "../node_modules/.prisma/client"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "debian-openssl-1.1.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── AUTH MODELS ─────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  STAFF
+}
+
+model User {
+  id             Int      @id @default(autoincrement())
+  email          String   @unique
+  name           String
+  hashedPassword String
+  role           UserRole @default(STAFF)
+  isActive       Boolean  @default(true)
+  staffId        Int?     @unique
+  staff          Staff?   @relation(fields: [staffId], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+}
+
+model Account {
+  id                Int     @id @default(autoincrement())
+  userId            Int
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           Int      @id @default(autoincrement())
+  sessionToken String   @unique
+  userId       Int
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── CONTACT (Unified Customer Identity) ─────────────
+
+model Contact {
+  id              Int      @id @default(autoincrement())
+  name            String
+  phone           String   @unique
+  email           String?
+  address         String?
+  gstNumber       String? // Buyer GSTIN — enables B2B classification in GSTR-1
+  state           String? // State for place of supply (e.g. "Maharashtra")
+  source          String?
+  notes           String?
+  emailSubscribed Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  leads         Lead[]
+  orders        Order[]
+  appointments  Appointment[]
+  invoices      Invoice[]
+  quotations    Quotation[]
+  customOrders  CustomOrder[]
+  walkins       Walkin[]
+  callLogs      CallLog[]
+  conversations Conversation[]
+  reviews       Review[]
+  dailyPayments DailyPayment[]
+
+  @@index([email])
+  @@index([emailSubscribed])
+}
+
+// ─── LEAD MANAGEMENT ─────────────────────────────────
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  SHOWROOM_VISIT
+  QUOTATION
+  WON
+  LOST
+}
+
+model Lead {
+  id           Int        @id @default(autoincrement())
+  contactId    Int
+  contact      Contact    @relation(fields: [contactId], references: [id])
+  interest     String
+  budget       String?
+  status       LeadStatus @default(NEW)
+  source       String?
+  date         DateTime   @default(now())
+  notes        String?
+  assignedToId Int?
+  assignedTo   Staff?     @relation(fields: [assignedToId], references: [id])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  followUps     FollowUp[]
+  indiaMartLead IndiaMartLead?
+
+  @@index([status])
+  @@index([date])
+  @@index([assignedToId])
+}
+
+model FollowUp {
+  id      Int      @id @default(autoincrement())
+  leadId  Int
+  lead    Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  day     Int
+  message String
+  sent    Boolean  @default(false)
+  date    DateTime
+
+  @@index([leadId])
+}
+
+// ─── PRODUCTS & INVENTORY ────────────────────────────
+
+model Category {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique
+  products Product[]
+}
+
+model Warehouse {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique
+  address  String?
+  products Product[]
+}
+
+model Product {
+  id            Int        @id @default(autoincrement())
+  sku           String     @unique
+  name          String
+  categoryId    Int
+  category      Category   @relation(fields: [categoryId], references: [id])
+  price         Int
+  stock         Float      @default(0)
+  sold          Int        @default(0)
+  reorderLevel  Int        @default(5)
+  image         String?
+  material      String?
+  brand         String?
+  color         String?
+  description   String?
+  warehouseId   Int?
+  warehouse     Warehouse? @relation(fields: [warehouseId], references: [id])
+  lastRestocked DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  orders               Order[]
+  quotationItems       QuotationItem[]
+  invoiceItems         InvoiceItem[]
+  customOrders         CustomOrder[]
+  purchaseOrderItems   PurchaseOrderItem[]
+  purchaseReturnItems  PurchaseReturnItem[]
+  godownStocks         GodownStock[]
+  transferItems        GodownTransferItem[]
+  batches              ProductBatch[]
+  bomItems             BomItem[]              @relation("RawMaterial")
+  bomFinished          BillOfMaterials[]      @relation("FinishedProduct")
+  productionFinished   ProductionOrder[]      @relation("ProductionFinished")
+  materialConsumed     MaterialConsumption[]  @relation("MaterialConsumed")
+  stockLedger          StockLedger[]
+  scrapInventory       ScrapInventory[]
+  customOrderInventory CustomOrderInventory[]
+
+  // Deep inventory fields
+  hsnCode       String?
+  unitOfMeasure String      @default("PCS") // also accepts "SQFT" | "BOX" for tiles (enforced in validation)
+  unitSize      Float       @default(1)
+  costPrice     Int         @default(0)
+  stockGroupId  Int?
+  stockGroup    StockGroup? @relation(fields: [stockGroupId], references: [id])
+
+  // ── Tiles & Sanitary attributes (nullable, additive) ──
+  tileSize        String? // e.g. "600x600"
+  finish          String? // glossy | matte | rustic
+  coveragePerBox  Float? // sq.ft covered by one box
+  tilesPerBox     Int? // pieces per box
+  surfaceType     String? // surface descriptor
+  applicationArea String? // floor | wall | bathroom
+
+  @@index([categoryId])
+  @@index([sku])
+  @@index([name])                    // product search by name
+  @@index([stock])                   // low-stock queries (stock < reorderLevel)
+  @@index([categoryId, stock])       // category-filtered stock queries
+}
+
+// ─── ORDERS ──────────────────────────────────────────
+
+enum OrderStatus {
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PAID
+  PARTIAL
+  PENDING
+}
+
+enum OrderSource {
+  STORE
+  AMAZON
+  FLIPKART
+  SHOPIFY
+}
+
+model Order {
+  id           Int           @id @default(autoincrement())
+  displayId    String        @unique
+  contactId    Int
+  contact      Contact       @relation(fields: [contactId], references: [id])
+  productId    Int
+  product      Product       @relation(fields: [productId], references: [id])
+  quantity     Int           @default(1)
+  amount       Int
+  status       OrderStatus   @default(CONFIRMED)
+  date         DateTime
+  deliveryDate DateTime?
+  payment      PaymentStatus @default(PENDING)
+  source       OrderSource   @default(STORE)
+  notes        String?
+  godownId     Int?
+  godown       Godown?       @relation(fields: [godownId], references: [id])
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  dailyPayments DailyPayment[]
+
+  @@index([status])
+  @@index([source])
+  @@index([date])
+  @@index([contactId])
+  @@index([status, date])            // dashboard: orders by status filtered by date range
+  @@index([contactId, status])       // CRM: customer order history by status
+}
+
+// ─── QUOTATIONS ───────────────────────────────────────
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+}
+
+model Quotation {
+  id                  Int             @id @default(autoincrement())
+  displayId           String          @unique
+  contactId           Int
+  contact             Contact         @relation(fields: [contactId], references: [id])
+  date                DateTime        @default(now())
+  validUntil          DateTime?
+  projectName         String?
+  deliveryMode        String?
+  roadPermit          String?
+  emailId             String?
+  contactPerson       String?
+  dispatchAddress     String?
+  installationPercent Float           @default(5)
+  discountType        String          @default("PERCENT") // PERCENT | FLAT
+  discountValue       Float           @default(0)
+  discountAmount      Int             @default(0)
+  installationCharge  Int             @default(0)
+  freightCharge       Int             @default(0)
+  loadingCharge       Int             @default(0)
+  gstPercent          Float           @default(18)
+  gstAmount           Int             @default(0)
+  totalBeforeTax      Int             @default(0)
+  grandTotal          Int             @default(0)
+  notes               String?
+  termsAndConditions  String[]
+  status              QuotationStatus @default(DRAFT)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  items QuotationItem[]
+
+  @@index([date])
+  @@index([status])
+  @@index([contactId])
+  @@index([contactId, status])       // customer quotation history by status
+  @@index([status, date])            // billing: filter by status + date range
+}
+
+model QuotationItem {
+  id             Int       @id @default(autoincrement())
+  quotationId    Int
+  quotation      Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  productId      Int?
+  product        Product?  @relation(fields: [productId], references: [id])
+  name           String
+  sku            String?
+  description    String?
+  quantity       Int       @default(1)
+  rate           Int
+  amount         Int
+  referenceImage String?
+  sortOrder      Int       @default(0)
+
+  @@index([quotationId])
+  @@index([productId])
+}
+
+// ─── APPOINTMENTS ────────────────────────────────────
+
+model Appointment {
+  id        Int      @id @default(autoincrement())
+  contactId Int
+  contact   Contact  @relation(fields: [contactId], references: [id])
+  date      DateTime
+  time      String
+  purpose   String
+  status    String   @default("Scheduled")
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date])
+  @@index([status])
+}
+
+// ─── INVOICES & BILLING ──────────────────────────────
+
+enum InvoiceStatus {
+  ACTIVE
+  CANCELLED
+  REFUNDED
+}
+
+model Invoice {
+  id            Int           @id @default(autoincrement())
+  displayId     String        @unique
+  contactId     Int
+  contact       Contact       @relation(fields: [contactId], references: [id])
+  subtotal      Int
+  discount      Int           @default(0)
+  discountType  String        @default("none")
+  gst           Int           @default(0)
+  cgst          Int           @default(0)
+  sgst          Int           @default(0)
+  igst          Int           @default(0) // Interstate GST
+  cess          Int           @default(0) // Cess on applicable goods
+  total         Int
+  amountPaid    Int           @default(0)
+  balanceDue    Int           @default(0)
+  paymentMethod String // primary payment method
+  paymentStatus PaymentStatus @default(PENDING)
+  invoiceStatus InvoiceStatus @default(ACTIVE)
+  transportCost Int           @default(0) // Transportation/freight cost added to invoice
+  supplyType    String        @default("INTRASTATE") // INTRASTATE | INTERSTATE | EXPORT | EXEMPT | NIL_RATED
+  placeOfSupply String? // State name, e.g. "Maharashtra"
+  isRCM         Boolean       @default(false) // Reverse Charge Mechanism
+  date          DateTime
+  time          String?
+  dueDate       DateTime?
+  salespersonId Int?
+  salesperson   Staff?        @relation(fields: [salespersonId], references: [id])
+  notes         String?
+  heldAt        DateTime? // non-null = parked/held bill
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  items       InvoiceItem[]
+  payments    Payment[]
+  creditNotes CreditNote[]
+  eWayBills   EWayBill[]
+  dailyPayments DailyPayment[]
+
+  @@index([date])
+  @@index([paymentStatus])
+  @@index([invoiceStatus])
+  @@index([contactId])
+  @@index([paymentStatus, date])     // billing dashboard: unpaid invoices by date
+  @@index([invoiceStatus, date])     // billing: active invoices in date range
+  @@index([contactId, paymentStatus]) // CRM: customer outstanding invoices
+}
+
+model InvoiceItem {
+  id            Int     @id @default(autoincrement())
+  invoiceId     Int
+  invoice       Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId     Int
+  product       Product @relation(fields: [productId], references: [id])
+  name          String
+  sku           String
+  quantity      Int
+  price         Int
+  hsnCode       String? // HSN/SAC code for GST
+  gstRate       Float   @default(18) // Per-item GST rate (from HSN)
+  cgst          Int     @default(0) // Per-item CGST
+  sgst          Int     @default(0) // Per-item SGST
+  igst          Int     @default(0) // Per-item IGST (interstate)
+  cess          Int     @default(0) // Per-item cess
+  taxableAmount Int     @default(0) // price * quantity (pre-tax)
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id        Int      @id @default(autoincrement())
+  invoiceId Int
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount    Int
+  method    String // Cash, UPI, Card, EMI, Bank Transfer, Cheque
+  reference String? // transaction ID, cheque number, etc.
+  date      DateTime @default(now())
+  notes     String?
+
+  @@index([invoiceId])
+  @@index([date])
+}
+
+model CreditNote {
+  id        Int      @id @default(autoincrement())
+  displayId String   @unique
+  invoiceId Int
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
+  amount    Int
+  reason    String
+  date      DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@index([invoiceId])
+  @@index([date])
+}
+
+// ─── CUSTOM ORDERS ───────────────────────────────────
+
+enum CustomOrderStatus {
+  MEASUREMENT_SCHEDULED
+  IN_PRODUCTION
+  QUALITY_CHECK
+  DELIVERED
+}
+
+model CustomOrder {
+  id                 Int               @id @default(autoincrement())
+  displayId          String            @unique
+  contactId          Int
+  contact            Contact           @relation(fields: [contactId], references: [id])
+  phone              String
+  address            String
+  type               String
+  status             CustomOrderStatus @default(MEASUREMENT_SCHEDULED)
+  assignedStaffId    Int?
+  assignedStaff      Staff?            @relation(fields: [assignedStaffId], references: [id])
+  date               DateTime
+  estimatedDelivery  DateTime?
+  measurements       Json?
+  photos             String[]
+  referenceImages    String[] // uploaded reference images
+  referenceProductId Int?
+  referenceProduct   Product?          @relation(fields: [referenceProductId], references: [id])
+  materials          String?
+  color              String?
+  quotedPrice        Int?
+  advancePaid        Int               @default(0)
+  productionNotes    String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  timeline         CustomOrderTimeline[]
+  fieldVisits      FieldVisit[]
+  productionOrders ProductionOrder[]
+  inventoryItems   CustomOrderInventory[]
+  dailyPayments    DailyPayment[]
+
+  @@index([status])
+  @@index([assignedStaffId])
+}
+
+model CustomOrderTimeline {
+  id            Int         @id @default(autoincrement())
+  customOrderId Int
+  customOrder   CustomOrder @relation(fields: [customOrderId], references: [id], onDelete: Cascade)
+  date          DateTime
+  event         String
+  notes         String?
+  status        String      @default("pending")
+  updatedBy     String? // "Manager" or staff name
+
+  @@index([customOrderId])
+}
+
+// ─── WALK-INS ────────────────────────────────────────
+
+enum WalkinStatus {
+  BROWSING
+  INTERESTED
+  FOLLOW_UP
+  CONVERTED
+  LEFT
+}
+
+model Walkin {
+  id            Int          @id @default(autoincrement())
+  contactId     Int
+  contact       Contact      @relation(fields: [contactId], references: [id])
+  requirement   String
+  assignedToId  Int?
+  assignedTo    Staff?       @relation("WalkinAssigned", fields: [assignedToId], references: [id])
+  date          DateTime
+  time          String
+  status        WalkinStatus @default(BROWSING)
+  budget        String?
+  notes         String?
+  source        String       @default("Walk-in")
+  visitDuration String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([date])
+  @@index([status])
+}
+
+// ─── STAFF ───────────────────────────────────────────
+
+model Staff {
+  id         Int      @id @default(autoincrement())
+  name       String
+  role       String
+  phone      String
+  email      String   @unique
+  status     String   @default("Active")
+  joinDate   DateTime
+  avatar     String?
+  stats      Json?
+  target     Json?
+  commission Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Payroll fields
+  basicSalary          Int     @default(0)
+  designation          String?
+  panNumber            String?
+  bankAccount          String?
+  bankName             String?
+  ifscCode             String?
+  pfEnrolled           Boolean @default(false)
+  esiEnrolled          Boolean @default(false)
+  uanNumber            String? // Universal Account Number (PF)
+  pfNumber             String? // PF registration number
+  esiNumber            String? // ESI registration number
+  professionalTaxState String  @default("Maharashtra")
+  tdsMonthly           Int     @default(0) // fixed monthly TDS amount
+
+  user             User?
+  leads            Lead[]
+  invoices         Invoice[]
+  customOrders     CustomOrder[]
+  walkins          Walkin[]          @relation("WalkinAssigned")
+  attendance       Attendance[]
+  activities       StaffActivity[]
+  fieldVisits      FieldVisit[]
+  stockUpdates     StockUpdate[]
+  payslips         Payslip[]
+  loans            StaffLoan[]
+  expenses         Expense[]         @relation("StaffExpenses")
+  productionOrders ProductionOrder[] @relation("ProductionOrderAssignedStaff")
+  receivedPayments DailyPayment[]
+
+  @@index([email])
+}
+
+model Attendance {
+  id           Int      @id @default(autoincrement())
+  staffId      Int
+  staff        Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  date         DateTime
+  clockIn      String?
+  clockOut     String?
+  hours        Float?
+  status       String
+  // GPS tracking
+  clockInLat   Float?
+  clockInLng   Float?
+  clockOutLat  Float?
+  clockOutLng  Float?
+  clockInDist  Float? // distance from store in meters
+  clockOutDist Float?
+  method       String   @default("manual") // "gps", "manual"
+  isLate       Boolean  @default(false)
+
+  @@unique([staffId, date])
+  @@index([date])
+  @@index([staffId])                 // all attendance for a staff member
+  @@index([staffId, date])           // payroll: attendance in date range per staff
+}
+
+model StaffActivity {
+  id      Int      @id @default(autoincrement())
+  staffId Int
+  staff   Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  type    String
+  text    String
+  time    String
+  date    DateTime
+
+  @@index([staffId])
+  @@index([date])
+}
+
+model FieldVisit {
+  id            Int          @id @default(autoincrement())
+  displayId     String
+  staffId       Int
+  staff         Staff        @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  customOrderId Int?
+  customOrder   CustomOrder? @relation(fields: [customOrderId], references: [id])
+  customer      String
+  address       String
+  date          DateTime
+  time          String
+  scheduledDate DateTime? // when the visit is scheduled for
+  scheduledTime String? // time slot e.g. "10:00 AM - 12:00 PM"
+  status        String // Scheduled, In Progress, Completed, Cancelled
+  completedAt   DateTime?
+  type          String
+  notes         String?
+  staffNotes    String? // notes added by staff after visit
+  measurements  Json?
+  photos        Int          @default(0)
+  photoUrls     String[]
+
+  @@index([staffId])
+  @@index([customOrderId])
+  @@index([scheduledDate])
+}
+
+model StockUpdate {
+  id        Int      @id @default(autoincrement())
+  staffId   Int?
+  staff     Staff?   @relation(fields: [staffId], references: [id])
+  product   String
+  warehouse String
+  action    String
+  quantity  Int
+  date      DateTime
+  time      String
+
+  @@index([staffId])
+  @@index([date])
+}
+
+// ─── CALL LOGS ───────────────────────────────────────
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CallStatus {
+  COMPLETED
+  MISSED
+  NO_ANSWER
+  BUSY
+}
+
+model CallLog {
+  id           Int           @id @default(autoincrement())
+  contactId    Int?
+  contact      Contact?      @relation(fields: [contactId], references: [id])
+  customerName String
+  phone        String
+  direction    CallDirection
+  status       CallStatus
+  duration     String?
+  durationSec  Int           @default(0)
+  agent        String        @default("AI Agent")
+  date         DateTime
+  time         String
+  purpose      String?
+  outcome      String?
+  notes        String?
+  recording    Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+
+  // AI calling agent fields
+  livekitRoomId String?
+  callType      String? @default("manual") // manual | ai_inbound | ai_outbound | browser_test
+  aiHandled     Boolean @default(false)
+
+  transcript CallTranscript?
+
+  @@index([date])
+  @@index([contactId])
+}
+
+model CallTranscript {
+  id        Int     @id @default(autoincrement())
+  callLogId Int     @unique
+  callLog   CallLog @relation(fields: [callLogId], references: [id], onDelete: Cascade)
+  summary   String?
+  sentiment String?
+  messages  Json
+}
+
+// ─── CONVERSATIONS ───────────────────────────────────
+
+enum ConversationStatus {
+  AI_HANDLED
+  NEEDS_HUMAN
+  RESOLVED
+}
+
+model Conversation {
+  id           Int                @id @default(autoincrement())
+  contactId    Int?
+  contact      Contact?           @relation(fields: [contactId], references: [id])
+  customerName String
+  channel      String
+  externalId   String? // platform-specific thread/chat ID (e.g. WhatsApp phone, IG thread)
+  status       ConversationStatus @default(AI_HANDLED)
+  lastMessage  String?
+  unread       Int                @default(0)
+  date         DateTime
+  messages     Json
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([channel])
+  @@index([status])
+  @@index([externalId])
+}
+
+// ─── REVIEWS ─────────────────────────────────────────
+
+model Review {
+  id           Int      @id @default(autoincrement())
+  contactId    Int?
+  contact      Contact? @relation(fields: [contactId], references: [id])
+  customerName String
+  rating       Int
+  text         String
+  date         DateTime
+  product      String
+  platform     String   @default("Google")
+  replied      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([rating])
+  @@index([platform])
+}
+
+// ─── MARKETING CAMPAIGNS ─────────────────────────────
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENT
+}
+
+model Campaign {
+  id            Int            @id @default(autoincrement())
+  name          String
+  channel       String
+  status        CampaignStatus @default(DRAFT)
+  scheduledDate DateTime?
+  audience      Int            @default(0)
+  sent          Int            @default(0)
+  opened        Int            @default(0)
+  clicked       Int            @default(0)
+  template      String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+// ─── MARKETPLACE CHANNELS ────────────────────────────
+
+model MarketplaceChannel {
+  id        Int       @id @default(autoincrement())
+  slug      String    @unique
+  name      String
+  logo      String?
+  color     String?
+  connected Boolean   @default(false)
+  lastSync  DateTime?
+  sellerId  String?
+  config    Json?
+}
+
+// ─── STORE SETTINGS ──────────────────────────────────
+
+model StoreSettings {
+  id             Int      @id @default(1)
+  storeName      String   @default("Furniture Store")
+  phone          String?
+  whatsappNumber String?
+  email          String?
+  address        String?
+  paymentQr      String?
+  invoicePrefix  String   @default("INV-")
+  invoicePadding Int      @default(4)
+  invoiceTerms   String?
+  bankName       String?
+  bankAccountName String?
+  bankAccountNumber String?
+  bankIfsc       String?
+  bankUpiId      String?
+  gstNumber      String?
+  gstRate        Float    @default(18.0)
+  currency       String   @default("INR")
+  logo           String?
+  // Geofence for GPS attendance
+  storeLat       Float?
+  storeLng       Float?
+  geofenceRadius Int      @default(100) // meters
+  shiftStartTime String   @default("09:00") // HH:mm — late after this
+  shiftEndTime   String   @default("20:00") // HH:mm — shift ends
+  // SMTP Email Configuration
+  smtpHost       String? // e.g. smtp.gmail.com, smtp.office365.com
+  smtpPort       Int?     @default(587)
+  smtpUser       String? // email address used to send
+  smtpPass       String? // app password / SMTP password
+  smtpFromName   String? // "Furniture Store" — display name in From header
+  smtpSecure     Boolean  @default(false) // true for port 465 (SSL), false for 587 (STARTTLS)
+  smtpConfigured Boolean  @default(false) // true once test email succeeds
+  updatedAt      DateTime @updatedAt
+}
+
+// ─── IN-APP NOTIFICATIONS ───────────────────────────
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  type      String // 'stock_alert' | 'field_visit'
+  title     String
+  subtitle  String
+  href      String // link to navigate to
+  read      Boolean  @default(false)
+  metadata  Json? // extra data (productId, visitId, etc.)
+  createdAt DateTime @default(now())
+
+  @@index([read])
+  @@index([type])
+  @@index([read, createdAt])         // fetch unread notifications sorted newest-first
+}
+
+// ─── STORE CAMPAIGNS (QR Codes) ──────────────────────
+
+model StoreCampaign {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String
+  location  String
+  scans     Int      @default(0)
+  leads     Int      @default(0)
+  status    String   @default("Active")
+  purpose   String?
+  createdAt DateTime @default(now())
+}
+
+// ─── CHANNEL INTEGRATIONS ────────────────────────────
+
+model ChannelConfig {
+  id         Int      @id @default(autoincrement())
+  channel    String   @unique // WhatsApp, Instagram, Facebook, Website
+  enabled    Boolean  @default(false)
+  config     Json // API keys, tokens, phone numbers, page IDs, etc.
+  webhookUrl String? // auto-generated webhook URL for this channel
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// --- INDIA MART LEADS INTEGRATION ---
+
+model IndiaMartConfig {
+  id                Int        @id @default(1)
+  enabled           Boolean    @default(false)
+  pullApiKey        String?
+  autoImportToLeads Boolean    @default(true)
+  defaultLeadStatus LeadStatus @default(NEW)
+  overlapMinutes    Int        @default(5)
+  lastSyncAt        DateTime?
+  lastSyncStart     DateTime?
+  lastSyncEnd       DateTime?
+  lastSyncCode      Int?
+  lastSyncMessage   String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+}
+
+model IndiaMartLead {
+  id               Int       @id @default(autoincrement())
+  uniqueQueryId    String    @unique
+  queryType        String?
+  queryTime        DateTime?
+  senderName       String
+  senderMobile     String?
+  senderEmail      String?
+  senderCompany    String?
+  senderAddress    String?
+  senderCity       String?
+  senderState      String?
+  senderPincode    String?
+  senderCountryIso String?
+  senderMobileAlt  String?
+  senderEmailAlt   String?
+  queryProductName String?
+  queryMessage     String?
+  queryMcatName    String?
+  callDuration     String?
+  receiverMobile   String?
+  rawPayload       Json
+  syncedAt         DateTime  @default(now())
+  leadId           Int?      @unique
+  lead             Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([queryTime])
+  @@index([queryType])
+  @@index([syncedAt])
+  @@index([leadId])
+}
+
+// ─── EMAIL MARKETING ────────────────────────────────
+
+model EmailTemplate {
+  id        Int      @id @default(autoincrement())
+  name      String
+  subject   String
+  body      String   @db.Text // HTML body
+  category  String   @default("Promotional") // Promotional, Follow-up, New Collection, Offer, Nurture
+  variables String[] // e.g. ["customerName", "offerCode"]
+  thumbnail String? // preview image
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaigns EmailCampaign[]
+}
+
+enum EmailCampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  PAUSED
+}
+
+model EmailCampaign {
+  id              Int                 @id @default(autoincrement())
+  name            String
+  subject         String
+  body            String              @db.Text
+  templateId      Int?
+  template        EmailTemplate?      @relation(fields: [templateId], references: [id])
+  status          EmailCampaignStatus @default(DRAFT)
+  scheduledAt     DateTime?
+  sentAt          DateTime?
+  audience        String              @default("all") // all, leads, customers, custom
+  audienceFilter  Json? // filter criteria for custom audience
+  totalRecipients Int                 @default(0)
+  sent            Int                 @default(0)
+  opened          Int                 @default(0)
+  clicked         Int                 @default(0)
+  bounced         Int                 @default(0)
+  unsubscribed    Int                 @default(0)
+  // A/B testing
+  isABTest        Boolean             @default(false)
+  variantB        Json? // { subject, body } for variant B
+  abSplitPercent  Int                 @default(50) // % that get variant A
+  abWinner        String? // "A" or "B"
+  // Automation
+  isAutomated     Boolean             @default(false)
+  triggerType     String? // "new_lead", "post_visit", "abandoned_quote", "post_purchase"
+  triggerDelay    Int? // delay in hours after trigger event
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  recipients EmailRecipient[]
+
+  @@index([status])
+  @@index([isAutomated, triggerType])
+}
+
+model EmailRecipient {
+  id         Int           @id @default(autoincrement())
+  campaignId Int
+  campaign   EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId  Int?
+  email      String
+  name       String
+  variant    String        @default("A") // A or B for A/B tests
+  status     String        @default("queued") // queued, sent, delivered, opened, clicked, bounced, unsubscribed
+  sentAt     DateTime?
+  openedAt   DateTime?
+  clickedAt  DateTime?
+  bouncedAt  DateTime?
+  opens      Int           @default(0)
+  clicks     Int           @default(0)
+
+  events EmailEvent[]
+
+  @@index([campaignId])
+  @@index([email])
+  @@index([status])
+}
+
+model EmailEvent {
+  id          Int            @id @default(autoincrement())
+  recipientId Int
+  recipient   EmailRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  type        String // open, click, bounce, unsubscribe
+  metadata    Json? // { url, userAgent, ip, etc. }
+  createdAt   DateTime       @default(now())
+
+  @@index([recipientId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ─── DRAFTS (soft-delete, auto-purge after 30 days) ───
+
+model Draft {
+  id         Int      @id @default(autoincrement())
+  sourceType String // "CustomOrder", "Lead", etc.
+  sourceId   String // original displayId for reference
+  data       Json // full snapshot of the deleted record
+  deletedBy  String   @default("Manager")
+  deletedAt  DateTime @default(now())
+  expiresAt  DateTime // deletedAt + 30 days
+
+  @@index([sourceType])
+  @@index([expiresAt])
+}
+
+// ─── MODULE 1: PURCHASE MANAGEMENT ──────────────────
+
+enum POStatus {
+  DRAFT
+  APPROVED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model Supplier {
+  id             Int      @id @default(autoincrement())
+  name           String
+  gstNumber      String?
+  phone          String?
+  email          String?
+  address        String?
+  contactPerson  String?
+  paymentTerms   Int      @default(30)
+  openingBalance Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  purchaseOrders  PurchaseOrder[]
+  purchaseReturns PurchaseReturn[]
+}
+
+model PurchaseOrder {
+  id           Int       @id @default(autoincrement())
+  displayId    String    @unique
+  supplierId   Int
+  supplier     Supplier  @relation(fields: [supplierId], references: [id])
+  status       POStatus  @default(DRAFT)
+  subtotal     Int       @default(0)
+  discount     Int       @default(0)
+  gst          Int       @default(0)
+  cgst         Int       @default(0)
+  sgst         Int       @default(0)
+  igst         Int       @default(0) // Interstate purchases
+  total        Int       @default(0)
+  amountPaid   Int       @default(0)
+  balanceDue   Int       @default(0)
+  isRCM        Boolean   @default(false) // Reverse Charge Mechanism
+  itcEligible  Boolean   @default(true) // Is ITC claimable?
+  itcCategory  String    @default("INPUTS") // INPUTS | SERVICES | CAPITAL_GOODS | INELIGIBLE
+  date         DateTime  @default(now())
+  expectedDate DateTime?
+  receivedAt   DateTime?
+  notes        String?
+  createdBy    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  items           PurchaseOrderItem[]
+  payments        PurchasePayment[]
+  purchaseReturns PurchaseReturn[]
+
+  @@index([supplierId])
+  @@index([status])
+}
+
+model PurchaseOrderItem {
+  id          Int           @id @default(autoincrement())
+  poId        Int
+  po          PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  productId   Int
+  product     Product       @relation(fields: [productId], references: [id])
+  name        String
+  sku         String
+  hsnCode     String?
+  quantity    Int
+  receivedQty Int           @default(0)
+  unitCost    Int
+  gstRate     Float         @default(18)
+  amount      Int
+
+  @@index([poId])
+}
+
+model PurchaseReturn {
+  id          Int            @id @default(autoincrement())
+  displayId   String         @unique
+  poId        Int?
+  po          PurchaseOrder? @relation(fields: [poId], references: [id])
+  supplierId  Int
+  supplier    Supplier       @relation(fields: [supplierId], references: [id])
+  reason      String
+  totalAmount Int
+  date        DateTime       @default(now())
+  status      String         @default("Pending")
+  notes       String?
+  createdAt   DateTime       @default(now())
+
+  items PurchaseReturnItem[]
+
+  @@index([supplierId])
+}
+
+model PurchaseReturnItem {
+  id        Int            @id @default(autoincrement())
+  returnId  Int
+  return    PurchaseReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product        @relation(fields: [productId], references: [id])
+  name      String
+  sku       String
+  quantity  Int
+  unitCost  Int
+
+  @@index([returnId])
+}
+
+model PurchasePayment {
+  id        Int           @id @default(autoincrement())
+  poId      Int
+  po        PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  amount    Int
+  method    String        @default("Bank Transfer") // Cash, UPI, Card, Bank Transfer, Cheque
+  reference String?
+  notes     String?
+  paidAt    DateTime      @default(now())
+  createdBy String?
+  createdAt DateTime      @default(now())
+
+  @@index([poId])
+  @@index([paidAt])
+}
+
+// ─── MODULE 2: MULTI-BRANCH / GODOWN ────────────────
+
+model Branch {
+  id           Int      @id @default(autoincrement())
+  name         String
+  address      String?
+  phone        String?
+  email        String?
+  managerName  String?
+  isHeadOffice Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  godowns Godown[]
+}
+
+model Godown {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String?
+  type      String   @default("Warehouse") // Warehouse, Showroom, Factory
+  capacity  Int? // max item capacity
+  isDefault Boolean  @default(false) // primary godown for stock ops
+  branchId  Int?
+  branch    Branch?  @relation(fields: [branchId], references: [id])
+  createdAt DateTime @default(now())
+
+  stocks        GodownStock[]
+  transfersFrom GodownTransfer[] @relation("FromGodown")
+  transfersTo   GodownTransfer[] @relation("ToGodown")
+  ledgerEntries StockLedger[]
+  orders        Order[]
+
+  @@index([branchId])
+}
+
+model GodownStock {
+  id        Int     @id @default(autoincrement())
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+  godownId  Int
+  godown    Godown  @relation(fields: [godownId], references: [id])
+  quantity  Float   @default(0)
+
+  @@unique([productId, godownId])
+  @@index([godownId])
+}
+
+model GodownTransfer {
+  id           Int      @id @default(autoincrement())
+  displayId    String   @unique
+  fromGodownId Int
+  fromGodown   Godown   @relation("FromGodown", fields: [fromGodownId], references: [id])
+  toGodownId   Int
+  toGodown     Godown   @relation("ToGodown", fields: [toGodownId], references: [id])
+  status       String   @default("Pending")
+  date         DateTime @default(now())
+  notes        String?
+  requestedBy  String?
+  approvedBy   String?
+  createdAt    DateTime @default(now())
+
+  items GodownTransferItem[]
+
+  @@index([fromGodownId])
+  @@index([toGodownId])
+}
+
+model GodownTransferItem {
+  id         Int            @id @default(autoincrement())
+  transferId Int
+  transfer   GodownTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId  Int
+  product    Product        @relation(fields: [productId], references: [id])
+  name       String
+  sku        String
+  quantity   Int
+
+  @@index([transferId])
+}
+
+model StockLedger {
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  product       Product  @relation(fields: [productId], references: [id])
+  godownId      Int
+  godown        Godown   @relation(fields: [godownId], references: [id])
+  entryType     String // IN, OUT, TRANSFER_IN, TRANSFER_OUT, ADJUSTMENT, PRODUCTION, SALE, RETURN
+  quantity      Float // positive = in, negative = out
+  balanceAfter  Float // running balance at godown after entry
+  referenceType String? // Order, Transfer, Production, Manual
+  referenceId   Int?
+  notes         String?
+  createdBy     String?
+  createdAt     DateTime @default(now())
+
+  @@index([productId])
+  @@index([godownId])
+  @@index([createdAt])
+  @@index([productId, createdAt])    // ledger timeline: all entries for a product sorted by time
+  @@index([godownId, createdAt])     // godown audit trail sorted by time
+  @@index([entryType])               // filter by entry type (PRODUCTION, SALE, etc.)
+}
+
+// ─── MODULE 3: DEEP INVENTORY ────────────────────────
+
+model StockGroup {
+  id        Int          @id @default(autoincrement())
+  name      String       @unique
+  parentId  Int?
+  parent    StockGroup?  @relation("StockGroupHierarchy", fields: [parentId], references: [id])
+  children  StockGroup[] @relation("StockGroupHierarchy")
+  createdAt DateTime     @default(now())
+
+  products Product[]
+}
+
+model ProductBatch {
+  id           Int       @id @default(autoincrement())
+  productId    Int
+  product      Product   @relation(fields: [productId], references: [id])
+  batchNumber  String
+  purchaseDate DateTime  @default(now())
+  expiryDate   DateTime?
+  quantity     Int
+  remainingQty Int
+  costPrice    Int       @default(0)
+  supplierId   Int?
+  poId         Int?
+  createdAt    DateTime  @default(now())
+
+  @@unique([productId, batchNumber])
+  @@index([productId])
+}
+
+// ─── MODULE 4: GST COMPLIANCE ────────────────────────
+
+model HsnCode {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  description String
+  gstRate     Float    @default(18)
+  cessRate    Float    @default(0)
+  type        String   @default("GOODS")
+  createdAt   DateTime @default(now())
+}
+
+model GSTReturn {
+  id         Int       @id @default(autoincrement())
+  returnType String
+  period     String
+  status     String    @default("DRAFT")
+  filedAt    DateTime?
+  data       Json
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([returnType, period])
+  @@index([period])
+}
+
+model EWayBill {
+  id               Int       @id @default(autoincrement())
+  ewbNumber        String? // e-Way Bill number from portal
+  invoiceId        Int?
+  invoice          Invoice?  @relation(fields: [invoiceId], references: [id])
+  vehicleNo        String?
+  transporterGSTIN String?
+  transporterName  String?
+  fromAddress      String?
+  toAddress        String?
+  distance         Int? // km
+  goodsDesc        String?
+  hsnCode          String?
+  quantity         Float?
+  value            Int       @default(0) // Invoice value
+  validFrom        DateTime?
+  validUntil       DateTime?
+  status           String    @default("GENERATED") // GENERATED | CANCELLED | EXPIRED
+  notes            String?
+  createdAt        DateTime  @default(now())
+
+  @@index([invoiceId])
+  @@index([status])
+}
+
+// ─── MODULE 5: MANUFACTURING / JOB COSTING ──────────
+
+model WorkCenter {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  type        String   @default("General") // Carpentry | Polishing | Upholstery | Finishing | Assembly | QC | Packaging | General
+  description String?
+  capacity    Int      @default(1) // units producible per day
+  status      String   @default("Active") // Active | Maintenance | Inactive
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  productionOrders ProductionOrder[]
+  steps            ProductionStep[]
+  bomSteps         BomStep[]
+}
+
+model BillOfMaterials {
+  id                Int      @id @default(autoincrement())
+  name              String
+  finishedProductId Int
+  finishedProduct   Product  @relation("FinishedProduct", fields: [finishedProductId], references: [id])
+  version           String   @default("1.0")
+  isActive          Boolean  @default(true)
+  estimatedDays     Int? // expected production days
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  items            BomItem[]
+  steps            BomStep[]
+  productionOrders ProductionOrder[]
+
+  @@index([finishedProductId])
+}
+
+model BomItem {
+  id             Int             @id @default(autoincrement())
+  bomId          Int
+  bom            BillOfMaterials @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  rawMaterialId  Int
+  rawMaterial    Product         @relation("RawMaterial", fields: [rawMaterialId], references: [id])
+  quantity       Float
+  unitOfMeasure  String          @default("PCS")
+  wastagePercent Float           @default(0)
+  unitCost       Float           @default(0) // override costPrice from product
+  notes          String?
+
+  @@index([bomId])
+}
+
+// Manufacturing routing — step-by-step operations defined on a BOM
+model BomStep {
+  id                 Int             @id @default(autoincrement())
+  bomId              Int
+  bom                BillOfMaterials @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  stepNumber         Int
+  operationName      String // e.g. "Cut & Shape", "Polish", "Upholster"
+  workCenterId       Int?
+  workCenter         WorkCenter?     @relation(fields: [workCenterId], references: [id])
+  durationMins       Int             @default(60) // per unit, in minutes
+  labourRatePerHour  Float           @default(0) // ₹ per hour for this operation
+  machineCostPerUnit Float           @default(0) // ₹ machine cost per unit (manual)
+  notes              String?
+
+  @@index([bomId])
+}
+
+// ─── BOM TEMPLATE ────────────────────────────────────
+// Reusable routing/step templates for products with same manufacturing process
+model BomTemplate {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  steps       Json // array of step objects
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ProductionOrder {
+  id                 Int             @id @default(autoincrement())
+  displayId          String          @unique
+  bomId              Int
+  bom                BillOfMaterials @relation(fields: [bomId], references: [id])
+  finishedProductId  Int
+  finishedProduct    Product         @relation("ProductionFinished", fields: [finishedProductId], references: [id])
+  customOrderId      Int?
+  customOrder        CustomOrder?    @relation(fields: [customOrderId], references: [id])
+  workCenterId       Int?
+  workCenter         WorkCenter?     @relation(fields: [workCenterId], references: [id])
+  plannedQty         Int
+  actualQty          Int             @default(0)
+  status             String          @default("PLANNED") // PLANNED | IN_PROGRESS | COMPLETED | CANCELLED | ON_HOLD
+  priority           String          @default("MEDIUM") // LOW | MEDIUM | HIGH | URGENT
+  dueDate            DateTime?
+  startDate          DateTime?
+  completedDate      DateTime?
+  cancelledDate      DateTime?
+  cancelReason       String?
+  totalMaterialCost  Int             @default(0)
+  totalLabourCost    Int             @default(0)
+  overheadCost       Int             @default(0) // electricity, tool wear, etc.
+  totalCost          Int             @default(0) // material + labour + overhead
+  costPerUnit        Int             @default(0)
+  standardMins       Int             @default(0)
+  actualMins         Int             @default(0)
+  labourVarianceMins Int             @default(0)
+  labourVarianceCost Int             @default(0)
+  yieldRate          Float           @default(0) // actualQty/plannedQty * 100
+  scrapQty           Int             @default(0)
+  scrapReason        String?
+  qualityStatus      String          @default("PENDING") // PENDING | PASSED | FAILED | PARTIAL
+  qualityNotes       String?
+  assignedStaffId    Int?
+  assignedStaff      Staff?          @relation("ProductionOrderAssignedStaff", fields: [assignedStaffId], references: [id])
+  assignedTo         String? // legacy/manual assignee text fallback
+  notes              String?
+  createdBy          String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  consumptions         MaterialConsumption[]
+  productionSteps      ProductionStep[]
+  scrapEntries         ScrapInventory[]
+  customInventoryItems CustomOrderInventory[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([dueDate])
+  @@index([assignedStaffId])
+  @@index([customOrderId])
+}
+
+// Tracks progress of each BOM step within a production order
+model ProductionStep {
+  id                 Int             @id @default(autoincrement())
+  productionOrderId  Int
+  productionOrder    ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  workCenterId       Int?
+  workCenter         WorkCenter?     @relation(fields: [workCenterId], references: [id])
+  stepNumber         Int
+  operationName      String
+  status             String          @default("PENDING") // PENDING | IN_PROGRESS | DONE | SKIPPED
+  plannedMins        Int             @default(0)
+  actualMins         Int             @default(0)
+  labourRatePerHour  Float           @default(0)
+  machineCostPerUnit Float           @default(0)
+  assignedWorker     String?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  notes              String?
+
+  @@index([productionOrderId])
+}
+
+model MaterialConsumption {
+  id                Int             @id @default(autoincrement())
+  productionOrderId Int
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  rawMaterialId     Int
+  rawMaterial       Product         @relation("MaterialConsumed", fields: [rawMaterialId], references: [id])
+  plannedQty        Float
+  issuedQty         Float           @default(0)  // How much was issued to production floor
+  actualQty         Float           @default(0)  // How much was actually consumed
+  scrapQty          Float           @default(0)  // How much was scrapped/wasted
+  returnedQty       Float           @default(0)  // (issuedQty - actualQty - scrapQty)
+  isOverConsumed    Boolean         @default(false)  // Flag if actualQty + scrapQty > issuedQty
+  scrapReason       String?
+  unitCost          Int             @default(0)
+  totalCost         Int             @default(0)
+
+  @@index([productionOrderId])
+}
+
+model ScrapInventory {
+  id                    Int              @id @default(autoincrement())
+  productionOrderId     Int?
+  productionOrder       ProductionOrder? @relation(fields: [productionOrderId], references: [id], onDelete: SetNull)
+  rawMaterialId         Int
+  rawMaterial           Product          @relation(fields: [rawMaterialId], references: [id])
+  materialConsumptionId Int?
+  quantity              Float
+  unitOfMeasure         String           @default("PCS")
+  unitCost              Float            @default(0)
+  estimatedValue        Int              @default(0)
+  reason                String?
+  disposition           String           @default("REUSABLE") // REUSABLE | WASTE | RECYCLE
+  status                String           @default("IN_STOCK") // IN_STOCK | USED | DISPOSED
+  notes                 String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  @@index([productionOrderId])
+  @@index([rawMaterialId])
+  @@index([status])
+}
+
+model CustomOrderInventory {
+  id                Int              @id @default(autoincrement())
+  customOrderId     Int
+  customOrder       CustomOrder      @relation(fields: [customOrderId], references: [id], onDelete: Cascade)
+  productionOrderId Int?
+  productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id], onDelete: SetNull)
+  productId         Int
+  product           Product          @relation(fields: [productId], references: [id])
+  quantity          Int              @default(0)
+  status            String           @default("READY") // WIP | READY | DELIVERED
+  unitCost          Int              @default(0)
+  totalCost         Int              @default(0)
+  notes             String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([customOrderId])
+  @@index([productionOrderId])
+  @@index([productId])
+  @@index([status])
+}
+
+// ─── MODULE 6: STAFF PAYROLL ─────────────────────────
+
+model PayrollRun {
+  id                    Int       @id @default(autoincrement())
+  displayId             String    @unique
+  period                String
+  status                String    @default("DRAFT")
+  totalGross            Int       @default(0)
+  totalDeductions       Int       @default(0)
+  totalNet              Int       @default(0)
+  employerContributions Int       @default(0) // total employer PF + ESI
+  processedAt           DateTime  @default(now())
+  paidAt                DateTime?
+  processedBy           String?
+  createdAt             DateTime  @default(now())
+
+  payslips Payslip[]
+
+  @@index([status])
+}
+
+model Payslip {
+  id               Int        @id @default(autoincrement())
+  payrollRunId     Int
+  payrollRun       PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  staffId          Int
+  staff            Staff      @relation(fields: [staffId], references: [id])
+  workingDays      Int        @default(26)
+  presentDays      Float      @default(0)
+  basicSalary      Int        @default(0)
+  hra              Int        @default(0)
+  da               Int        @default(0)
+  specialAllowance Int        @default(0)
+  otHours          Float      @default(0)
+  otPay            Int        @default(0)
+  bonus            Int        @default(0)
+  grossSalary      Int        @default(0)
+  pfEmployee       Int        @default(0)
+  pfEmployer       Int        @default(0)
+  esiEmployee      Int        @default(0)
+  esiEmployer      Int        @default(0)
+  professionalTax  Int        @default(0)
+  tds              Int        @default(0)
+  loanDeduction    Int        @default(0)
+  otherDeductions  Int        @default(0)
+  totalDeductions  Int        @default(0)
+  netSalary        Int        @default(0)
+  status           String     @default("Generated")
+  createdAt        DateTime   @default(now())
+
+  @@unique([payrollRunId, staffId])
+  @@index([staffId])
+}
+
+model StaffLoan {
+  id                 Int      @id @default(autoincrement())
+  staffId            Int
+  staff              Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  purpose            String
+  principalAmount    Int
+  remainingAmount    Int
+  monthlyInstallment Int
+  startPeriod        String // YYYY-MM
+  status             String   @default("Active") // Active, Closed
+  notes              String?
+  createdAt          DateTime @default(now())
+
+  @@index([staffId])
+  @@index([status])
+}
+
+// ─── DAILY EXPENSE CALCULATOR ────────────────────────
+
+model ExpenseCategory {
+  id                Int                @id @default(autoincrement())
+  name              String             @unique
+  icon              String? // lucide icon name for UI
+  color             String? // hex color for charts
+  budget            Int                @default(0) // monthly budget limit (₹)
+  isDefault         Boolean            @default(false)
+  isActive          Boolean            @default(true)
+  sortOrder         Int                @default(0)
+  createdAt         DateTime           @default(now())
+  expenses          Expense[]
+  recurringExpenses RecurringExpense[]
+}
+
+model Expense {
+  id          Int             @id @default(autoincrement())
+  date        DateTime
+  categoryId  Int
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+  amount      Int // amount in paise-free ₹ (whole rupees)
+  description String
+  paymentMode String          @default("Cash") // Cash, UPI, Card, Bank Transfer, Cheque, Credit
+  reference   String? // bill/receipt number, UPI ref, cheque no
+  receipt     String? // uploaded receipt image URL
+  vendor      String? // who was paid
+  staffId     Int? // which staff member incurred expense
+  staff       Staff?          @relation("StaffExpenses", fields: [staffId], references: [id])
+  status      String          @default("Approved") // Pending, Approved, Rejected
+  approvedBy  String?
+  isRecurring Boolean         @default(false)
+  notes       String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([date])
+  @@index([categoryId])
+  @@index([status])
+  @@index([staffId])
+}
+
+model RecurringExpense {
+  id          Int             @id @default(autoincrement())
+  categoryId  Int
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+  description String
+  amount      Int
+  paymentMode String          @default("Bank Transfer")
+  vendor      String?
+  frequency   String          @default("Monthly") // Daily, Weekly, Monthly, Quarterly, Yearly
+  dayOfMonth  Int? // 1-31 for monthly
+  dayOfWeek   Int? // 0-6 for weekly (0=Sunday)
+  isActive    Boolean         @default(true)
+  startDate   DateTime        @default(now())
+  endDate     DateTime?
+  lastRun     DateTime?
+  notes       String?
+  createdAt   DateTime        @default(now())
+
+  @@index([isActive])
+  @@index([frequency])
+}
+
+model DailyCashRegister {
+  id          Int      @id @default(autoincrement())
+  date        DateTime @unique
+  openingCash Int      @default(0)
+  closingCash Int?
+  cashIn      Int      @default(0) // cash received (sales etc)
+  cashOut     Int      @default(0) // cash expenses
+  notes       String?
+  closedBy    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date])
+}
+
+model DailyPayment {
+  id              Int              @id @default(autoincrement())
+  displayId       String           @unique
+  amount          Int
+  gstAmount       Int              @default(0)         // GST on payment (for B2B)
+  type            String           @default("IN")      // IN = received, OUT = given (refunds/change)
+  method          String           // Cash, UPI, Card, Bank Transfer, Cheque
+  reference       String?          // transaction ID (bank ref, UPI ref, cheque number)
+  referenceHash   String?          // Hash to detect duplicate references (method + reference)
+  date            DateTime         @default(now())
+  status          String           @default("Pending") // Pending, Reconciled, Reversed, Bounced
+  
+  // Staff tracking (proper foreign key instead of string)
+  receivedByStaffId Int?
+  receivedByStaff Staff?           @relation(fields: [receivedByStaffId], references: [id])
+  
+  // Cheque-specific fields
+  chequeNumber    String?          // For Cheque method
+  chequeDate      DateTime?        // Cheque dated as
+  chequeBounced   Boolean          @default(false)
+  bounceReason    String?
+  
+  customerName    String?          // Manual entry for dealer/customer name
+  
+  // Document linking
+  contactId       Int?
+  contact         Contact?         @relation(fields: [contactId], references: [id])
+  orderId         Int?
+  order           Order?           @relation(fields: [orderId], references: [id])
+  invoiceId       Int?
+  invoice         Invoice?         @relation(fields: [invoiceId], references: [id])
+  customOrderId   Int?
+  customOrder     CustomOrder?     @relation(fields: [customOrderId], references: [id])
+  
+  // Reconciliation
+  reconciled      Boolean          @default(false)
+  reconciledDate  DateTime?
+  reconciledBy    String?          // User who reconciled
+  bankRefNumber   String?          // Bank statement reference number
+  
+  // Reversal tracking
+  reversalId      Int?             // If this is a reversal, points to original payment
+  isReversal      Boolean          @default(false)
+  reversalReason  String?
+  
+  // General
+  notes           String?
+  attachment      String?          // For receipt uploads
+  
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([date])
+  @@index([method])
+  @@index([contactId])
+  @@index([type])
+  @@index([status])
+  @@index([reconciled])
+  @@index([chequeBounced])
+  @@index([referenceHash])
+}
+
+// ─── MODULE 7: FINANCIAL STATEMENTS ─────────────────
+
+model AccountGroup {
+  id       Int            @id @default(autoincrement())
+  name     String         @unique
+  type     String // ASSET | LIABILITY | INCOME | EXPENSE | EQUITY
+  parentId Int?
+  parent   AccountGroup?  @relation("AccountGroupHierarchy", fields: [parentId], references: [id])
+  children AccountGroup[] @relation("AccountGroupHierarchy")
+
+  accounts LedgerAccount[]
+}
+
+model LedgerAccount {
+  id              Int          @id @default(autoincrement())
+  code            String       @unique
+  name            String
+  groupId         Int
+  group           AccountGroup @relation(fields: [groupId], references: [id])
+  openingBalance  Int          @default(0)
+  isSystemAccount Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+
+  lines JournalLine[]
+
+  @@index([groupId])
+}
+
+model JournalEntry {
+  id            Int      @id @default(autoincrement())
+  displayId     String   @unique
+  date          DateTime
+  narration     String
+  referenceType String?
+  referenceId   Int?
+  totalDebit    Int
+  totalCredit   Int
+  status        String   @default("POSTED")
+  createdBy     String?
+  createdAt     DateTime @default(now())
+
+  lines JournalLine[]
+
+  @@index([date])
+  @@index([status])
+}
+
+model JournalLine {
+  id             Int           @id @default(autoincrement())
+  journalEntryId Int
+  journalEntry   JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  accountId      Int
+  account        LedgerAccount @relation(fields: [accountId], references: [id])
+  debit          Int           @default(0)
+  credit         Int           @default(0)
+  description    String?
+
+  @@index([journalEntryId])
+  @@index([accountId])
+}
+
+// ============================================================
+// WhatsApp CRM (Prisma-backed replacement for Supabase tables)
+// ============================================================
+
+model WaProfile {
+  id         String   @id @default(cuid())
+  user_id    String   @unique
+  full_name  String
+  email      String
+  avatar_url String?
+  role       String?  @default("user")
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  assigned_deals WaDeal[] @relation("WaDealAssignee")
+
+  @@map("profiles")
+}
+
+model WaContact {
+  id         String   @id @default(cuid())
+  user_id    String
+  phone      String
+  name       String?
+  email      String?
+  company    String?
+  avatar_url String?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  conversations                 WaConversation[]
+  contact_tags                  WaContactTag[]
+  contact_custom_values         WaContactCustomValue[]
+  contact_notes                 WaContactNote[]
+  deals                         WaDeal[]
+  broadcast_recipients          WaBroadcastRecipient[]
+  automation_logs               WaAutomationLog[]
+  automation_pending_executions WaAutomationPendingExecution[]
+
+  @@index([user_id])
+  @@index([phone])
+  @@map("contacts")
+}
+
+model WaTag {
+  id         String   @id @default(cuid())
+  user_id    String
+  name       String
+  color      String   @default("#3b82f6")
+  created_at DateTime @default(now())
+
+  contact_tags WaContactTag[]
+
+  @@index([user_id])
+  @@map("tags")
+}
+
+model WaContactTag {
+  id         String   @id @default(cuid())
+  contact_id String
+  tag_id     String
+  created_at DateTime @default(now())
+
+  contact WaContact @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  tag     WaTag     @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+
+  @@unique([contact_id, tag_id])
+  @@index([contact_id])
+  @@index([tag_id])
+  @@map("contact_tags")
+}
+
+model WaCustomField {
+  id            String   @id @default(cuid())
+  user_id       String
+  field_name    String
+  field_type    String   @default("text")
+  field_options Json?
+  created_at    DateTime @default(now())
+
+  contact_custom_values WaContactCustomValue[]
+
+  @@index([user_id])
+  @@map("custom_fields")
+}
+
+model WaContactCustomValue {
+  id              String   @id @default(cuid())
+  contact_id      String
+  custom_field_id String
+  value           String?
+  created_at      DateTime @default(now())
+
+  contact      WaContact     @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  custom_field WaCustomField @relation(fields: [custom_field_id], references: [id], onDelete: Cascade)
+
+  @@unique([contact_id, custom_field_id])
+  @@index([contact_id])
+  @@index([custom_field_id])
+  @@map("contact_custom_values")
+}
+
+model WaContactNote {
+  id         String   @id @default(cuid())
+  contact_id String
+  user_id    String
+  note_text  String
+  created_at DateTime @default(now())
+
+  contact WaContact @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+
+  @@index([contact_id])
+  @@index([user_id])
+  @@map("contact_notes")
+}
+
+model WaConversation {
+  id               String   @id @default(cuid())
+  user_id          String
+  contact_id       String
+  status           String   @default("open")
+  needs_human      Boolean  @default(false)  // set true when AI confidence is low
+  assigned_agent_id String?
+  last_message_text String?
+  last_message_at   DateTime?
+  unread_count     Int      @default(0)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  contact           WaContact          @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  messages          WaMessage[]
+  deals             WaDeal[]
+  message_reactions WaMessageReaction[]
+
+  @@unique([user_id, contact_id])
+  @@index([user_id])
+  @@index([contact_id])
+  @@index([last_message_at])
+  @@map("conversations")
+}
+
+model WaMessage {
+  id                  String   @id @default(cuid())
+  conversation_id     String
+  sender_type         String
+  sender_id           String?
+  content_type        String   @default("text")
+  content_text        String?
+  media_url           String?
+  template_name       String?
+  message_id          String?
+  status              String   @default("sent")
+  created_at          DateTime @default(now())
+  reply_to_message_id String?
+
+  conversation     WaConversation   @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  reply_to_message WaMessage?       @relation("WaMessageReplies", fields: [reply_to_message_id], references: [id], onDelete: SetNull)
+  replies          WaMessage[]      @relation("WaMessageReplies")
+  reactions        WaMessageReaction[]
+
+  @@index([conversation_id])
+  @@index([message_id])
+  @@index([reply_to_message_id])
+  @@map("messages")
+}
+
+model WaWhatsappConfig {
+  id              String   @id @default(cuid())
+  user_id         String   @unique
+  phone_number_id String
+  waba_id         String?
+  access_token    String
+  verify_token    String?
+  status          String   @default("disconnected")
+  connected_at    DateTime?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@index([phone_number_id])
+  @@map("whatsapp_config")
+}
+
+model WaMessageTemplate {
+  id             String   @id @default(cuid())
+  user_id        String
+  name           String
+  category       String   @default("Marketing")
+  language       String   @default("en_US")
+  header_type    String?
+  header_content String?
+  body_text      String
+  footer_text    String?
+  buttons        Json?
+  status         String   @default("Draft")
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@index([user_id])
+  @@index([name, language])
+  @@map("message_templates")
+}
+
+model WaPipeline {
+  id         String   @id @default(cuid())
+  user_id    String
+  name       String
+  created_at DateTime @default(now())
+
+  stages WaPipelineStage[]
+  deals  WaDeal[]
+
+  @@index([user_id])
+  @@map("pipelines")
+}
+
+model WaPipelineStage {
+  id          String   @id @default(cuid())
+  pipeline_id String
+  name        String
+  position    Int      @default(0)
+  color       String   @default("#3b82f6")
+  created_at  DateTime @default(now())
+
+  pipeline WaPipeline @relation(fields: [pipeline_id], references: [id], onDelete: Cascade)
+  deals    WaDeal[]
+
+  @@index([pipeline_id])
+  @@index([position])
+  @@map("pipeline_stages")
+}
+
+model WaDeal {
+  id                  String   @id @default(cuid())
+  user_id             String
+  pipeline_id         String
+  stage_id            String
+  contact_id          String?
+  conversation_id     String?
+  assigned_to         String?
+  title               String
+  value               Float    @default(0)
+  currency            String?  @default("INR")
+  notes               String?
+  expected_close_date DateTime?
+  status              String   @default("open")
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  pipeline     WaPipeline      @relation(fields: [pipeline_id], references: [id], onDelete: Cascade)
+  stage        WaPipelineStage @relation(fields: [stage_id], references: [id])
+  contact      WaContact?      @relation(fields: [contact_id], references: [id], onDelete: SetNull)
+  conversation WaConversation? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  assignee     WaProfile?      @relation("WaDealAssignee", fields: [assigned_to], references: [id], onDelete: SetNull)
+
+  @@index([pipeline_id])
+  @@index([stage_id])
+  @@index([contact_id])
+  @@index([user_id, status])
+  @@map("deals")
+}
+
+model WaBroadcast {
+  id               String   @id @default(cuid())
+  user_id          String
+  name             String
+  template_name    String
+  template_language String  @default("en_US")
+  template_variables Json?
+  audience_filter  Json?
+  scheduled_at     DateTime?
+  status           String   @default("draft")
+  total_recipients Int      @default(0)
+  sent_count       Int      @default(0)
+  delivered_count  Int      @default(0)
+  read_count       Int      @default(0)
+  replied_count    Int      @default(0)
+  failed_count     Int      @default(0)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  recipients WaBroadcastRecipient[]
+
+  @@index([user_id])
+  @@index([created_at])
+  @@map("broadcasts")
+}
+
+model WaBroadcastRecipient {
+  id                 String   @id @default(cuid())
+  broadcast_id       String
+  contact_id         String?
+  status             String   @default("pending")
+  sent_at            DateTime?
+  delivered_at       DateTime?
+  read_at            DateTime?
+  replied_at         DateTime?
+  error_message      String?
+  whatsapp_message_id String? @unique
+  created_at         DateTime @default(now())
+
+  broadcast WaBroadcast @relation(fields: [broadcast_id], references: [id], onDelete: Cascade)
+  contact   WaContact?  @relation(fields: [contact_id], references: [id], onDelete: SetNull)
+
+  @@index([broadcast_id])
+  @@index([broadcast_id, status])
+  @@index([contact_id])
+  @@map("broadcast_recipients")
+}
+
+model WaAutomation {
+  id               String   @id @default(cuid())
+  user_id          String
+  name             String
+  description      String?
+  trigger_type     String
+  trigger_config   Json     @default("{}")
+  is_active        Boolean  @default(false)
+  execution_count  Int      @default(0)
+  last_executed_at DateTime?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  steps              WaAutomationStep[]
+  logs               WaAutomationLog[]
+  pending_executions WaAutomationPendingExecution[]
+
+  @@index([user_id])
+  @@index([trigger_type, is_active])
+  @@map("automations")
+}
+
+model WaAutomationStep {
+  id             String   @id @default(cuid())
+  automation_id  String
+  parent_step_id String?
+  branch         String?
+  step_type      String
+  step_config    Json     @default("{}")
+  position       Int
+  created_at     DateTime @default(now())
+
+  automation  WaAutomation      @relation(fields: [automation_id], references: [id], onDelete: Cascade)
+  parent_step WaAutomationStep? @relation("WaAutomationStepHierarchy", fields: [parent_step_id], references: [id], onDelete: Cascade)
+  child_steps WaAutomationStep[] @relation("WaAutomationStepHierarchy")
+  pending_children WaAutomationPendingExecution[] @relation("WaPendingParentStep")
+
+  @@index([automation_id, position])
+  @@index([parent_step_id])
+  @@map("automation_steps")
+}
+
+model WaAutomationLog {
+  id             String   @id @default(cuid())
+  automation_id  String
+  user_id        String
+  contact_id     String?
+  trigger_event  String
+  steps_executed Json     @default("[]")
+  status         String
+  error_message  String?
+  created_at     DateTime @default(now())
+
+  automation WaAutomation @relation(fields: [automation_id], references: [id], onDelete: Cascade)
+  contact    WaContact?   @relation(fields: [contact_id], references: [id], onDelete: SetNull)
+  pending    WaAutomationPendingExecution[]
+
+  @@index([automation_id, created_at])
+  @@index([user_id])
+  @@index([contact_id])
+  @@map("automation_logs")
+}
+
+model WaAutomationPendingExecution {
+  id                 String   @id @default(cuid())
+  automation_id      String
+  user_id            String
+  contact_id         String?
+  log_id             String?
+  parent_step_id     String?
+  branch             String?
+  next_step_position Int
+  context            Json     @default("{}")
+  status             String   @default("pending")
+  run_at             DateTime
+  created_at         DateTime @default(now())
+
+  automation   WaAutomation     @relation(fields: [automation_id], references: [id], onDelete: Cascade)
+  contact      WaContact?       @relation(fields: [contact_id], references: [id], onDelete: SetNull)
+  log          WaAutomationLog? @relation(fields: [log_id], references: [id], onDelete: Cascade)
+  parent_step  WaAutomationStep? @relation("WaPendingParentStep", fields: [parent_step_id], references: [id], onDelete: SetNull)
+
+  @@index([run_at, status])
+  @@index([user_id])
+  @@index([contact_id])
+  @@map("automation_pending_executions")
+}
+
+model WaMessageReaction {
+  id              String   @id @default(cuid())
+  message_id      String
+  conversation_id String
+  actor_type      String
+  actor_id        String?
+  emoji           String
+  created_at      DateTime @default(now())
+
+  message      WaMessage      @relation(fields: [message_id], references: [id], onDelete: Cascade)
+  conversation WaConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@unique([message_id, actor_type, actor_id])
+  @@index([conversation_id])
+  @@index([message_id])
+  @@map("message_reactions")
+}
+
+// ============================================================
+// WhatsApp AI RAG Agent
+// ============================================================
+
+model WaAgentConfig {
+  id                   String   @id @default(cuid())
+  user_id              String   @unique
+  enabled              Boolean  @default(false)
+  agent_name           String   @default("Assistant")
+  system_prompt        String   @db.Text
+  fallback_message     String   @default("Let me connect you with our team.")
+  confidence_threshold Float    @default(0.45)
+  max_response_tokens  Int      @default(300)
+  response_delay_ms    Int      @default(1500)
+  languages            String[] @default(["en", "hi"])
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  @@map("wa_agent_configs")
+}
+
+model WaKnowledgeDoc {
+  id          String   @id @default(cuid())
+  user_id     String
+  title       String
+  source_type String   @default("text")
+  raw_text    String   @db.Text
+  char_count  Int
+  status      String   @default("pending") // pending | indexed | error
+  error       String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  chunks WaKnowledgeChunk[]
+
+  @@index([user_id])
+  @@map("wa_knowledge_docs")
+}
+
+model WaKnowledgeChunk {
+  id          String   @id @default(cuid())
+  user_id     String
+  doc_id      String
+  chunk_index Int
+  content     String   @db.Text
+  // embedding vector(384) column added via raw SQL — see pgvector-migration.sql
+  created_at  DateTime @default(now())
+
+  doc WaKnowledgeDoc @relation(fields: [doc_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([doc_id])
+  @@map("wa_knowledge_chunks")
+}
+
+// ============================================================
+// Social Messaging — Facebook Page Messages & Instagram DMs
+// ============================================================
+// Both platforms use the same Meta Messenger Platform API v21.0.
+// They can belong to DIFFERENT Meta Business Portfolios/Apps —
+// that's fine because each has its own config + access token.
+
+/// Facebook Page DM configuration (one row per CRM user)
+model FbConfig {
+  id                String    @id @default(cuid())
+  user_id           String    @unique
+  page_id           String    // Facebook Page ID
+  page_name         String?   // Display name for UI
+  page_access_token String    // Encrypted permanent Page Access Token
+  app_secret        String?   // Encrypted App Secret — used for webhook sig verification
+  verify_token      String?   // Webhook verify token
+  status            String    @default("disconnected") // connected | disconnected
+  connected_at      DateTime?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@map("fb_config")
+}
+
+/// Instagram Business DM configuration (one row per CRM user)
+model IgConfig {
+  id                  String    @id @default(cuid())
+  user_id             String    @unique
+  ig_account_id       String    // Instagram Business Account ID
+  page_id             String    // Linked Facebook Page ID (used to send replies)
+  page_name           String?   // Display name for UI
+  ig_username         String?   // @handle — cosmetic only
+  page_access_token   String    // Encrypted permanent Page Access Token
+  app_secret          String?   // Encrypted App Secret
+  verify_token        String?   // Webhook verify token
+  status              String    @default("disconnected")
+  connected_at        DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  @@map("ig_config")
+}
+
+/// A contact on Facebook or Instagram identified by their PSID / IGSID
+model SocialContact {
+  id           String   @id @default(cuid())
+  user_id      String
+  platform     String   // "facebook" | "instagram"
+  platform_id  String   // PSID (FB) or IGSID (IG)
+  name         String?  // Display name from profile
+  profile_pic  String?  // Profile picture URL
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  conversations SocialConversation[]
+
+  @@unique([user_id, platform, platform_id])
+  @@index([user_id, platform])
+  @@map("social_contacts")
+}
+
+/// A conversation thread on Facebook or Instagram
+model SocialConversation {
+  id                String    @id @default(cuid())
+  user_id           String
+  contact_id        String
+  platform          String    // "facebook" | "instagram"
+  status            String    @default("open")   // open | resolved | archived
+  needs_human       Boolean   @default(false)    // set true when AI confidence low or customer asks
+  last_message_text String?
+  last_message_at   DateTime?
+  unread_count      Int       @default(0)
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  contact  SocialContact  @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  messages SocialMessage[]
+
+  @@unique([user_id, contact_id])
+  @@index([user_id, platform])
+  @@index([user_id, status])
+  @@index([last_message_at])
+  @@map("social_conversations")
+}
+
+/// A single message in a Facebook or Instagram conversation
+model SocialMessage {
+  id              String   @id @default(cuid())
+  conversation_id String
+  platform_msg_id String?  // Meta's message ID (mid) — used for deduplication
+  sender_type     String   // "customer" | "agent"
+  content_type    String   @default("text")  // text | image | video | audio | file
+  content_text    String?
+  media_url       String?
+  status          String   @default("sent")  // sent | delivered | read | failed
+  created_at      DateTime @default(now())
+
+  conversation SocialConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([conversation_id])
+  @@index([platform_msg_id])
+  @@map("social_messages")
+}
