@@ -42,6 +42,9 @@ export async function getLeads(status?: string) {
       email: l.contact.email,
       source: l.source,
       interest: l.interest,
+      materialCategory: l.materialCategory,
+      applicationArea: l.applicationArea,
+      areaSqft: l.areaSqft,
       budget: l.budget,
       status: statusDisplayMap[l.status],
       date: l.date.toISOString().split('T')[0],
@@ -70,7 +73,7 @@ export async function createLead(data: unknown) {
   const parsed = createLeadSchema.safeParse(data)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
-  const { name, phone, email, source, interest, budget, notes } = parsed.data
+  const { name, phone, email, source, interest, materialCategory, applicationArea, areaSqft, budget, notes } = parsed.data
 
   // Find or create contact
   let contact = await prisma.contact.findFirst({ where: { phone } })
@@ -84,6 +87,9 @@ export async function createLead(data: unknown) {
     data: {
       contactId: contact.id,
       interest,
+      materialCategory: materialCategory || null,
+      applicationArea: applicationArea || null,
+      areaSqft: areaSqft ?? null,
       budget,
       status: 'NEW',
       source,
@@ -109,7 +115,7 @@ export async function updateLeadStatus(data: unknown) {
 }
 
 export async function updateLead(id: number, data: Partial<{
-  interest: string; budget: string; notes: string; source: string;
+  interest: string; materialCategory: string; applicationArea: string; areaSqft: number; budget: string; notes: string; source: string;
 }>) {
   const lead = await prisma.lead.update({
     where: { id },

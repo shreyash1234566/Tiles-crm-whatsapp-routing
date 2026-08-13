@@ -389,15 +389,13 @@ export async function indexKnowledgeDoc(docId: string): Promise<void> {
         },
       })
 
-      // Embed and update via raw SQL (pgvector column not in Prisma schema).
-      // MUST use $executeRawUnsafe — parameterized bindings cannot be cast
-      // to the vector type by the pg driver; the literal must be inline.
+      // Embed and update via raw SQL; embeddings are stored as portable JSONB.
       const embedding = await embedDocument(content)
-      const vectorLiteral = `[${embedding.join(',')}]`
+      const embeddingJson = JSON.stringify(embedding)
 
       await prisma.$executeRawUnsafe(
-        `UPDATE wa_knowledge_chunks SET embedding = $1::vector WHERE id = $2`,
-        vectorLiteral,
+        `UPDATE wa_knowledge_chunks SET embedding = $1::jsonb WHERE id = $2`,
+        embeddingJson,
         chunk.id,
       )
     }

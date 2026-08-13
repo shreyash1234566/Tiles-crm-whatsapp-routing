@@ -24,18 +24,15 @@ export function verifyMetaWebhookSignature(
 ): boolean {
   const secret = process.env.META_APP_SECRET
 
-  // If META_APP_SECRET is not set, skip signature verification but log
-  // a loud warning. This prevents webhook events from being silently
-  // dropped when the env var is missing (common during initial setup).
-  // In production you MUST set META_APP_SECRET — without it anyone can
-  // POST fake status updates to your webhook URL.
+  // If META_APP_SECRET is not set, reject the request after logging a loud
+  // warning. This keeps an unconfigured webhook from accepting spoofed data.
   if (!secret) {
     console.warn(
       '[webhook] META_APP_SECRET is not set — skipping signature ' +
         'verification. Set META_APP_SECRET (Meta → App Settings → ' +
         'Basic → App Secret) to secure your webhook.',
     )
-    return true // fail-open so events aren't silently dropped
+    return false
   }
 
   if (!signatureHeader) return false

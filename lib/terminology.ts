@@ -44,6 +44,9 @@ export type TermKey =
     // Catalog concept
     | 'catalog'
     | 'catalogItem'
+    | 'customOrder'
+    | 'material'
+    | 'inventoryUnit'
     // Product concept
     | 'product'
     | 'products'
@@ -66,6 +69,9 @@ const SHARED: Record<TermKey, string> = {
     catalogItem: 'Product',
     product: 'Product',
     products: 'Products',
+    customOrder: 'Custom Order',
+    material: 'Material',
+    inventoryUnit: 'Unit',
 }
 
 // ─── Per-vertical overrides ───────────────────────────────────────────
@@ -89,6 +95,11 @@ const OVERRIDES: Record<Vertical, Partial<Record<TermKey, string>>> = {
         consultant: 'Design Consultant',
         catalog: 'Catalog',
         catalogItem: 'Catalog Item',
+        product: 'Item',
+        products: 'Catalog',
+        customOrder: 'Fabrication Job',
+        material: 'Material',
+        inventoryUnit: 'Lot / Box',
     },
 }
 
@@ -109,4 +120,17 @@ const OVERRIDES: Record<Vertical, Partial<Record<TermKey, string>>> = {
 export function getTerm(key: TermKey, vertical?: Vertical): string {
     const resolved = vertical ?? getActiveVertical()
     return OVERRIDES[resolved][key] ?? SHARED[key]
+}
+
+/**
+ * Resolve the physical inventory unit used by TGM counters and forms.
+ * Stone is counted as slabs (and measured in square feet); standardized
+ * tile and consumable stock remains box/unit based.
+ */
+export function getMaterialLabel(materialCategory?: string | null): 'Slab' | 'Box' | 'RFT' | 'Unit' {
+    const category = String(materialCategory || '').trim().toUpperCase()
+    if (['GRANITE', 'MARBLE', 'QUARTZITE', 'SANDSTONE'].includes(category)) return 'Slab'
+    if (category === 'TILE' || category === 'ADHESIVE_GROUT') return 'Box'
+    if (category === 'TRIM_PROFILE') return 'RFT'
+    return 'Unit'
 }

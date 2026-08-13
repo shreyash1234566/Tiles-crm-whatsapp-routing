@@ -8,16 +8,21 @@ export const invoiceItemSchema = z.object({
   price: z.number().min(0),
   hsnCode: z.string().optional(),
   gstRate: z.number().min(0).max(100).optional(),
+  unitOfMeasure: z.string().optional(),
+  areaSqft: z.number().positive().optional(),
+  coveragePerBox: z.number().positive().optional(),
+  slabId: z.number().int().positive().optional(),
+  batchId: z.number().int().positive().optional(),
 })
 
 export const paymentEntrySchema = z.object({
-  amount: z.number().min(1, 'Payment amount must be at least 1'),
+  amount: z.number().min(0, 'Payment amount cannot be negative'),
   method: z.enum(['Cash', 'UPI', 'Card', 'EMI', 'Bank Transfer', 'Cheque']),
   reference: z.string().optional(),
   notes: z.string().optional(),
 })
 
-export const createInvoiceSchema = z.object({
+const invoiceBaseSchema = z.object({
   customer: z.string().min(1),
   phone: z.string().min(10),
   address: z.string().optional(),
@@ -31,11 +36,21 @@ export const createInvoiceSchema = z.object({
   dueDate: z.string().optional(), // ISO date string
   isHeld: z.boolean().optional(),  // park/hold the bill
   transportCost: z.number().min(0).default(0),
+  freightCharge: z.number().min(0).default(0),
+  loadingCharge: z.number().min(0).default(0),
+  installationCharge: z.number().min(0).default(0),
+  roadPermit: z.string().optional(),
   supplyType: z.enum(['INTRASTATE', 'INTERSTATE']).optional(),
   placeOfSupply: z.string().optional(),
+  godownId: z.number().int().positive().optional(),
 })
 
-export const updateInvoiceSchema = createInvoiceSchema.omit({ payments: true }).extend({
+export const createInvoiceSchema = invoiceBaseSchema.refine(data => data.isHeld || data.payments.some(payment => payment.amount > 0), {
+  message: 'At least one payment amount is required for an active invoice',
+  path: ['payments'],
+})
+
+export const updateInvoiceSchema = invoiceBaseSchema.omit({ payments: true }).extend({
   payments: z.array(paymentEntrySchema).optional(),
 })
 

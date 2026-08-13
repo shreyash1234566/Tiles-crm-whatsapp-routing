@@ -22,6 +22,17 @@ export const createCustomOrderSchema = z.object({
   quotedPrice: z.number().optional(),
   advancePaid: z.number().default(0),
   productionNotes: z.string().optional(),
+  installationType: z.string().optional(),
+  edgeProfile: z.string().optional(),
+  cutouts: z.array(z.object({
+    type: z.string().min(1),
+    count: z.number().int().positive().default(1),
+    position: z.string().optional(),
+  })).optional(),
+  templateMethod: z.enum(['Physical Template', 'Digital/Laser Template', 'Direct Measurement']).optional(),
+  areaSqft: z.number().positive().optional(),
+  wastagePercent: z.number().min(0).max(100).optional(),
+  slabIds: z.array(z.number().int().positive()).optional(),
   // Visit scheduling
   scheduleVisit: z.boolean().optional(),
   visitDate: z.string().optional(),

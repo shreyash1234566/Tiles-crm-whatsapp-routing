@@ -13,6 +13,9 @@ import {
   getEWayBills, createEWayBill, cancelEWayBill,
 } from '@/app/actions/gst'
 import Modal from '@/components/Modal'
+import { getActiveVertical } from '@/lib/brand'
+
+const IS_TGM = getActiveVertical() === 'tiles'
 
 const fmt = (n) => `₹${(n || 0).toLocaleString('en-IN')}`
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN') : '—'
@@ -906,7 +909,7 @@ export default function GSTPage() {
               ))}
             </tbody>
           </table>
-          {hsnCodes.length === 0 && <div className="text-center py-12 text-muted">No HSN codes added yet. Add common furniture HSN codes like 9401 (seating), 9403 (other furniture).</div>}
+          {hsnCodes.length === 0 && <div className="text-center py-12 text-muted">{IS_TGM ? 'No HSN codes added yet. Add TGM codes such as 2515/2516 for rough stone, 6802 for finished stone, 6907/6908 for tiles, and 3214 for adhesive/grout.' : 'No HSN codes added yet. Add common furniture HSN codes like 9401 (seating), 9403 (other furniture).'}</div>}
         </div>
       )}
 
@@ -992,7 +995,7 @@ export default function GSTPage() {
         <div className="space-y-4">
           {[
             { key: 'code', label: 'HSN/SAC Code *', placeholder: 'e.g. 9403' },
-            { key: 'description', label: 'Description *', placeholder: 'e.g. Other furniture and parts thereof' },
+            { key: 'description', label: 'Description *', placeholder: IS_TGM ? 'e.g. Granite, worked and polished, cut-to-size' : 'e.g. Other furniture and parts thereof' },
             { key: 'gstRate', label: 'GST Rate (%)', placeholder: '18', type: 'number' },
             { key: 'cessRate', label: 'Cess Rate (%)', placeholder: '0', type: 'number' },
           ].map(f => (

@@ -1412,7 +1412,7 @@ export default function SettingsPage() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-muted mb-1.5">Display Name (From)</label>
-                      <input type="text" placeholder="Your Furniture Store" value={smtpForm.smtpFromName}
+                      <input type="text" placeholder={`e.g. ${brand.name}`} value={smtpForm.smtpFromName}
                         onChange={e => setSmtpForm(f => ({ ...f, smtpFromName: e.target.value }))}
                         className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm focus:outline-none focus:border-accent/50" />
                     </div>
@@ -1588,7 +1588,7 @@ export default function SettingsPage() {
                   <select className="w-full"><option>Friendly & Professional</option><option>Formal</option><option>Casual</option></select>
                 </div>
                 <div><label className="block text-xs font-medium text-muted mb-1.5">Welcome Message</label>
-                  <textarea rows={3} defaultValue="Welcome to Kosmic Furniture. We provide modular office, school, and hospital furniture solutions across India. How may we help you today?" className="w-full" />
+                  <textarea rows={3} defaultValue={brand.vertical === 'tiles' ? `Welcome to ${brand.name}. We help with tiles, granite, marble, quartz, slab selection and fabrication. Please share your application and approximate area in sq.ft.` : 'Welcome to Kosmic Furniture. We provide modular office, school, and hospital furniture solutions across India. How may we help you today?'} className="w-full" />
                 </div>
                 <div><label className="block text-xs font-medium text-muted mb-1.5">Auto Follow-up Schedule</label>
                   <div className="space-y-2">

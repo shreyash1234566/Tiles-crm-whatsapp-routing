@@ -26,9 +26,13 @@ import {
 import { moveQuotationToDraft } from '@/app/actions/drafts'
 import Modal from '@/components/Modal'
 import { useAlertToast } from '@/components/AlertToastProvider'
-import { createQuotation, getQuotationStats, getQuotations, updateQuotation, updateQuotationStatus } from '@/app/actions/quotations'
+import { convertQuotationToInvoice, createQuotation, getQuotationStats, getQuotations, updateQuotation, updateQuotationStatus } from '@/app/actions/quotations'
 import { getProducts } from '@/app/actions/products'
 import { getStoreSettings, updateStoreSettings } from '@/app/actions/settings'
+import { getBillableArea } from '@/lib/units'
+import { getActiveVertical } from '@/lib/brand'
+
+const DEFAULT_STORE_NAME = getActiveVertical() === 'tiles' ? 'Tiles, Granite & Marble Showroom' : 'Furniture Store'
 
 const statusColors = {
   DRAFT: 'bg-gray-500/10 text-gray-700 border-gray-500/20',
@@ -55,6 +59,8 @@ const createBlankItem = () => ({
   quantity: 1,
   rate: 0,
   area: 0,
+  unitOfMeasure: 'PCS',
+  coveragePerBox: 0,
   productImage: '',
   referenceImage: '',
   imageSource: 'REFERENCE',
@@ -146,9 +152,11 @@ function buildFormFromQuotation(quotation) {
         name: item.name || '',
         sku: item.sku || '',
         description: item.description || '',
-        quantity: Number(item.quantity) || 1,
-        rate: Number(item.rate) || 0,
-        area: Number(item.area ?? item.areaInput) || 0,
+         quantity: Number(item.quantity) || 1,
+         rate: Number(item.rate) || 0,
+         area: Number(item.area ?? item.areaInput) || 0,
+         unitOfMeasure: item.unitOfMeasure || 'PCS',
+         coveragePerBox: Number(item.coveragePerBox) || 0,
         productImage,
         referenceImage: imageSource === 'REFERENCE' ? savedImage : '',
         imageSource,
@@ -217,7 +225,7 @@ function buildMailtoUrl(email, subject, body) {
 }
 
 function buildQuotationShareMessage(quotation, storeSettings) {
-  const storeName = storeSettings?.storeName || 'Furniture Store'
+  const storeName = storeSettings?.storeName || DEFAULT_STORE_NAME
   const contactBits = []
   if (storeSettings?.phone) contactBits.push(`Phone: ${storeSettings.phone}`)
   if (storeSettings?.whatsappNumber) contactBits.push(`WhatsApp: ${storeSettings.whatsappNumber}`)
@@ -259,15 +267,19 @@ function getItemDisplayImage(item) {
  *   plus the entered area and resulting box count when a conversion occurred.
  */
 function computeLineAmount(item, product) {
-  const unit = String(product?.unitOfMeasure || item?.unitOfMeasure || 'PCS').toUpperCase()
+  const unit = String(item?.unitOfMeasure || product?.unitOfMeasure || 'PCS').toUpperCase()
   const quantity = Math.max(1, Number(item?.quantity) || 1)
   const rate = Math.max(0, Number(item?.rate) || 0)
-  const coveragePerBox = Math.max(0, Number(product?.coveragePerBox) || 0)
+  const coveragePerBox = Math.max(0, Number(item?.coveragePerBox ?? product?.coveragePerBox) || 0)
   const area = Math.max(0, Number(item?.area ?? item?.areaInput) || 0)
   const hasCoverage = coveragePerBox > 0
 
-  // Furniture and any per-piece (PCS) product: unchanged quantity * rate math.
-  if (unit !== 'SQFT' && unit !== 'BOX') {
+  if (unit === 'SQFT' || unit === 'SQM' || unit === 'SLAB') {
+    return { amount: getBillableArea(area, quantity, unit) * rate, area, billableArea: getBillableArea(area, quantity, unit) }
+  }
+
+  // Furniture, running-feet profiles and per-piece products use quantity * rate.
+  if (unit !== 'BOX') {
     return { amount: quantity * rate }
   }
 
@@ -358,7 +370,7 @@ function escapeHtml(value) {
 }
 
 function buildPrintHtml(quotation, storeSettings) {
-  const storeName = storeSettings?.storeName || 'Furniture Store'
+  const storeName = storeSettings?.storeName || DEFAULT_STORE_NAME
   const storeAddress = storeSettings?.address || ''
   const storePhone = storeSettings?.phone || ''
   const storeEmail = storeSettings?.email || ''
@@ -394,7 +406,7 @@ function buildPrintHtml(quotation, storeSettings) {
           <td><div style="font-weight:700;">${escapeHtml(item.name || '-')}</div></td>
           <td>${item.description ? `<div style="font-size:10px;color:#333;white-space:pre-wrap;">${escapeHtml(item.description)}</div>` : '<span style="color:#666;font-size:10px;">-</span>'}</td>
           <td style="text-align:center;">${img}</td>
-          <td style="text-align:center;">${item.quantity}</td>
+          <td style="text-align:center;">${item.quantity} ${escapeHtml(item.unitOfMeasure || 'PCS')}${item.areaSqft ? `<div style="font-size:10px;color:#555;">${Number(item.areaSqft).toFixed(2)} sq.ft</div>` : ''}</td>
           <td style="text-align:right;">${Number(item.rate || 0).toLocaleString('en-IN')}</td>
           <td style="text-align:right;">${Number(item.amount || 0).toLocaleString('en-IN')}</td>
         </tr>
@@ -563,7 +575,7 @@ function QuotationSheetPreview({ quotation, storeSettings }) {
       <div className="text-center border-b-2 border-black">
         <p className="font-bold text-[12px] underline mt-1">QUOTATION</p>
         <p className="font-extrabold text-[24px] md:text-[30px] tracking-wide text-[#06a9d6] leading-tight px-2 mt-1">
-          {(storeSettings?.storeName || 'Furniture Store').toUpperCase()}
+          {(storeSettings?.storeName || DEFAULT_STORE_NAME).toUpperCase()}
         </p>
         <p className="px-2 text-[10px]">Factory Address :- {storeSettings?.address || 'Store address not set'}</p>
         <p className="px-2 pb-1 text-[10px]">
@@ -608,7 +620,7 @@ function QuotationSheetPreview({ quotation, storeSettings }) {
             <th className="border border-black bg-[#0ea5d8] text-white font-bold p-1 w-[18%]">PRODUCT NAME</th>
             <th className="border border-black bg-[#0ea5d8] text-white font-bold p-1 w-[24%]">DESCRIPTION</th>
             <th className="border border-black bg-[#0ea5d8] text-white font-bold p-1 w-[27%]">IMAGE</th>
-            <th className="border border-black bg-[#0ea5d8] text-white font-bold p-1 w-[7%]">QTY.</th>
+            <th className="border border-black bg-[#0ea5d8] text-white font-bold p-1 w-[7%]">QTY / UOM</th>
             <th className="border border-black bg-[#0ea5d8] text-white font-bold p-1 w-[8%]">RATE</th>
             <th className="border border-black bg-[#0ea5d8] text-white font-bold p-1 w-[10%]">AMOUNT</th>
           </tr>
@@ -633,7 +645,7 @@ function QuotationSheetPreview({ quotation, storeSettings }) {
                   <span className="text-[9px] text-gray-600">No image</span>
                 )}
               </td>
-              <td className="border border-black p-1 text-center align-top">{item.quantity}</td>
+              <td className="border border-black p-1 text-center align-top">{item.quantity} {item.unitOfMeasure || 'PCS'}{item.areaSqft ? <div className="text-[9px] text-gray-600">{Number(item.areaSqft).toFixed(2)} sq.ft</div> : null}</td>
               <td className="border border-black p-1 text-right align-top">{toINR(item.rate)}</td>
               <td className="border border-black p-1 text-right align-top">{toINR(item.amount)}</td>
             </tr>
@@ -702,7 +714,7 @@ function QuotationSheetPreview({ quotation, storeSettings }) {
       <div className="px-2 pb-2 text-[10px] text-[#6b4d8e]">
         <div className="flex items-end justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p>Make Cheques in Favor of <span className="text-[#06a9d6] font-bold">{(storeSettings?.storeName || 'Furniture Store').toUpperCase()}</span>.</p>
+            <p>Make Cheques in Favor of <span className="text-[#06a9d6] font-bold">{(storeSettings?.storeName || DEFAULT_STORE_NAME).toUpperCase()}</span>.</p>
             {bankRows.length > 0 ? (
               <div className="mt-1 space-y-0.5">
                 {bankRows.map(row => (
@@ -772,7 +784,8 @@ export default function QuotationsPage() {
   }, [])
 
   useEffect(() => {
-    loadData()
+    const timer = setTimeout(() => { void loadData() }, 0)
+    return () => clearTimeout(timer)
   }, [loadData])
 
   const computed = useMemo(
@@ -925,6 +938,8 @@ export default function QuotationsPage() {
       sku: product.sku,
       description: getProductAutoDescription(product),
       rate: product.price,
+      unitOfMeasure: product.unitOfMeasure || 'PCS',
+      coveragePerBox: product.coveragePerBox || 0,
       productImage: product.image || '',
       imageSource: product.image ? 'PRODUCT' : 'REFERENCE',
       isCustom: false,
@@ -1073,10 +1088,13 @@ export default function QuotationsPage() {
         productId: item.productId || undefined,
         name: item.name.trim(),
         sku: item.sku?.trim(),
-        description: item.description?.trim(),
-        quantity: Number(item.quantity) || 1,
-        rate: Number(item.rate) || 0,
-        referenceImage: getItemDisplayImage(item) || undefined,
+         description: item.description?.trim(),
+         quantity: Number(item.quantity) || 1,
+         rate: Number(item.rate) || 0,
+         unitOfMeasure: item.unitOfMeasure || 'PCS',
+         areaSqft: Number(item.area ?? item.areaInput) > 0 ? Number(item.area ?? item.areaInput) : undefined,
+         coveragePerBox: Number(item.coveragePerBox) > 0 ? Number(item.coveragePerBox) : undefined,
+         referenceImage: getItemDisplayImage(item) || undefined,
       })),
     }
 
@@ -1123,6 +1141,20 @@ export default function QuotationsPage() {
         if (updated) setSelectedQuotation(updated)
       }
     }
+  }
+
+  const handleConvertToInvoice = async (quotation) => {
+    if (!quotation?.dbId) return
+    const confirmed = window.confirm(`Create a held invoice from quotation ${quotation.id}?`)
+    if (!confirmed) return
+    const result = await convertQuotationToInvoice(quotation.dbId)
+    if (!result.success) {
+      notify(result.error || 'Unable to convert quotation', { variant: 'danger' })
+      return
+    }
+    notify(`Held invoice ${result.data?.displayId || ''} created. Open Billing to finalize it.`, { variant: 'success' })
+    setSelectedQuotation(null)
+    await loadData()
   }
 
   const handleMoveToDraft = (quotation) => {
@@ -1270,7 +1302,7 @@ export default function QuotationsPage() {
       notify('Customer email is missing', { variant: 'danger' })
       return
     }
-    const subject = `Quotation ${quotation.id} from ${storeSettings?.storeName || 'Furniture Store'}`
+    const subject = `Quotation ${quotation.id} from ${storeSettings?.storeName || DEFAULT_STORE_NAME}`
     const body = buildQuotationShareMessage(quotation, storeSettings)
     const url = buildMailtoUrl(quotation.email, subject, body)
     if (!url) return
@@ -1781,7 +1813,7 @@ export default function QuotationsPage() {
                   const line = computeLineAmount(item, lineProduct)
                   const amount = line.amount
                   const lineUnit = String(lineProduct?.unitOfMeasure || item.unitOfMeasure || 'PCS').toUpperCase()
-                  const isAreaUnit = lineUnit === 'SQFT' || lineUnit === 'BOX'
+                  const isAreaUnit = lineUnit === 'SQFT' || lineUnit === 'SQM' || lineUnit === 'BOX' || lineUnit === 'SLAB'
                   const hasConversion = line.boxes !== undefined && line.area !== undefined
                   const selectedImage = getItemDisplayImage(item)
 
@@ -1831,6 +1863,12 @@ export default function QuotationsPage() {
                             onChange={e => updateItem(index, { quantity: parseInt(e.target.value || '1') })}
                             className="w-full px-3 py-2.5 md:px-2 md:py-2 rounded-lg text-sm md:text-xs"
                           />
+                        </div>
+                        <div className="col-span-6 md:col-span-2">
+                          <label className="block text-[11px] text-muted mb-1">UOM</label>
+                          <select value={lineUnit} onChange={e => updateItem(index, { unitOfMeasure: e.target.value })} className="w-full px-2 py-2.5 rounded-lg text-xs">
+                            <option value="PCS">PCS</option><option value="BOX">BOX</option><option value="SQFT">SQFT</option><option value="SQM">SQM</option><option value="SLAB">SLAB</option><option value="RFT">RFT</option>
+                          </select>
                         </div>
                         {isAreaUnit && (
                           <div className="col-span-6 md:col-span-2">
@@ -2190,6 +2228,14 @@ export default function QuotationsPage() {
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Move to Draft
                 </button>
+                {(selectedQuotation.statusKey === 'SENT' || selectedQuotation.statusKey === 'APPROVED') && (
+                  <button
+                    onClick={() => handleConvertToInvoice(selectedQuotation)}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-white text-xs hover:bg-accent-hover"
+                  >
+                    <FileText className="w-3.5 h-3.5" /> Create Invoice
+                  </button>
+                )}
               </div>
             </div>
             <QuotationSheetPreview quotation={selectedQuotation} storeSettings={storeSettings} />

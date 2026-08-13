@@ -2,11 +2,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Users, Calendar, ShoppingCart, DollarSign, AlertTriangle, TrendingUp, ArrowRight, Clock, MessageSquare, Instagram, Globe, Facebook, Bot, MapPin, CheckCircle2, Ruler, Loader, Target, Percent, PieChart, MoreHorizontal, TreePine, Truck, Package, Coffee, Fuel, Home, Zap, Wrench, FileText, Megaphone, Factory, Store, HardHat, Landmark } from 'lucide-react';
+import { Users, Calendar, ShoppingCart, DollarSign, AlertTriangle, TrendingUp, ArrowRight, Clock, MessageSquare, Instagram, Globe, Facebook, Bot, MapPin, CheckCircle2, Ruler, Loader, Target, Percent, PieChart, MoreHorizontal, TreePine, Truck, Package, Coffee, Fuel, Home, Zap, Wrench, FileText, Megaphone, Factory, Store, HardHat, Landmark, Layers } from 'lucide-react';
 import StatCard from '@/components/StatCard';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { getDashboardStats } from '@/app/actions/dashboard';
 import { getExpenseSummary } from '@/app/actions/expenses';
+import { getActiveVertical } from '@/lib/brand';
+
+const IS_TGM = getActiveVertical() === 'tiles';
 
 const sourceIconMap = {
   WhatsApp: MessageSquare,
@@ -178,6 +181,21 @@ export default function Dashboard() {
         />
       </div>
 
+      {IS_TGM && (
+        <>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-5">
+          <StatCard title="Available Stone" value={`${stats.tgm?.availableSqft || 0} sq.ft`} change={`${stats.tgm?.availableSlabs || 0} slabs`} changeType="up" icon={Layers} color="accent" />
+          <StatCard title="Reserved Slabs" value={stats.tgm?.reservedSlabs || 0} change={`${stats.tgm?.processingSlabs || 0} in processing`} changeType="up" icon={Package} color="purple" />
+          <StatCard title="Fabrication Jobs" value={stats.tgm?.pendingFabricationJobs || 0} change={`${stats.tgm?.sqftSoldMtd || 0} sq.ft sold MTD`} changeType="up" icon={Ruler} color="teal" />
+          <StatCard title="Lot Matching" value="Traceable" change="Shade & slab records" changeType="up" icon={CheckCircle2} color="success" />
+        </div>
+        {stats.tgm?.lotAlerts?.length > 0 && <div className="glass-card p-4 border-l-4 border-l-amber-500">
+          <div className="flex items-center justify-between gap-3 mb-3"><div><h3 className="text-sm font-semibold text-foreground">Lot / shade stock alerts</h3><p className="text-xs text-muted mt-0.5">Lots with 50 sq.ft or less available, or fully allocated/sold</p></div><AlertTriangle className="w-4 h-4 text-amber-600" /></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">{stats.tgm.lotAlerts.map(lot => <div key={lot.lotNumber} className="p-3 rounded-xl bg-surface flex items-center justify-between gap-3"><div><p className="text-sm font-medium text-foreground">{lot.productName}</p><p className="text-[11px] text-muted">Lot {lot.lotNumber}{lot.shadeCode ? ` · Shade ${lot.shadeCode}` : ''} · {lot.alert}</p></div><div className="text-right"><p className="text-sm font-semibold text-amber-700">{lot.availableSqft} sq.ft</p><p className="text-[11px] text-muted">{lot.availableSlabs} slabs</p></div></div>)}</div>
+        </div>}
+        </>
+      )}
+
       {/* Expense Analytics */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
@@ -323,8 +341,8 @@ export default function Dashboard() {
         <div className="lg:col-span-2 glass-card p-5">
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h2 className="text-base font-semibold text-foreground">Best Selling Furniture</h2>
-              <p className="text-xs text-muted mt-0.5">Top 8 products by units sold</p>
+              <h2 className="text-base font-semibold text-foreground">{IS_TGM ? 'Top Selling Materials' : 'Best Selling Furniture'}</h2>
+              <p className="text-xs text-muted mt-0.5">Top 8 {IS_TGM ? 'catalog items' : 'products'} by units sold</p>
             </div>
             <TrendingUp className="w-5 h-5 text-accent" />
           </div>
@@ -627,14 +645,21 @@ export default function Dashboard() {
           <span className="badge bg-accent-light text-accent text-[10px]">Live</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {[
+          {(IS_TGM ? [
+            { action: 'Follow-up sent', target: 'Rahul Sharma', detail: 'Black Galaxy slab options shared via WhatsApp', time: '2 min ago', icon: '📤' },
+            { action: 'Lead captured', target: 'Kavita Tiwari', detail: 'Kitchen platform inquiry from website', time: '15 min ago', icon: '🎯' },
+            { action: 'Chat handled', target: 'Unknown Customer', detail: 'Tile coverage and wastage question answered', time: '32 min ago', icon: '🤖' },
+            { action: 'Site measure booked', target: 'Sneha Reddy', detail: 'Granite countertop template visit', time: '1 hr ago', icon: '📐' },
+            { action: 'Review requested', target: 'Arjun Rao', detail: 'Post-installation review request sent', time: '2 hrs ago', icon: '⭐' },
+            { action: 'Lot shared', target: 'Ananya Iyer', detail: 'Marble shade options shared via WhatsApp', time: '3 hrs ago', icon: '📋' },
+          ] : [
             { action: 'Follow-up sent', target: 'Rahul Sharma', detail: 'Sofa options shared via WhatsApp', time: '2 min ago', icon: '📤' },
             { action: 'Lead captured', target: 'Kavita Tiwari', detail: 'Study table inquiry from website', time: '15 min ago', icon: '🎯' },
             { action: 'Chat handled', target: 'Unknown Customer', detail: 'Warranty policy question answered', time: '32 min ago', icon: '🤖' },
             { action: 'Appointment booked', target: 'Sneha Reddy', detail: 'Wardrobe design consultation', time: '1 hr ago', icon: '📅' },
             { action: 'Review requested', target: 'Arjun Rao', detail: 'Post-delivery review request sent', time: '2 hrs ago', icon: '⭐' },
             { action: 'Catalog shared', target: 'Ananya Iyer', detail: 'TV unit collection via WhatsApp', time: '3 hrs ago', icon: '📋' },
-          ].map((activity, i) => (
+          ]).map((activity, i) => (
             <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-surface hover:bg-surface-hover transition-colors">
               <span className="text-lg flex-shrink-0">{activity.icon}</span>
               <div className="min-w-0">

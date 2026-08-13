@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Search, Plus, Truck, Users, RotateCcw, CheckCircle, XCircle, Trash2,
   Eye, FileText, ArrowDownCircle, Clock, AlertTriangle,
@@ -9,14 +9,19 @@ import {
 import {
   getSuppliers, createSupplier, updateSupplier, getPurchaseOrders, createPurchaseOrder,
   approvePurchaseOrder, receivePurchaseOrder, cancelPurchaseOrder,
+  receiveStoneLotFromPurchaseOrder,
   getPurchaseReturns, createPurchaseReturn, getPurchaseStats, recordPurchaseOrderPayment,
   updatePurchaseOrder
 } from '@/app/actions/purchases'
 import { getProducts, createProduct } from '@/app/actions/products'
+import { getGodowns } from '@/app/actions/godowns'
 import { getStoreSettings } from '@/app/actions/settings'
 import { movePurchaseOrderToDraft } from '@/app/actions/drafts'
 import Modal from '@/components/Modal'
 import { useAlertToast } from '@/components/AlertToastProvider'
+import { getActiveVertical } from '@/lib/brand'
+
+const DEFAULT_STORE_NAME = getActiveVertical() === 'tiles' ? 'Tiles, Granite & Marble Showroom' : 'Furniture Store'
 
 const poStatusColors = {
   DRAFT: 'bg-gray-500/10 text-gray-400',
@@ -53,7 +58,7 @@ const escapeHtml = (value) => String(value || '')
   .replace(/'/g, '&#39;')
 
 const buildPurchaseOrderShareMessage = (po, storeSettings) => {
-  const storeName = storeSettings?.storeName || 'Furniture Store'
+  const storeName = storeSettings?.storeName || DEFAULT_STORE_NAME
   const contactBits = []
   if (storeSettings?.phone) contactBits.push(`Phone: ${storeSettings.phone}`)
   if (storeSettings?.whatsappNumber) contactBits.push(`WhatsApp: ${storeSettings.whatsappNumber}`)
@@ -124,7 +129,7 @@ const buildPurchaseOrderDocumentHtml = (po, storeSettings) => {
     <body>
       <div class="header">
         <div>
-          <div class="brand">${escapeHtml(store.storeName || 'Furniture Store')}</div>
+          <div class="brand">${escapeHtml(store.storeName || DEFAULT_STORE_NAME)}</div>
           ${store.address ? `<div style="font-size:12px;color:#6b7280;margin-top:4px">${escapeHtml(store.address)}</div>` : ''}
           <div style="font-size:12px;color:#6b7280">${escapeHtml(store.phone || '')}${store.email ? ` · ${escapeHtml(store.email)}` : ''}</div>
           ${store.gstNumber ? `<div style="font-size:12px;color:#6b7280;margin-top:2px">GSTIN: ${escapeHtml(store.gstNumber)}</div>` : ''}
@@ -149,7 +154,7 @@ const buildPurchaseOrderDocumentHtml = (po, storeSettings) => {
         </div>
         <div class="box">
           <div class="label">Ship To</div>
-          <div style="font-weight:600;margin-top:6px">${escapeHtml(store.storeName || 'Furniture Store')}</div>
+          <div style="font-weight:600;margin-top:6px">${escapeHtml(store.storeName || DEFAULT_STORE_NAME)}</div>
           ${store.address ? `<div style="font-size:12px;color:#6b7280">${escapeHtml(store.address)}</div>` : ''}
           ${store.phone ? `<div style="font-size:12px;color:#6b7280">${escapeHtml(store.phone)}</div>` : ''}
           ${store.gstNumber ? `<div style="font-size:12px;color:#6b7280">GSTIN: ${escapeHtml(store.gstNumber)}</div>` : ''}
@@ -301,6 +306,7 @@ export default function PurchasesPage() {
   const [suppliers, setSuppliers] = useState([])
   const [returns, setReturns] = useState([])
   const [products, setProducts] = useState([])
+  const [godowns, setGodowns] = useState([])
   const [stats, setStats] = useState(null)
   const [storeSettings, setStoreSettings] = useState(null)
   const [search, setSearch] = useState('')
@@ -325,31 +331,38 @@ export default function PurchasesPage() {
   // Forms
   const [supplierForm, setSupplierForm] = useState(createEmptySupplierForm())
   const [poForm, setPOForm] = useState(createEmptyPOForm())
-  const [returnForm, setReturnForm] = useState({ poId: '', supplierId: '', reason: '', notes: '', items: [{ productId: '', quantity: 1, unitCost: 0 }] })
+  const [returnForm, setReturnForm] = useState({ poId: '', supplierId: '', godownId: '', reason: '', notes: '', items: [{ productId: '', quantity: 1, unitCost: 0 }] })
+  const [stoneReceivePO, setStoneReceivePO] = useState(null)
+  const [stoneReceiveForm, setStoneReceiveForm] = useState({ poItemId: '', lotNumber: '', godownId: '', origin: '', shadeCode: '', qualityGrade: '', thicknessMm: '', costPerSqft: '', notes: '', slabsText: '01/01, 120, 72' })
   const [paymentForm, setPaymentForm] = useState({ poId: '', amount: '', note: '', method: 'Bank Transfer', reference: '', paidAt: new Date().toISOString().slice(0, 10) })
 
-  const loadData = () => {
+  const loadData = useCallback(() => {
     setLoading(true)
     Promise.all([
       getPurchaseOrders(),
       getSuppliers(),
       getPurchaseReturns(),
       getProducts(),
+      getGodowns(),
       getPurchaseStats(),
       getStoreSettings(),
     ])
-      .then(([poRes, supRes, retRes, prodRes, statsRes, settingsRes]) => {
+      .then(([poRes, supRes, retRes, prodRes, godownRes, statsRes, settingsRes]) => {
         if (poRes.success) setOrders(poRes.data)
         if (supRes.success) setSuppliers(supRes.data)
         if (retRes.success) setReturns(retRes.data)
         if (prodRes.success) setProducts(prodRes.data)
+        if (godownRes.success) setGodowns(godownRes.data)
         if (statsRes.success) setStats(statsRes.data)
         if (settingsRes.success) setStoreSettings(settingsRes.data)
         setLoading(false)
       })
-  }
+  }, [])
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    const timer = setTimeout(() => { void loadData() }, 0)
+    return () => clearTimeout(timer)
+  }, [loadData])
 
   const filteredOrders = useMemo(() => orders.filter(o =>
     (statusFilter === 'All' || o.status === statusFilter) &&
@@ -592,6 +605,35 @@ export default function PurchasesPage() {
     else alert(res.error)
   }
 
+  const openStoneReceive = (po) => {
+    const firstStoneItem = (po.items || []).find(item => item.product?.isSlabTracked && item.receivedQty < item.quantity)
+    setStoneReceivePO(po)
+    setStoneReceiveForm(form => ({ ...form, poItemId: firstStoneItem ? String(firstStoneItem.id) : '', lotNumber: '', slabsText: '01/01, 120, 72' }))
+  }
+
+  const handleStoneReceive = async () => {
+    if (!stoneReceivePO) return
+    const slabs = stoneReceiveForm.slabsText.split('\n').map((line, index) => {
+      const [slabNumber, length, width] = line.split(',').map(value => value.trim())
+      return { slabNumber: slabNumber || String(index + 1), lengthInches: Number(length), widthInches: Number(width) }
+    }).filter(slab => slab.slabNumber && slab.lengthInches > 0 && slab.widthInches > 0)
+    const result = await receiveStoneLotFromPurchaseOrder({
+      poId: stoneReceivePO.id,
+      poItemId: Number(stoneReceiveForm.poItemId),
+      lotNumber: stoneReceiveForm.lotNumber,
+      godownId: stoneReceiveForm.godownId ? Number(stoneReceiveForm.godownId) : undefined,
+      origin: stoneReceiveForm.origin || undefined,
+      shadeCode: stoneReceiveForm.shadeCode || undefined,
+      qualityGrade: stoneReceiveForm.qualityGrade || undefined,
+      avgThicknessMm: stoneReceiveForm.thicknessMm ? Number(stoneReceiveForm.thicknessMm) : undefined,
+      costPerSqft: Number(stoneReceiveForm.costPerSqft) || 0,
+      notes: stoneReceiveForm.notes || undefined,
+      slabs,
+    })
+    if (result.success) { setStoneReceivePO(null); loadData(); notify('Stone lot received and linked to the purchase order.', { variant: 'success' }) }
+    else notify(result.error || 'Could not receive stone lot', { variant: 'danger' })
+  }
+
   const handleCancelPO = (id) => {
     setPoToCancel(id)
   }
@@ -700,7 +742,7 @@ export default function PurchasesPage() {
       notify('Supplier email is missing', { variant: 'danger' })
       return
     }
-    const subject = `Purchase Order ${po.displayId} from ${storeSettings?.storeName || 'Furniture Store'}`
+    const subject = `Purchase Order ${po.displayId} from ${storeSettings?.storeName || DEFAULT_STORE_NAME}`
     const body = buildPurchaseOrderShareMessage(po, storeSettings)
     const url = buildMailtoUrl(po.supplier.email, subject, body)
     if (!url) return
@@ -755,12 +797,13 @@ export default function PurchasesPage() {
     const res = await createPurchaseReturn({
       poId: returnForm.poId ? Number(returnForm.poId) : undefined,
       supplierId: Number(returnForm.supplierId),
+      godownId: returnForm.godownId ? Number(returnForm.godownId) : undefined,
       reason: returnForm.reason, notes: returnForm.notes,
       totalAmount: total, items
     })
     if (res.success) {
       setShowReturnModal(false)
-      setReturnForm({ poId: '', supplierId: '', reason: '', notes: '', items: [{ productId: '', quantity: 1, unitCost: 0 }] })
+      setReturnForm({ poId: '', supplierId: '', godownId: '', reason: '', notes: '', items: [{ productId: '', quantity: 1, unitCost: 0 }] })
       loadData()
     } else alert(res.error)
     setSubmitting(false)
@@ -1024,7 +1067,7 @@ export default function PurchasesPage() {
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] uppercase tracking-wider text-muted font-semibold">Ship To</p>
-                <p className="text-sm font-medium text-foreground">{storeSettings?.storeName || 'Furniture Store'}</p>
+                <p className="text-sm font-medium text-foreground">{storeSettings?.storeName || DEFAULT_STORE_NAME}</p>
                 {storeSettings?.address && <p className="text-xs text-muted">{storeSettings.address}</p>}
                 {storeSettings?.phone && <p className="text-xs text-muted">Phone: {storeSettings.phone}</p>}
                 {storeSettings?.gstNumber && <p className="text-xs text-muted">GSTIN: {storeSettings.gstNumber}</p>}
@@ -1148,6 +1191,9 @@ export default function PurchasesPage() {
                     Mark Received
                   </button>
                 )}
+                {(selectedPO.status === 'APPROVED' || selectedPO.status === 'PARTIALLY_RECEIVED') && selectedPO.items?.some(item => item.product?.isSlabTracked && item.receivedQty < item.quantity) && (
+                  <button onClick={() => openStoneReceive(selectedPO)} className="px-3 py-1.5 rounded-lg bg-purple-500/10 text-purple-400 text-xs font-medium hover:bg-purple-500/20">Receive stone lot</button>
+                )}
 
                 {selectedPO.status === 'DRAFT' && (
                   <button
@@ -1201,6 +1247,30 @@ export default function PurchasesPage() {
             <button onClick={() => setPoToDraft(null)} className="px-4 py-2 rounded-lg text-sm text-muted hover:bg-surface-hover">Cancel</button>
             <button onClick={confirmMovePOToDraft} disabled={movingPoToDraft} className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm disabled:opacity-50">{movingPoToDraft ? 'Moving...' : 'Move to Draft'}</button>
           </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!stoneReceivePO} onClose={() => setStoneReceivePO(null)} title="Receive Stone Lot from PO" size="lg">
+        <div className="space-y-4">
+          <p className="text-xs text-muted">Record each physical slab against {stoneReceivePO?.displayId}. The normal “Mark Received” action is intentionally blocked for slab-tracked stone.</p>
+          <div>
+            <label className="text-sm text-muted mb-1 block">Stone PO line *</label>
+            <select value={stoneReceiveForm.poItemId} onChange={e => setStoneReceiveForm(form => ({ ...form, poItemId: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm">
+              <option value="">Select stone line</option>
+              {stoneReceivePO?.items?.filter(item => item.product?.isSlabTracked && item.receivedQty < item.quantity).map(item => <option key={item.id} value={item.id}>{item.name} · {item.quantity - item.receivedQty} slab(s) pending</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div><label className="text-sm text-muted mb-1 block">Lot number *</label><input value={stoneReceiveForm.lotNumber} onChange={e => setStoneReceiveForm(form => ({ ...form, lotNumber: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" /></div>
+            <div><label className="text-sm text-muted mb-1 block">Shade / block code</label><input value={stoneReceiveForm.shadeCode} onChange={e => setStoneReceiveForm(form => ({ ...form, shadeCode: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" /></div>
+            <div><label className="text-sm text-muted mb-1 block">Origin</label><input value={stoneReceiveForm.origin} onChange={e => setStoneReceiveForm(form => ({ ...form, origin: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" /></div>
+            <div><label className="text-sm text-muted mb-1 block">Quality grade</label><input value={stoneReceiveForm.qualityGrade} onChange={e => setStoneReceiveForm(form => ({ ...form, qualityGrade: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" /></div>
+            <div><label className="text-sm text-muted mb-1 block">Thickness (mm)</label><input type="number" min="1" step="0.1" value={stoneReceiveForm.thicknessMm} onChange={e => setStoneReceiveForm(form => ({ ...form, thicknessMm: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" /></div>
+            <div><label className="text-sm text-muted mb-1 block">Cost / sq.ft</label><input type="number" min="0" value={stoneReceiveForm.costPerSqft} onChange={e => setStoneReceiveForm(form => ({ ...form, costPerSqft: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" /></div>
+          </div>
+          <div><label className="text-sm text-muted mb-1 block">Slabs (one per line: slab number, length inches, width inches) *</label><textarea rows={6} value={stoneReceiveForm.slabsText} onChange={e => setStoneReceiveForm(form => ({ ...form, slabsText: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" /></div>
+          <textarea rows={2} placeholder="Notes" value={stoneReceiveForm.notes} onChange={e => setStoneReceiveForm(form => ({ ...form, notes: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm" />
+          <button onClick={handleStoneReceive} disabled={!stoneReceiveForm.poItemId || !stoneReceiveForm.lotNumber} className="w-full py-2.5 bg-accent text-white rounded-lg text-sm font-medium disabled:opacity-50">Receive and link lot</button>
         </div>
       </Modal>
 
@@ -1496,6 +1566,13 @@ export default function PurchasesPage() {
               <select value={returnForm.poId} onChange={e => setReturnForm(p => ({ ...p, poId: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground">
                 <option value="">Optional</option>
                 {orders.filter(o => o.status === 'RECEIVED').map(o => <option key={o.id} value={o.id}>{o.displayId}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm text-muted mb-1 block">Return from godown</label>
+              <select value={returnForm.godownId} onChange={e => setReturnForm(p => ({ ...p, godownId: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground">
+                <option value="">Default godown</option>
+                {godowns.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
             </div>
           </div>

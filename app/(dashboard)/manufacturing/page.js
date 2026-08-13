@@ -21,11 +21,13 @@ import {
   holdProduction, cancelProductionOrder, deleteProductionOrder,
   completeProduction, recordQualityCheck,
   getMRPAnalysis, getManufacturingStats, updateProductionStep,
-  getManufacturingCustomOrders, getScrapInventory, getCustomOrderInventory,
+  getManufacturingCustomOrders, getScrapInventory, updateScrapInventoryStatus, getCustomOrderInventory,
 } from '@/app/actions/manufacturing'
+import { getStoneLots, createStoneOffcut } from '@/app/actions/stone-inventory'
 import { getProducts, createProduct, deleteRawMaterial, updateProduct, updateStock, bulkImportRawMaterials } from '@/app/actions/products'
 import Modal from '@/components/Modal'
 import * as XLSX from 'xlsx'
+import { getActiveVertical } from '@/lib/brand'
 
 // ─── Constants ────────────────────────────────────────
 const PRIORITY_COLORS = {
@@ -50,7 +52,10 @@ const QUALITY_COLORS = {
   PARTIAL: 'bg-amber-500/10 text-amber-400',
 }
 
-const WC_TYPES = ['Carpentry', 'Polishing', 'Upholstery', 'Finishing', 'Assembly', 'QC', 'Packaging', 'General']
+const IS_TGM = getActiveVertical() === 'tiles'
+const WC_TYPES = IS_TGM
+  ? ['Gangsaw / Block-Cutting', 'CNC / Waterjet Cutting', 'Edge Profiling', 'Polishing', 'Resin & Epoxy Filling', 'Line Polishing / Calibration', 'Template & Site Measurement', 'QC / Grading', 'Packing & Crating', 'General']
+  : ['Carpentry', 'Polishing', 'Upholstery', 'Finishing', 'Assembly', 'QC', 'Packaging', 'General']
 const INP = 'w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50'
 const SEL = 'w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground focus:outline-none'
 
@@ -109,6 +114,10 @@ export default function ManufacturingPage() {
   const [showQCModal, setShowQCModal] = useState(false)
   const [showDeleteProdModal, setShowDeleteProdModal] = useState(false)
   const [showTemplateModal, setShowTemplateModal] = useState(false)
+  const [showOffcutModal, setShowOffcutModal] = useState(false)
+  const [offcutLots, setOffcutLots] = useState([])
+  const [offcutForm, setOffcutForm] = useState({ sourceSlabId: '', lengthInches: '', widthInches: '', shadeCode: '', salePrice: '', notes: '' })
+  const [offcutSaving, setOffcutSaving] = useState(false)
 
   // Selected items
   const [selectedOrder, setSelectedOrder] = useState(null)
@@ -172,6 +181,7 @@ export default function ManufacturingPage() {
     scrapQty: 0, scrapReason: '', qualityStatus: 'PASSED', qualityNotes: '', notes: '',
     consumptions: [],
     stepActuals: [],
+    stoneOffcuts: [],
   })
 
   // Work center form
@@ -381,12 +391,18 @@ export default function ManufacturingPage() {
       qualityStatus: 'PASSED', qualityNotes: '', notes: '',
       consumptions: order.consumptions?.map(c => ({ rawMaterialId: c.rawMaterialId, plannedQty: c.plannedQty, issuedQty: c.plannedQty, actualQty: c.plannedQty, scrapQty: 0, scrapReason: '' })) || [],
       stepActuals,
+      stoneOffcuts: [],
     })
     setSelectedOrder(order)
     setShowCompleteModal(true)
   }
 
   const handleCompleteProd = async () => {
+    const incompleteOffcut = completeForm.stoneOffcuts.some(offcut => !offcut.sourceSlabId || !offcut.lengthInches || !offcut.widthInches)
+    if (incompleteOffcut) {
+      alert('Complete the source slab and dimensions for every stone offcut, or remove the empty row.')
+      return
+    }
     setSubmitting(true)
     const res = await completeProduction({
       ...completeForm,
@@ -403,6 +419,15 @@ export default function ManufacturingPage() {
         scrapReason: c.scrapReason || undefined,
       })),
       stepActuals: completeForm.stepActuals.map(s => ({ stepId: s.stepId, actualMins: Number(s.actualMins) || 0 })),
+      stoneOffcuts: completeForm.stoneOffcuts.map(offcut => ({
+        sourceSlabId: Number(offcut.sourceSlabId),
+        lengthInches: Number(offcut.lengthInches),
+        widthInches: Number(offcut.widthInches),
+        shadeCode: offcut.shadeCode || undefined,
+        photo: offcut.photo || undefined,
+        salePrice: offcut.salePrice === '' ? undefined : Number(offcut.salePrice),
+        notes: offcut.notes || undefined,
+      })),
     })
     if (res.success) { setShowCompleteModal(false); loadData() }
     else alert(res.error)
@@ -436,6 +461,39 @@ export default function ManufacturingPage() {
     if (res.success) { setShowQCModal(false); setQcTarget(null); loadData() }
     else alert(res.error)
     setSubmitting(false)
+  }
+
+  const handleScrapStatus = async (id, status) => {
+    const label = status === 'DISPOSED' ? 'dispose' : 'mark as used'
+    if (!window.confirm(`Are you sure you want to ${label} this reusable offcut?`)) return
+    const res = await updateScrapInventoryStatus({ id, status })
+    if (res.success) loadData()
+    else alert(res.error)
+  }
+
+  const openOffcutModal = async () => {
+    const res = await getStoneLots()
+    if (res.success) setOffcutLots(res.data)
+    setShowOffcutModal(true)
+  }
+
+  const handleCreateOffcut = async () => {
+    if (!offcutForm.sourceSlabId || !offcutForm.lengthInches || !offcutForm.widthInches) return
+    setOffcutSaving(true)
+    const res = await createStoneOffcut({
+      sourceSlabId: Number(offcutForm.sourceSlabId),
+      lengthInches: Number(offcutForm.lengthInches),
+      widthInches: Number(offcutForm.widthInches),
+      shadeCode: offcutForm.shadeCode || undefined,
+      salePrice: offcutForm.salePrice ? Number(offcutForm.salePrice) : undefined,
+      notes: offcutForm.notes || undefined,
+    })
+    if (res.success) {
+      setShowOffcutModal(false)
+      setOffcutForm({ sourceSlabId: '', lengthInches: '', widthInches: '', shadeCode: '', salePrice: '', notes: '' })
+      loadData()
+    } else alert(res.error)
+    setOffcutSaving(false)
   }
 
   const handleCreateTemplate = async () => {
@@ -799,12 +857,10 @@ export default function ManufacturingPage() {
   }
 
   // Filter raw materials (products with category "Raw Material")
-  const rawMaterials = useMemo(() => {
-    return products.filter(p =>
-      p.category === 'Raw Material' &&
-      (!rmSearch || p.name.toLowerCase().includes(rmSearch.toLowerCase()) || p.sku.toLowerCase().includes(rmSearch.toLowerCase()))
-    )
-  }, [products, rmSearch])
+  const rawMaterials = products.filter(p =>
+    p.category === 'Raw Material' &&
+    (!rmSearch || p.name.toLowerCase().includes(rmSearch.toLowerCase()) || p.sku.toLowerCase().includes(rmSearch.toLowerCase()))
+  )
 
   const TABS = [
     { id: 'production', label: 'Production Orders', icon: Factory },
@@ -1491,8 +1547,9 @@ export default function ManufacturingPage() {
           </div>
 
           <div className="glass-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-medium text-foreground">Material Scrap & Offcuts</h3>
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
+              <div><h3 className="text-sm font-medium text-foreground">Material Scrap & Offcuts</h3><p className="text-xs text-muted mt-1">Record reusable stone remnants from fabrication for resale or future jobs.</p></div>
+              {IS_TGM && <button onClick={openOffcutModal} className="px-3 py-2 bg-accent text-white rounded-lg text-xs font-medium flex items-center gap-1.5"><Plus className="w-3.5 h-3.5" /> Record Stone Offcut</button>}
             </div>
             {/* Mobile cards */}
             <div className="md:hidden divide-y divide-border">
@@ -1508,11 +1565,12 @@ export default function ManufacturingPage() {
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
                     <span className="text-muted">Qty: <span className="text-foreground font-semibold">{s.quantity} {s.unitOfMeasure}</span></span>
                     <span className="text-muted">Value: <span className="text-foreground">₹{(s.estimatedValue || 0).toLocaleString('en-IN')}</span></span>
-                    <span className="text-muted">Source: <span className="text-foreground">{s.productionOrder?.displayId || '—'}</span></span>
+                    <span className="text-muted">Source: <span className="text-foreground">{s.sourceSlab ? `Lot ${s.sourceSlab.lot?.lotNumber} · Slab ${s.sourceSlab.slabNumber}` : s.productionOrder?.displayId || '—'}</span></span>
                     <span className="text-muted">Disposition: <span className="text-foreground">{s.disposition}</span></span>
                     <span className="text-muted col-span-2">Date: <span className="text-foreground">{s.createdAt ? new Date(s.createdAt).toLocaleDateString('en-IN') : '—'}</span></span>
                   </div>
                   {(s.reason || s.notes) && <p className="text-[11px] text-muted">{s.reason || s.notes}</p>}
+                  {s.status === 'IN_STOCK' && <div className="flex gap-2 pt-1"><button onClick={() => handleScrapStatus(s.id, 'USED')} className="text-xs text-accent hover:underline">Mark used</button><button onClick={() => handleScrapStatus(s.id, 'DISPOSED')} className="text-xs text-red-400 hover:underline">Dispose</button></div>}
                 </div>
               ))}
             </div>
@@ -1520,7 +1578,7 @@ export default function ManufacturingPage() {
               <table className="w-full text-sm min-w-[860px]">
                 <thead>
                   <tr className="border-b border-border bg-surface-hover">
-                    {['Material', 'Source Order', 'Qty', 'Value', 'Disposition', 'Status', 'Reason', 'Date'].map(h => (
+                    {['Material', 'Source Order', 'Qty', 'Value', 'Disposition', 'Status', 'Reason', 'Date', 'Actions'].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-xs font-medium text-muted uppercase">{h}</th>
                     ))}
                   </tr>
@@ -1532,7 +1590,7 @@ export default function ManufacturingPage() {
                         <p className="text-foreground font-medium">{s.rawMaterial?.name}</p>
                         <p className="text-[10px] text-muted font-mono">{s.rawMaterial?.sku}</p>
                       </td>
-                      <td className="px-4 py-3 text-muted text-xs">{s.productionOrder?.displayId || '—'}</td>
+                      <td className="px-4 py-3 text-muted text-xs">{s.sourceSlab ? `Lot ${s.sourceSlab.lot?.lotNumber} · Slab ${s.sourceSlab.slabNumber}` : s.productionOrder?.displayId || '—'}</td>
                       <td className="px-4 py-3 text-foreground font-semibold">{s.quantity} {s.unitOfMeasure}</td>
                       <td className="px-4 py-3 text-foreground">₹{(s.estimatedValue || 0).toLocaleString('en-IN')}</td>
                       <td className="px-4 py-3 text-muted text-xs">{s.disposition}</td>
@@ -1541,6 +1599,7 @@ export default function ManufacturingPage() {
                       </td>
                       <td className="px-4 py-3 text-muted text-xs">{s.reason || s.notes || '—'}</td>
                       <td className="px-4 py-3 text-muted text-xs">{s.createdAt ? new Date(s.createdAt).toLocaleDateString('en-IN') : '—'}</td>
+                      <td className="px-4 py-3">{s.status === 'IN_STOCK' && <div className="flex gap-2"><button onClick={() => handleScrapStatus(s.id, 'USED')} className="text-xs text-accent hover:underline">Use</button><button onClick={() => handleScrapStatus(s.id, 'DISPOSED')} className="text-xs text-red-400 hover:underline">Dispose</button></div>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2369,6 +2428,23 @@ export default function ManufacturingPage() {
         </div>
       )}
 
+      <Modal isOpen={showOffcutModal} onClose={() => !offcutSaving && setShowOffcutModal(false)} title="Record Stone Offcut" size="sm">
+        <div className="space-y-4">
+          <p className="text-xs text-muted">Choose a fabrication or sold slab and enter the usable remnant dimensions. The offcut will be tracked in sq.ft with its source lot and slab.</p>
+          <div><label className="text-xs text-muted mb-1 block">Source slab *</label><select value={offcutForm.sourceSlabId} onChange={e => setOffcutForm(f => ({ ...f, sourceSlabId: e.target.value }))} className={SEL}><option value="">Select source slab</option>{offcutLots.flatMap(lot => lot.slabs.filter(s => ['IN_PROCESSING', 'SOLD'].includes(s.status)).map(slab => <option key={slab.id} value={slab.id}>{lot.product.name} · Lot {lot.lotNumber} · Slab {slab.slabNumber} ({slab.status})</option>))}</select></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-muted mb-1 block">Length (inches) *</label><input type="number" min="0.1" step="0.01" value={offcutForm.lengthInches} onChange={e => setOffcutForm(f => ({ ...f, lengthInches: e.target.value }))} className={INP} placeholder="e.g. 36" /></div>
+            <div><label className="text-xs text-muted mb-1 block">Width (inches) *</label><input type="number" min="0.1" step="0.01" value={offcutForm.widthInches} onChange={e => setOffcutForm(f => ({ ...f, widthInches: e.target.value }))} className={INP} placeholder="e.g. 18" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-muted mb-1 block">Shade code</label><input value={offcutForm.shadeCode} onChange={e => setOffcutForm(f => ({ ...f, shadeCode: e.target.value }))} className={INP} placeholder="Optional" /></div>
+            <div><label className="text-xs text-muted mb-1 block">Resale price (₹)</label><input type="number" min="0" step="1" value={offcutForm.salePrice} onChange={e => setOffcutForm(f => ({ ...f, salePrice: e.target.value }))} className={INP} placeholder="Optional" /></div>
+          </div>
+          <div><label className="text-xs text-muted mb-1 block">Notes</label><textarea rows={2} value={offcutForm.notes} onChange={e => setOffcutForm(f => ({ ...f, notes: e.target.value }))} className={INP} placeholder="Finish, edge condition, or resale notes" /></div>
+          <div className="flex justify-end gap-2 pt-2"><button onClick={() => setShowOffcutModal(false)} className="px-4 py-2 text-sm text-muted">Cancel</button><button onClick={handleCreateOffcut} disabled={offcutSaving || !offcutForm.sourceSlabId || !offcutForm.lengthInches || !offcutForm.widthInches} className="px-4 py-2 bg-accent text-white rounded-lg text-sm disabled:opacity-50">{offcutSaving ? 'Saving...' : 'Save Offcut'}</button></div>
+        </div>
+      </Modal>
+
       <Modal isOpen={showRmImportModal} onClose={() => setShowRmImportModal(false)} title="Import Raw Materials" size="lg" fullScreenMobile>
         <div className="space-y-4">
           <div className="p-3 rounded-lg border border-border bg-surface-hover text-xs text-muted space-y-1">
@@ -2570,7 +2646,7 @@ export default function ManufacturingPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-xs text-muted mb-1 block">BOM Name *</label>
-              <input value={bomForm.name} onChange={e => setBomForm(p => ({ ...p, name: e.target.value }))} className={INP} placeholder="e.g. Sofa Set BOM" />
+              <input value={bomForm.name} onChange={e => setBomForm(p => ({ ...p, name: e.target.value }))} className={INP} placeholder={IS_TGM ? 'e.g. Kitchen Platform Fabrication BOM' : 'e.g. Sofa Set BOM'} />
             </div>
             <div>
               <label className="text-xs text-muted mb-1 block">Finished Product *</label>
@@ -3022,6 +3098,66 @@ export default function ManufacturingPage() {
             </div>
           )}
 
+          {IS_TGM && selectedOrder?.customOrder?.slabAllocations?.length > 0 && (
+            <div className="space-y-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/5">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-semibold text-foreground uppercase tracking-wide">Reusable stone offcuts</h4>
+                  <p className="text-[11px] text-muted mt-0.5">Record remnants now; source lot, shade and slab photo will stay traceable.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCompleteForm(form => ({
+                    ...form,
+                    stoneOffcuts: [...form.stoneOffcuts, {
+                      sourceSlabId: '', lengthInches: '', widthInches: '', shadeCode: '', photo: '', salePrice: '', notes: '',
+                    }],
+                  }))}
+                  className="text-xs px-2.5 py-1.5 rounded-lg border border-amber-500/30 text-amber-700 hover:bg-amber-500/10"
+                >+ Add offcut</button>
+              </div>
+              {completeForm.stoneOffcuts.length === 0 && <p className="text-xs text-muted">No offcut recorded for this job.</p>}
+              {completeForm.stoneOffcuts.map((offcut, index) => (
+                <div key={index} className="p-3 rounded-lg bg-surface border border-border space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-foreground">Offcut {index + 1}</span>
+                    <button
+                      type="button"
+                      onClick={() => setCompleteForm(form => ({ ...form, stoneOffcuts: form.stoneOffcuts.filter((_, i) => i !== index) }))}
+                      className="text-xs text-red-500 hover:underline"
+                    >Remove</button>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted block mb-0.5">Source allocated slab *</label>
+                    <select
+                      value={offcut.sourceSlabId}
+                      onChange={e => {
+                        const next = [...completeForm.stoneOffcuts]
+                        const source = selectedOrder.customOrder.slabAllocations.find(slab => String(slab.id) === e.target.value)
+                        next[index] = { ...next[index], sourceSlabId: e.target.value, shadeCode: next[index].shadeCode || source?.lot?.shadeCode || '' }
+                        setCompleteForm(form => ({ ...form, stoneOffcuts: next }))
+                      }}
+                      className={SEL}
+                    >
+                      <option value="">Select allocated slab</option>
+                      {selectedOrder.customOrder.slabAllocations.map(slab => (
+                        <option key={slab.id} value={slab.id}>{slab.lot?.product?.name || 'Stone'} · {slab.lot?.lotNumber || 'Lot'} · {slab.slabNumber} ({slab.status})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><label className="text-[10px] text-muted block mb-0.5">Length (in) *</label><input type="number" min="0.1" step="0.01" value={offcut.lengthInches} onChange={e => { const next = [...completeForm.stoneOffcuts]; next[index] = { ...next[index], lengthInches: e.target.value }; setCompleteForm(form => ({ ...form, stoneOffcuts: next })) }} className={INP} /></div>
+                    <div><label className="text-[10px] text-muted block mb-0.5">Width (in) *</label><input type="number" min="0.1" step="0.01" value={offcut.widthInches} onChange={e => { const next = [...completeForm.stoneOffcuts]; next[index] = { ...next[index], widthInches: e.target.value }; setCompleteForm(form => ({ ...form, stoneOffcuts: next })) }} className={INP} /></div>
+                    <div><label className="text-[10px] text-muted block mb-0.5">Shade code</label><input value={offcut.shadeCode} onChange={e => { const next = [...completeForm.stoneOffcuts]; next[index] = { ...next[index], shadeCode: e.target.value }; setCompleteForm(form => ({ ...form, stoneOffcuts: next })) }} className={INP} placeholder="Copied from lot" /></div>
+                    <div><label className="text-[10px] text-muted block mb-0.5">Resale price (₹)</label><input type="number" min="0" step="1" value={offcut.salePrice} onChange={e => { const next = [...completeForm.stoneOffcuts]; next[index] = { ...next[index], salePrice: e.target.value }; setCompleteForm(form => ({ ...form, stoneOffcuts: next })) }} className={INP} /></div>
+                  </div>
+                  <div><label className="text-[10px] text-muted block mb-0.5">Photo URL (optional)</label><input value={offcut.photo} onChange={e => { const next = [...completeForm.stoneOffcuts]; next[index] = { ...next[index], photo: e.target.value }; setCompleteForm(form => ({ ...form, stoneOffcuts: next })) }} className={INP} placeholder="Paste uploaded photo URL; source slab photo is used otherwise" /></div>
+                  <div><label className="text-[10px] text-muted block mb-0.5">Notes</label><input value={offcut.notes} onChange={e => { const next = [...completeForm.stoneOffcuts]; next[index] = { ...next[index], notes: e.target.value }; setCompleteForm(form => ({ ...form, stoneOffcuts: next })) }} className={INP} placeholder="Edge condition or resale notes" /></div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* ── Step Time Variance ── */}
           {completeForm.stepActuals.length > 0 && (() => {
             const standardMins = completeForm.stepActuals.reduce((sum, s) => sum + Number(s.plannedMins || 0), 0)
@@ -3139,7 +3275,7 @@ export default function ManufacturingPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-xs text-muted mb-1 block">Name *</label>
-              <input value={wcForm.name} onChange={e => setWcForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Carpentry Station 1" className={INP} />
+              <input value={wcForm.name} onChange={e => setWcForm(p => ({ ...p, name: e.target.value }))} placeholder={IS_TGM ? 'e.g. CNC Cutting Bay 1' : 'e.g. Carpentry Station 1'} className={INP} />
             </div>
             <div>
               <label className="text-xs text-muted mb-1 block">Type</label>
@@ -3244,7 +3380,7 @@ export default function ManufacturingPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-muted mb-1 block">Template Name *</label>
-                  <input value={templateForm.name} onChange={e => setTemplateForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Standard Sofa Process" className={INP} />
+                  <input value={templateForm.name} onChange={e => setTemplateForm(f => ({ ...f, name: e.target.value }))} placeholder={IS_TGM ? 'e.g. Standard Granite Cutting Process' : 'e.g. Standard Sofa Process'} className={INP} />
                 </div>
                 <div>
                   <label className="text-xs text-muted mb-1 block">Description</label>

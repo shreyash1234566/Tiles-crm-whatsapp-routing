@@ -1,7 +1,9 @@
 import sharp from 'sharp';
 import { NextResponse } from 'next/server';
 
-const PRODUCTS = [
+const IS_TGM = String(process.env.BUSINESS_TYPE || process.env.NEXT_PUBLIC_BUSINESS_TYPE || '').trim().toLowerCase() === 'tiles';
+
+const FURNITURE_PRODUCTS = [
   { id: 1, name: "Royal L-Shaped Sofa", category: "Sofas", price: 45000, material: "Fabric", color: "Grey", description: "Premium L-shaped sofa with foam cushioning", image: "🛋️" },
   { id: 2, name: "Milano King Bed", category: "Beds", price: 62000, material: "Sheesham Wood", color: "Walnut", description: "King size bed with hydraulic storage", image: "🛏️" },
   { id: 3, name: "Marble Dynasty Dining Set", category: "Dining", price: 38000, material: "Marble + Metal", color: "White", description: "6-seater dining table with marble top", image: "🪑" },
@@ -24,7 +26,18 @@ const PRODUCTS = [
   { id: 20, name: "CozyNest Accent Chair", category: "Chairs", price: 16000, material: "Fabric + Wood", color: "Mustard Yellow", description: "Accent chair with wooden legs", image: "💺" },
 ];
 
-const SYSTEM_PROMPT = `You are an expert interior designer and AI image-editing prompt engineer.
+const TGM_PRODUCTS = [
+  { id: 'tgm-1', name: 'Ivory Vein 600x600 GVT Tile', category: 'Vitrified Tiles', price: 1120, material: 'GVT', color: 'Ivory', description: 'Glossy floor tile, 17.22 sq.ft per box', image: '🧱', stock: 96 },
+  { id: 'tgm-2', name: 'Calacatta Digital 600x1200 Tile', category: 'Digital Tiles', price: 1680, material: 'Porcelain', color: 'White / Grey Vein', description: 'Polished marble-look tile, 15.5 sq.ft per box', image: '⬜', stock: 48 },
+  { id: 'tgm-3', name: 'Black Galaxy Granite 18mm', category: 'Granite Slabs', price: 245, material: 'Granite', color: 'Black / Gold Fleck', description: 'Actual slabs selected by lot and measured sq.ft', image: '🪨', stock: 1 },
+  { id: 'tgm-4', name: 'Makrana White Marble 18mm', category: 'Marble Slabs', price: 290, material: 'Marble', color: 'White', description: 'Natural Indian marble for floors and vanity tops', image: '🪨', stock: 1 },
+  { id: 'tgm-5', name: 'Italian Statuario Marble 20mm', category: 'Marble Slabs', price: 780, material: 'Marble', color: 'White / Dramatic Vein', description: 'Imported marble; approve actual slab before cutting', image: '🪨', stock: 1 },
+  { id: 'tgm-6', name: 'Engineered Quartz Snow White', category: 'Engineered Quartz', price: 520, material: 'Engineered Quartz', color: 'White', description: 'Low-maintenance countertop surface', image: '⬜', stock: 1 },
+];
+
+const PRODUCTS = IS_TGM ? TGM_PRODUCTS : FURNITURE_PRODUCTS;
+
+const FURNITURE_SYSTEM_PROMPT = `You are an expert interior designer and AI image-editing prompt engineer.
 You will receive a base room photo and optionally a furniture reference image (both attached directly to this message — examine each carefully).
 Your job is to produce structured JSON that will drive a SEARCH-AND-REPLACE image editing API.
 That API takes the ORIGINAL room photo, finds a specific piece of furniture in it, and replaces it with a new one IN-PLACE (preserving all walls, floors, lighting, and perspective).
@@ -42,6 +55,15 @@ CRITICAL RULES:
   - If the user provides an edit instruction, use it to identify the searchPrompt target noun exactly.
 
 `;
+
+const TGM_SYSTEM_PROMPT = `You are an expert tile, granite and marble visualizer and AI image-editing prompt engineer.
+You receive a room or countertop photo and optionally a surface-material reference. Analyze the image precisely and return ONLY valid JSON.
+The goal is material replacement in-place: floor tiles, a feature wall, backsplash, staircase treads, a countertop, vanity top or wall cladding. Preserve the room geometry, furniture, fixtures, lighting, perspective, grout scale and all non-target surfaces.
+Return this exact shape:
+{"roomType":"Living Room | Kitchen | Bathroom | Staircase | Exterior | Commercial","targetSurface":"floor | wall | countertop | backsplash | staircase | vanity","currentStyle":"style","colorPalette":["#hex1","#hex2","#hex3"],"searchPrompt":"floor | wall | countertop | backsplash | staircase","replacementPrompt":"precise stone/tile material description including color, vein, finish, tile size or slab finish; photorealistic, preserve geometry and perspective","recommendations":[{"category":"Vitrified Tiles | Wall Tiles | Granite Slabs | Marble Slabs | Engineered Quartz","suggestedStyle":"style","suggestedColor":"color","suggestedMaterial":"material","reason":"reason","priority":"High"}],"designTips":["tip1","tip2"],"overallAssessment":"assessment"}
+Rules: searchPrompt is the target surface, never furniture. For natural stone mention that final shade and vein must be approved from the actual lot/slab. Do not invent a price or claim stock availability.`;
+
+const SYSTEM_PROMPT = IS_TGM ? TGM_SYSTEM_PROMPT : FURNITURE_SYSTEM_PROMPT;
 
 function matchProducts(recommendations) {
   return recommendations.map(rec => {
@@ -138,33 +160,124 @@ const DEMO_RESPONSE = {
   overallAssessment: "This is a well-proportioned modern living room with good natural light. The neutral color palette provides an excellent canvas for adding furniture pieces that bring warmth and character. Focus on creating distinct zones — seating, entertainment, and reading."
 };
 
-function getDemoResponse(reason) {
+function getDemoResponse(reason, targetSurface = 'countertop') {
+  const demoAnalysis = IS_TGM ? {
+    roomType: 'Kitchen',
+    targetSurface,
+    currentStyle: 'Contemporary',
+    colorPalette: ['#E8E5DF', '#3D3D3D', '#A58B72'],
+    recommendations: [{ category: 'Granite Slabs', suggestedStyle: 'Polished', suggestedColor: 'Black / Gold Fleck', suggestedMaterial: 'Granite', reason: 'A polished dark granite creates a durable contrast while retaining the room geometry.', priority: 'High' }],
+    designTips: ['Confirm the actual lot and slab vein before cutting.', 'Template sink and hob cutouts after cabinets are installed.'],
+    overallAssessment: 'Use the visual as a design reference, then approve the physical lot and measured slab for the final fabrication job.',
+  } : DEMO_RESPONSE;
   return NextResponse.json({
     success: true,
     isDemo: true,
     demoReason: reason,
     analysis: {
-      ...DEMO_RESPONSE,
-      recommendations: matchProducts(DEMO_RESPONSE.recommendations),
+      ...demoAnalysis,
+      recommendations: matchProducts(demoAnalysis.recommendations),
     },
   });
 }
 
-async function callGemini(apiKey, parts, modelName) {
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
-
-  const result = await model.generateContent(parts);
-
-  const responseText = result.response.text();
-  let cleanJson = responseText.trim();
-  if (cleanJson.startsWith('```')) {
-    cleanJson = cleanJson.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-  }
-  return JSON.parse(cleanJson);
+function isConfiguredKey(value) {
+  const key = String(value || '').trim();
+  return Boolean(key) && !/^replace-with-/i.test(key) && !/^your[-_ ]/i.test(key);
 }
 
-async function generateStabilitySearchReplace(roomImageBuffer, roomMimeType, searchPrompt, replacementPrompt, returnBuffer = false, isStep2 = false) {
+function parseJsonObject(text) {
+  const cleanText = String(text || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '');
+  const start = cleanText.indexOf('{');
+  const end = cleanText.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('Vision model did not return a JSON object');
+  return JSON.parse(cleanText.slice(start, end + 1));
+}
+
+function getInlineImageParts(imageDataUrl) {
+  const match = String(imageDataUrl || '').match(/^data:([^;]+);base64,(.+)$/s);
+  if (!match) throw new Error('Invalid image data supplied to vision model');
+  return { mimeType: match[1], data: match[2] };
+}
+
+async function callGeminiVision(apiKey, prompt, imageDataUrl) {
+  const image = getInlineImageParts(imageDataUrl);
+  const models = [process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash', 'gemini-2.0-flash'];
+  let lastError = null;
+
+  for (const model of [...new Set(models)]) {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [
+          { text: prompt },
+          { inline_data: { mime_type: image.mimeType, data: image.data } },
+        ] }],
+        generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
+      }),
+    });
+
+    if (response.status === 404) continue;
+    if (!response.ok) {
+      lastError = new Error(`Gemini vision API failed: ${response.status} — ${await response.text()}`);
+      continue;
+    }
+
+    const payload = await response.json();
+    const text = payload?.candidates?.[0]?.content?.parts?.find(part => part.text)?.text;
+    return parseJsonObject(text);
+  }
+
+  throw lastError || new Error('No supported Gemini vision model was available');
+}
+
+async function callNvidiaVision(apiKey, prompt, imageDataUrl) {
+  const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: process.env.NVIDIA_VISION_MODEL || 'meta/llama-3.2-90b-vision-instruct',
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: `${prompt}\nReturn only a valid JSON object.` },
+        { type: 'image_url', image_url: { url: imageDataUrl } },
+      ] }],
+      temperature: 0.2,
+      max_tokens: 1800,
+    }),
+  });
+
+  if (!response.ok) throw new Error(`NVIDIA vision API failed: ${response.status} — ${await response.text()}`);
+  const payload = await response.json();
+  const text = payload?.choices?.[0]?.message?.content;
+  return parseJsonObject(text);
+}
+
+async function analyzeRoomWithVision(apiKey, systemPrompt, editInstruction, imageDataUrl, referenceSummary = '', targetSurface = '') {
+  const prompt = `${systemPrompt}
+Selected target surface: ${targetSurface || (IS_TGM ? 'countertop' : 'furniture')}
+User instruction: ${editInstruction || 'Recommend the best suitable design for this space.'}
+${referenceSummary ? `Reference material description: ${referenceSummary}` : ''}`;
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (isConfiguredKey(geminiKey) && apiKey === geminiKey) return callGeminiVision(apiKey, prompt, imageDataUrl);
+  return callNvidiaVision(apiKey, prompt, imageDataUrl);
+}
+
+async function summarizeFurnitureReference(apiKey, mimeType, base64, visionProvider = 'nvidia') {
+  const prompt = IS_TGM
+    ? 'Inspect this tile, granite, marble or quartz reference. Return JSON with one replacementPrompt field describing its color, vein, finish, tile size or slab thickness, and a second field description with a concise material description. Do not invent brand, price or stock.'
+    : 'Inspect this furniture reference. Return JSON with one replacementPrompt field describing the exact color, material, silhouette, upholstery and size cues, and a second field description with a concise item description.';
+  const imageDataUrl = `data:${mimeType};base64,${base64}`;
+  const result = visionProvider === 'gemini'
+    ? await callGeminiVision(apiKey, prompt, imageDataUrl)
+    : await callNvidiaVision(apiKey, prompt, imageDataUrl);
+  return result.replacementPrompt || result.description || '';
+}
+
+async function generateStabilitySearchReplace(roomImageBuffer, roomMimeType, searchPrompt, replacementPrompt, returnBuffer = false, isStep2 = false, maskBuffer = null, maskMimeType = 'image/png') {
   const apiKey = process.env.STABILITY_API_KEY;
   if (!apiKey) {
     throw new Error('STABILITY_API_KEY is not configured');
@@ -179,6 +292,12 @@ async function generateStabilitySearchReplace(roomImageBuffer, roomMimeType, sea
   const imageBlob = new Blob([roomImageBuffer], { type: roomMimeType || 'image/jpeg' });
   const extension = (roomMimeType || 'image/jpeg').split('/')[1] || 'jpeg';
   formData.append('image', imageBlob, `room.${extension}`);
+
+  // A manually supplied mask is more precise than text search for complex
+  // rooms. White pixels identify the surface to replace; black pixels remain.
+  if (maskBuffer) {
+    formData.append('mask', new Blob([maskBuffer], { type: maskMimeType }), 'surface-mask.png');
+  }
   
   // The search prompt (what to find in the image)
   formData.append('search_prompt', searchPrompt);
@@ -187,7 +306,9 @@ async function generateStabilitySearchReplace(roomImageBuffer, roomMimeType, sea
   formData.append('prompt', replacementPrompt);
 
   // Negative prompt: discourage common artifacts
-  formData.append('negative_prompt', 'duplicate objects, two sofas, multiple items, distorted proportions, floating furniture, wrong color, different color, blurry, unrealistic, cartoon, illustration, painting, sketch');
+  formData.append('negative_prompt', IS_TGM
+    ? 'duplicate surfaces, distorted grout, broken tile edges, warped slab, floating material, wrong color, different color, blurry, unrealistic, cartoon, illustration, painting, sketch'
+    : 'duplicate objects, two sofas, multiple items, distorted proportions, floating furniture, wrong color, different color, blurry, unrealistic, cartoon, illustration, painting, sketch');
 
   // grow_mask expands the bounding box so a larger replacement fits without clipping
   if (!isStep2) {
@@ -225,13 +346,19 @@ async function generateStabilitySearchReplace(roomImageBuffer, roomMimeType, sea
   return `data:image/webp;base64,${base64}`;
 }
 
-// editRoomWithGemini: sends BOTH room image and furniture image directly to Gemini.
-// Gemini sees the actual furniture (not a text description) and generates the edited room.
+// Sends the room plus an optional material reference directly to Gemini.
 async function editRoomWithGemini(geminiApiKey, roomBuffer, furnitureBuffer, furnitureMime, editInstruction) {
   const roomB64 = roomBuffer.toString('base64');
   const furnitureB64 = furnitureBuffer.toString('base64');
 
-  const instruction = editInstruction?.trim()
+  const instruction = IS_TGM
+    ? `You are an expert surface-material visualizer.
+
+Task: "${editInstruction || 'Replace the specified target surface using Image 2'}"
+
+Image 1 is the room/site to edit. Image 2 is the exact tile, granite, marble or quartz reference.
+Replace ONLY the requested surface (floor, wall, countertop, backsplash, staircase or vanity) using Image 2. Keep all furniture, fixtures, geometry, grout scale, edges, lighting, perspective and non-target surfaces unchanged. Make the finish, vein direction and tile/slab scale physically believable. Output only the edited room image, nothing else.`
+    : editInstruction?.trim()
     ? `You are an expert interior designer and image editor.
 
 Task: "${editInstruction}"
@@ -300,20 +427,19 @@ Rules:
 
 export async function POST(request) {
   try {
-    const apiKey = process.env.NVIDIA_API_KEY;
-
-    if (!apiKey) {
-      return getDemoResponse('No API key configured');
-    }
-
     const formData = await request.formData();
-    const editInstruction = formData.get('editInstruction') || '';
+    const editInstruction = String(formData.get('editInstruction') || '').trim();
+    const requestedTarget = String(formData.get('visualizationTarget') || (IS_TGM ? 'countertop' : 'furniture')).trim().toLowerCase();
+    const targetSurface = IS_TGM
+      ? ['floor', 'wall', 'countertop', 'backsplash', 'staircase', 'vanity'].includes(requestedTarget) ? requestedTarget : 'countertop'
+      : 'furniture';
 
     // Extract base room image separately (we need its raw bytes for Stability API)
     let roomImageBuffer = null;
     let roomMimeType = 'image/jpeg';
     const kimiImages = [];
     const furnitureReferences = [];
+    let surfaceMaskBuffer = null;
 
     for (const [key, val] of formData.entries()) {
       if (key === 'roomImage' && val instanceof Blob) {
@@ -328,7 +454,7 @@ export async function POST(request) {
           
         roomMimeType = 'image/jpeg';
         kimiImages.push(`data:${roomMimeType};base64,${roomImageBuffer.toString('base64')}`);
-      } else if (key.startsWith('furniture_') && val instanceof Blob) {
+      } else if ((key.startsWith('furniture_') || key.startsWith('surface_')) && val instanceof Blob) {
         const bytes = await val.arrayBuffer();
         
         // Resize furniture references well under 1024x1024 to save Kimi payload
@@ -342,6 +468,13 @@ export async function POST(request) {
         const b64 = resizedFurnitureBuffer.toString('base64');
         kimiImages.push(`data:${mime};base64,${b64}`);
         furnitureReferences.push({ mime, b64 });
+      } else if (key === 'surfaceMask' && val instanceof Blob) {
+        const bytes = await val.arrayBuffer();
+        surfaceMaskBuffer = await sharp(Buffer.from(bytes))
+          .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })
+          .grayscale()
+          .png()
+          .toBuffer();
       }
     }
 
@@ -349,8 +482,16 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'No room image uploaded' }, { status: 400 });
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const geminiApiKey = isConfiguredKey(process.env.GEMINI_API_KEY) ? process.env.GEMINI_API_KEY.trim() : '';
+    const nvidiaApiKey = isConfiguredKey(process.env.NVIDIA_API_KEY) ? process.env.NVIDIA_API_KEY.trim() : '';
+    const stabilityConfigured = isConfiguredKey(process.env.STABILITY_API_KEY);
+    const visionApiKey = geminiApiKey || nvidiaApiKey;
+    const visionProvider = geminiApiKey ? 'gemini' : 'nvidia';
     const hasFurniture = furnitureReferences.length > 0;
+
+    if (!visionApiKey && !stabilityConfigured) {
+      return getDemoResponse('No live AI keys configured', targetSurface);
+    }
 
     // ── PATH A: Furniture uploaded + Gemini key → send both images directly to Gemini ──
     // Gemini SEES the actual furniture image and edits the room. No text description needed.
@@ -375,7 +516,7 @@ export async function POST(request) {
 
       // Still run room analysis for recommendations (room image only, no furniture description needed)
       try {
-        analysis = await analyzeRoomWithVision(apiKey, SYSTEM_PROMPT, editInstruction, kimiImages[0]);
+        analysis = await analyzeRoomWithVision(geminiApiKey, SYSTEM_PROMPT, editInstruction, kimiImages[0], '', targetSurface);
       } catch (e) {
         console.warn('[Vision Analysis] skipped:', e.message);
       }
@@ -385,65 +526,74 @@ export async function POST(request) {
       console.log('[Pipeline] Using Stability AI search-and-replace...');
 
       let furnitureReferenceSummary = '';
-      if (hasFurniture) {
+      if (hasFurniture && visionApiKey) {
         try {
-          furnitureReferenceSummary = await summarizeFurnitureReference(apiKey, furnitureReferences[0].mime, furnitureReferences[0].b64);
-          console.log('[Furniture Vision Summary]:', furnitureReferenceSummary);
+          furnitureReferenceSummary = await summarizeFurnitureReference(visionApiKey, furnitureReferences[0].mime, furnitureReferences[0].b64, visionProvider);
+          console.log('[Reference Vision Summary]:', furnitureReferenceSummary);
         } catch (e) {
-          console.warn('[Furniture Vision Summary] failed:', e.message);
+          console.warn('[Reference Vision Summary] failed:', e.message);
         }
       }
 
-      try {
-        analysis = await analyzeRoomWithVision(apiKey, SYSTEM_PROMPT, editInstruction, kimiImages[0], furnitureReferenceSummary);
-        console.log('[Vision Analysis] Result:', JSON.stringify(analysis, null, 2));
-      } catch (modelError) {
-        console.warn('[Vision Analysis] failed:', modelError.message);
-        kimiErrorDetails = modelError.message;
+      if (visionApiKey) {
+        try {
+          analysis = await analyzeRoomWithVision(visionApiKey, SYSTEM_PROMPT, editInstruction, kimiImages[0], furnitureReferenceSummary, targetSurface);
+          console.log('[Vision Analysis] Result:', JSON.stringify(analysis, null, 2));
+        } catch (modelError) {
+          console.warn('[Vision Analysis] failed:', modelError.message);
+          kimiErrorDetails = modelError.message;
+        }
       }
 
       if (!analysis) {
-        let fallbackSearchPrompt = 'furniture';
+        let fallbackSearchPrompt = IS_TGM ? 'floor' : 'furniture';
         const replaceMatch = editInstruction.match(/replace\s+(.+?)\s+with/i);
         if (replaceMatch) fallbackSearchPrompt = replaceMatch[1].trim();
         analysis = {
           searchPrompt: fallbackSearchPrompt,
-          replacementPrompt: furnitureReferenceSummary || editInstruction || 'modern stylish furniture',
-          recommendations: [{ category: 'Sofas', suggestedStyle: 'Contemporary', suggestedColor: 'Blue', suggestedMaterial: 'Fabric', reason: 'Fallback', priority: 'High' }],
-          roomType: 'Living Room', currentStyle: 'Modern Minimalist',
+          replacementPrompt: furnitureReferenceSummary || editInstruction || (IS_TGM ? 'premium natural stone surface' : 'modern stylish furniture'),
+          recommendations: [IS_TGM ? { category: 'Granite Slabs', suggestedStyle: 'Polished', suggestedColor: 'Natural', suggestedMaterial: 'Granite', reason: 'Fallback surface recommendation', priority: 'High' } : { category: 'Sofas', suggestedStyle: 'Contemporary', suggestedColor: 'Blue', suggestedMaterial: 'Fabric', reason: 'Fallback', priority: 'High' }],
+          roomType: IS_TGM ? 'Kitchen' : 'Living Room', currentStyle: 'Modern Minimalist',
           isKimiFallback: true, kimiFailureReason: kimiErrorDetails
         };
       }
 
-      const searchPrompt = analysis.searchPrompt || 'furniture';
-      const furnitureDesc = furnitureReferenceSummary || analysis.replacementPrompt || 'modern stylish furniture';
-      const replacementPrompt = `${furnitureDesc}, photorealistic, natural room lighting, seamless integration, interior design photography, single object`;
+      const searchPrompt = analysis.searchPrompt || (IS_TGM ? 'floor' : 'furniture');
+      const furnitureDesc = furnitureReferenceSummary || analysis.replacementPrompt || (IS_TGM ? 'premium natural stone surface' : 'modern stylish furniture');
+      const replacementPrompt = IS_TGM
+        ? `${furnitureDesc}, replace only the target surface, preserve all geometry, seams, fixtures, perspective and lighting, photorealistic architectural photography`
+        : `${furnitureDesc}, photorealistic, natural room lighting, seamless integration, interior design photography, single object`;
       console.log('[Stability] searchPrompt:', searchPrompt);
       console.log('[Stability] replacementPrompt:', replacementPrompt);
 
-      try {
-        stagedImageUrl = await generateStabilitySearchReplace(roomImageBuffer, roomMimeType, searchPrompt, replacementPrompt, false, false);
-      } catch (stabilityErr) {
-        console.error('Stability API failed:', stabilityErr);
-        return NextResponse.json({ success: false, error: stabilityErr.message || 'Stability API failed' }, { status: 500 });
+      if (stabilityConfigured) {
+        try {
+          stagedImageUrl = await generateStabilitySearchReplace(roomImageBuffer, roomMimeType, searchPrompt, replacementPrompt, false, false, surfaceMaskBuffer);
+        } catch (stabilityErr) {
+          console.error('Stability API failed:', stabilityErr);
+          return NextResponse.json({ success: false, error: stabilityErr.message || 'Stability API failed' }, { status: 500 });
+        }
       }
     }
 
     // Ensure analysis is never null before returning
     if (!analysis) {
       analysis = {
-        roomType: 'Living Room', currentStyle: 'Modern',
-        recommendations: [{ category: 'Sofas', suggestedStyle: 'Contemporary', suggestedColor: 'Blue', suggestedMaterial: 'Fabric', reason: 'AI staged room', priority: 'High' }]
+        roomType: IS_TGM ? 'Kitchen' : 'Living Room', currentStyle: 'Modern',
+        recommendations: [IS_TGM ? { category: 'Granite Slabs', suggestedStyle: 'Polished', suggestedColor: 'Natural', suggestedMaterial: 'Granite', reason: 'AI staged surface', priority: 'High' } : { category: 'Sofas', suggestedStyle: 'Contemporary', suggestedColor: 'Blue', suggestedMaterial: 'Fabric', reason: 'AI staged room', priority: 'High' }]
       };
     }
     if (!Array.isArray(analysis.recommendations) || analysis.recommendations.length === 0) {
-      analysis.recommendations = [{ category: 'Sofas', suggestedStyle: 'Contemporary', suggestedColor: 'Blue', suggestedMaterial: 'Fabric', reason: 'Default', priority: 'High' }];
+      analysis.recommendations = [IS_TGM ? { category: 'Granite Slabs', suggestedStyle: 'Polished', suggestedColor: 'Natural', suggestedMaterial: 'Granite', reason: 'Default surface recommendation', priority: 'High' } : { category: 'Sofas', suggestedStyle: 'Contemporary', suggestedColor: 'Blue', suggestedMaterial: 'Fabric', reason: 'Default', priority: 'High' }];
     }
+    analysis.targetSurface = IS_TGM ? (analysis.targetSurface || targetSurface) : analysis.targetSurface;
     analysis.recommendations = matchProducts(analysis.recommendations);
 
     return NextResponse.json({
       success: true,
       isDemo: false,
+      renderingAvailable: Boolean(stagedImageUrl),
+      renderingProvider: stagedImageUrl ? (hasFurniture && geminiApiKey ? 'gemini' : 'stability') : null,
       stagedImage: stagedImageUrl,
       analysis
     });
@@ -462,4 +612,3 @@ export async function POST(request) {
     );
   }
 }
-

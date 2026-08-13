@@ -4,9 +4,178 @@ import { prisma } from '@/lib/db'
 import { requireRole } from '@/lib/auth-helpers'
 import { revalidatePath } from 'next/cache'
 import { createInvoiceSchema, updateInvoiceSchema, recordPaymentSchema, createCreditNoteSchema } from '@/lib/validations/invoice'
+import { getBillableArea } from '@/lib/units'
+import { syncStoneLotTotals } from '@/lib/stone-inventory'
 import type { PaymentStatus, InvoiceStatus } from '@prisma/client'
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+type InvoiceLineInput = {
+  quantity: number
+  price: number
+  unitOfMeasure?: string
+  areaSqft?: number
+  coveragePerBox?: number
+}
+
+type InventoryInvoiceLine = InvoiceLineInput & {
+  productId: number
+  slabId?: number
+  batchId?: number
+}
+
+function calculateInvoiceLineAmount(item: InvoiceLineInput) {
+  const quantity = Math.max(1, Number(item.quantity) || 1)
+  const price = Math.max(0, Number(item.price) || 0)
+  const unit = String(item.unitOfMeasure || 'PCS').toUpperCase()
+  const areaSqft = Math.max(0, Number(item.areaSqft) || 0)
+  const coveragePerBox = Math.max(0, Number(item.coveragePerBox) || 0)
+  if (unit === 'SQFT' || unit === 'SQM' || unit === 'SLAB') return getBillableArea(areaSqft, quantity, unit) * price
+  if (unit === 'BOX' && coveragePerBox > 0 && areaSqft > 0) return Math.ceil(areaSqft / coveragePerBox) * price
+  return quantity * price
+}
+
+async function resolveInvoiceGodownId(requestedId?: number) {
+  if (requestedId) {
+    const godown = await prisma.godown.findUnique({ where: { id: requestedId }, select: { id: true } })
+    if (!godown) throw new Error('Selected godown was not found')
+    return godown.id
+  }
+
+  let godown = await prisma.godown.findFirst({ where: { isDefault: true }, select: { id: true } })
+  if (!godown) godown = await prisma.godown.findFirst({ orderBy: { id: 'asc' }, select: { id: true } })
+  if (!godown) {
+    godown = await prisma.godown.create({ data: { name: 'Main Showroom', type: 'Showroom', isDefault: true }, select: { id: true } })
+  }
+  return godown.id
+}
+
+async function syncProductStockInTransaction(tx: any, productId: number) {
+  const total = await tx.godownStock.aggregate({ where: { productId }, _sum: { quantity: true } })
+  await tx.product.update({ where: { id: productId }, data: { stock: total._sum.quantity || 0 } })
+}
+
+async function consumeInvoiceInventory(tx: any, invoiceId: number, items: InventoryInvoiceLine[], godownId: number) {
+  const standardQty = new Map<number, number>()
+  for (const item of items) {
+    if (item.slabId) continue
+    standardQty.set(item.productId, (standardQty.get(item.productId) || 0) + Math.max(1, Number(item.quantity) || 1))
+  }
+
+  for (const [productId, quantity] of standardQty) {
+    const product = await tx.product.findUnique({ where: { id: productId }, select: { id: true, stock: true, isSlabTracked: true } })
+    if (!product) throw new Error('One of the invoice products no longer exists')
+    if (product.isSlabTracked) throw new Error('Slab-tracked stone must be invoiced with a selected physical slab')
+
+    let stock = await tx.godownStock.findUnique({ where: { productId_godownId: { productId, godownId } } })
+    if (!stock) {
+      const existingGodownRows = await tx.godownStock.count({ where: { productId } })
+      if (existingGodownRows === 0 && product.stock > 0) {
+        stock = await tx.godownStock.create({ data: { productId, godownId, quantity: product.stock } })
+        await tx.stockLedger.create({
+          data: {
+            productId,
+            godownId,
+            entryType: 'OPENING_BALANCE',
+            quantity: product.stock,
+            balanceAfter: product.stock,
+            referenceType: 'Invoice',
+            referenceId: invoiceId,
+            notes: 'Legacy product stock migrated to the selected godown before sale',
+          },
+        })
+      }
+    }
+
+    const currentQty = stock?.quantity || 0
+    if (currentQty < quantity) {
+      throw new Error(`Insufficient stock for product ${productId} in the selected godown`)
+    }
+    const nextQty = currentQty - quantity
+    await tx.godownStock.upsert({
+      where: { productId_godownId: { productId, godownId } },
+      create: { productId, godownId, quantity: nextQty },
+      update: { quantity: nextQty },
+    })
+    await tx.stockLedger.create({
+      data: {
+        productId,
+        godownId,
+        entryType: 'SALE',
+        quantity: -quantity,
+        balanceAfter: nextQty,
+        referenceType: 'Invoice',
+        referenceId: invoiceId,
+      },
+    })
+    await tx.product.update({ where: { id: productId }, data: { sold: { increment: quantity } } })
+    await syncProductStockInTransaction(tx, productId)
+  }
+
+  for (const item of items) {
+    if (!item.batchId || item.slabId) continue
+    const batch = await tx.productBatch.findUnique({ where: { id: item.batchId } })
+    const quantity = Math.max(1, Number(item.quantity) || 1)
+    if (!batch || batch.productId !== item.productId) throw new Error('Selected batch does not belong to the invoice product')
+    if (batch.remainingQty < quantity) throw new Error(`Insufficient quantity in batch ${batch.batchNumber}`)
+    await tx.productBatch.update({ where: { id: batch.id }, data: { remainingQty: { decrement: quantity } } })
+  }
+}
+
+async function restoreInvoiceInventory(tx: any, invoice: any) {
+  if (invoice.heldAt) return
+  const godownId = invoice.godownId || await resolveInvoiceGodownId()
+  const standardQty = new Map<number, number>()
+  for (const item of invoice.items) {
+    if (!item.slabId) standardQty.set(item.productId, (standardQty.get(item.productId) || 0) + Math.max(1, Number(item.quantity) || 1))
+    if (item.batchId) await tx.productBatch.update({ where: { id: item.batchId }, data: { remainingQty: { increment: Math.max(1, Number(item.quantity) || 1) } } })
+  }
+  for (const [productId, quantity] of standardQty) {
+    const existing = await tx.godownStock.findUnique({ where: { productId_godownId: { productId, godownId } } })
+    const nextQty = (existing?.quantity || 0) + quantity
+    await tx.godownStock.upsert({
+      where: { productId_godownId: { productId, godownId } },
+      create: { productId, godownId, quantity: nextQty },
+      update: { quantity: nextQty },
+    })
+    await tx.stockLedger.create({
+      data: { productId, godownId, entryType: 'RETURN', quantity, balanceAfter: nextQty, referenceType: 'Invoice', referenceId: invoice.id, notes: 'Inventory restored after invoice cancellation/refund' },
+    })
+    await tx.product.update({ where: { id: productId }, data: { sold: { decrement: quantity } } })
+    await syncProductStockInTransaction(tx, productId)
+  }
+  const slabIds = invoice.items.filter((item: any) => item.slabId).map((item: any) => item.slabId)
+  const slabRows = slabIds.length > 0
+    ? await tx.slab.findMany({ where: { id: { in: slabIds } }, select: { id: true, lotId: true } })
+    : []
+  for (const item of invoice.items) {
+    if (!item.slabId) continue
+    await tx.slab.updateMany({
+      where: { id: item.slabId, status: 'SOLD' },
+      data: { status: 'AVAILABLE', soldPrice: null, soldAt: null },
+    })
+  }
+  if (slabIds.length > 0) {
+    const convertedLoans = await tx.sampleLoan.findMany({
+      where: { slabId: { in: slabIds }, status: 'CONVERTED_TO_SALE' },
+      select: { id: true, slabId: true },
+    })
+    if (convertedLoans.length > 0) {
+      await tx.sampleLoan.updateMany({
+        where: { id: { in: convertedLoans.map((loan: any) => loan.id) } },
+        data: { status: 'OUT', returnedDate: null },
+      })
+      for (const loan of convertedLoans) {
+        if (loan.slabId) {
+          await tx.slab.updateMany({ where: { id: loan.slabId, status: 'AVAILABLE' }, data: { status: 'RESERVED' } })
+        }
+      }
+    }
+  }
+  for (const lotId of new Set<number>(slabRows.map((slab: any) => Number(slab.lotId)))) {
+    await syncStoneLotTotals(tx, lotId)
+  }
+}
 
 // ─── GET ALL INVOICES ──────────────────────────────────
 
@@ -38,6 +207,11 @@ export async function getInvoices() {
         qty: i.quantity,
         price: i.price,
         hsnCode: i.hsnCode,
+        unitOfMeasure: i.unitOfMeasure,
+        areaSqft: i.areaSqft,
+        coveragePerBox: i.coveragePerBox,
+        slabId: i.slabId,
+        batchId: i.batchId,
       })),
       subtotal: inv.subtotal,
       discount: inv.discount,
@@ -49,6 +223,11 @@ export async function getInvoices() {
       supplyType: inv.supplyType,
       placeOfSupply: inv.placeOfSupply,
       transportCost: inv.transportCost,
+      freightCharge: inv.freightCharge,
+      loadingCharge: inv.loadingCharge,
+      installationCharge: inv.installationCharge,
+      roadPermit: inv.roadPermit,
+      godownId: inv.godownId,
       total: inv.total,
       amountPaid: inv.amountPaid,
       balanceDue: inv.balanceDue,
@@ -118,6 +297,11 @@ export async function createInvoice(data: unknown) {
     dueDate,
     isHeld,
     transportCost,
+    freightCharge,
+    loadingCharge,
+    installationCharge,
+    roadPermit,
+    godownId,
     supplyType,
     placeOfSupply,
   } = parsed.data
@@ -158,23 +342,77 @@ export async function createInvoice(data: unknown) {
   const invoicePrefix = (settings?.invoicePrefix || 'INV-').trim() || 'INV-'
   const invoicePadding = settings?.invoicePadding ?? 4
 
-  // Calculate totals with per-item GST
-  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  const slabIds = items.flatMap(item => item.slabId ? [item.slabId] : [])
+  const invoiceGodownId = await resolveInvoiceGodownId(godownId)
+  const productIds = Array.from(new Set(items.map(item => item.productId)))
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, isSlabTracked: true },
+  })
+  const productsById = new Map(products.map(product => [product.id, product]))
+  if (products.length !== productIds.length) return { success: false, error: 'One or more invoice products no longer exist' }
+  for (const item of items) {
+    const product = productsById.get(item.productId)
+    if (product?.isSlabTracked && !item.slabId) return { success: false, error: 'Select a physical slab for every slab-tracked stone line' }
+    if (isHeld && item.slabId) return { success: false, error: 'Physical slab lines cannot be parked. Finalize a slab sale at checkout.' }
+  }
+  if (new Set(slabIds).size !== slabIds.length) return { success: false, error: 'A slab can only appear once on an invoice' }
+  const slabs = slabIds.length > 0
+    ? await prisma.slab.findMany({ where: { id: { in: slabIds } }, include: { lot: { select: { productId: true } } } })
+    : []
+  if (slabs.length !== slabIds.length) return { success: false, error: 'One or more selected slabs no longer exist' }
+  const slabsById = new Map(slabs.map(slab => [slab.id, slab]))
+  for (const item of items) {
+    if (!item.slabId) continue
+    const slab = slabsById.get(item.slabId)
+    if (!slab || slab.lot.productId !== item.productId) return { success: false, error: 'Selected slab does not belong to its invoice product' }
+    if (!['AVAILABLE', 'RESERVED'].includes(slab.status)) return { success: false, error: `Slab ${slab.slabNumber} is not available for sale` }
+    if (slab.status === 'RESERVED' && slab.reservedForCustomId) return { success: false, error: `Slab ${slab.slabNumber} is reserved for a fabrication job and cannot be sold from POS` }
+  }
+  const activeSampleLoans = slabIds.length > 0
+    ? await prisma.sampleLoan.findMany({
+      where: { slabId: { in: slabIds }, status: 'OUT' },
+      select: { id: true, slabId: true, contactId: true },
+    })
+    : []
+  if (activeSampleLoans.some(loan => loan.contactId !== contact.id)) {
+    return { success: false, error: 'A selected slab is issued as a sample to another customer' }
+  }
+  const activeSampleBySlab = new Map(activeSampleLoans.map(loan => [loan.slabId, loan]))
+  for (const slab of slabs) {
+    if (slab.status === 'RESERVED' && !activeSampleBySlab.has(slab.id)) {
+      return { success: false, error: `Slab ${slab.slabNumber} is reserved and cannot be sold from POS` }
+    }
+  }
+
+  const resolvedItems = items.map(item => {
+    const unitOfMeasure = item.unitOfMeasure || (item.slabId ? 'SLAB' : 'PCS')
+    const areaSqft = item.areaSqft ?? (item.slabId ? slabsById.get(item.slabId)?.sqft : undefined)
+    return {
+      ...item,
+      unitOfMeasure,
+      areaSqft,
+      lineAmount: calculateInvoiceLineAmount({ ...item, unitOfMeasure, areaSqft }),
+    }
+  })
+
+  // Calculate totals with per-item GST and measured-unit line amounts.
+  const subtotal = resolvedItems.reduce((sum, item) => sum + item.lineAmount, 0)
   let discountAmount = 0
   if (discountType === 'flat') discountAmount = Math.min(discount, subtotal)
   else if (discountType === 'percent') discountAmount = Math.round(subtotal * discount / 100)
 
   let remainingDiscount = discountAmount
-  const discountSplits = items.map((item, index) => {
+  const discountSplits = resolvedItems.map((item, index) => {
     if (discountAmount <= 0 || subtotal <= 0) return 0
     if (index === items.length - 1) return remainingDiscount
-    const share = Math.round((item.price * item.quantity / subtotal) * discountAmount)
+    const share = Math.round((item.lineAmount / subtotal) * discountAmount)
     remainingDiscount -= share
     return share
   })
   const resolvedSupplyType = supplyType === 'INTERSTATE' ? 'INTERSTATE' : 'INTRASTATE'
-  const itemRows = items.map((item, index) => {
-    const lineTotal = item.price * item.quantity
+  const itemRows = resolvedItems.map((item, index) => {
+    const lineTotal = item.lineAmount
     const discountShare = discountSplits[index] || 0
     const taxableAmount = Math.max(0, lineTotal - discountShare)
     const rate = typeof item.gstRate === 'number' ? item.gstRate : gstRate
@@ -199,7 +437,8 @@ export async function createInvoice(data: unknown) {
   const igst = itemRows.reduce((sum, item) => sum + item.igst, 0)
   const cgst = itemRows.reduce((sum, item) => sum + item.cgst, 0)
   const sgst = itemRows.reduce((sum, item) => sum + item.sgst, 0)
-  const total = totalTaxable + totalGst + (transportCost || 0)
+  const logisticsTotal = (transportCost || 0) + (freightCharge || 0) + (loadingCharge || 0) + (installationCharge || 0)
+  const total = totalTaxable + totalGst + logisticsTotal
 
   // Calculate total payment
   const totalPayment = payments.reduce((sum, p) => sum + p.amount, 0)
@@ -226,8 +465,11 @@ export async function createInvoice(data: unknown) {
 
   const now = new Date()
 
-  const invoice = await prisma.invoice.create({
-    data: {
+  let invoice
+  try {
+    invoice = await prisma.$transaction(async tx => {
+      const createdInvoice = await tx.invoice.create({
+        data: {
       displayId,
       contactId: contact.id,
       subtotal,
@@ -238,6 +480,11 @@ export async function createInvoice(data: unknown) {
       sgst,
       igst,
       transportCost: transportCost || 0,
+      freightCharge: freightCharge || 0,
+      loadingCharge: loadingCharge || 0,
+      installationCharge: installationCharge || 0,
+      roadPermit: roadPermit?.trim() || null,
+      godownId: invoiceGodownId,
       total,
       amountPaid,
       balanceDue,
@@ -258,7 +505,12 @@ export async function createInvoice(data: unknown) {
           name: item.name,
           sku: item.sku,
           quantity: item.quantity,
+          unitOfMeasure: item.unitOfMeasure,
+          areaSqft: item.areaSqft,
+          coveragePerBox: item.coveragePerBox,
           price: item.price,
+          slabId: item.slabId,
+          batchId: item.batchId,
           hsnCode: item.hsnCode,
           gstRate: item.gstRate,
           cgst: item.cgst,
@@ -277,9 +529,42 @@ export async function createInvoice(data: unknown) {
           date: now,
         })),
       },
-    },
-    include: { items: true, payments: true },
-  })
+        },
+      })
+
+      if (!isHeld) {
+        const soldLotIds = new Set<number>()
+        for (const slabId of slabIds) {
+          const invoiceItem = itemRows.find(item => item.slabId === slabId)
+          const claimed = await tx.slab.updateMany({
+            where: {
+              id: slabId,
+              OR: [
+                { status: 'AVAILABLE' },
+                { status: 'RESERVED', reservedForCustomId: null, sampleLoans: { some: { status: 'OUT', contactId: contact.id } } },
+              ],
+            },
+            data: { status: 'SOLD', soldPrice: invoiceItem ? Math.round(invoiceItem.lineAmount) : null, soldAt: now },
+          })
+          if (claimed.count !== 1) throw new Error('A selected slab has just become unavailable. Refresh the slab list and try again.')
+          const soldSlab = slabsById.get(slabId)
+          if (soldSlab) soldLotIds.add(soldSlab.lotId)
+        }
+        if (slabIds.length > 0) {
+          await tx.sampleLoan.updateMany({
+            where: { slabId: { in: slabIds }, contactId: contact.id, status: 'OUT' },
+            data: { status: 'CONVERTED_TO_SALE', returnedDate: now },
+          })
+        }
+        for (const lotId of soldLotIds) await syncStoneLotTotals(tx, lotId)
+        await consumeInvoiceInventory(tx, createdInvoice.id, itemRows as InventoryInvoiceLine[], invoiceGodownId)
+      }
+
+      return tx.invoice.findUnique({ where: { id: createdInvoice.id }, include: { items: true, payments: true } })
+    })
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Could not create invoice' }
+  }
 
   revalidatePath('/billing')
   return { success: true, data: invoice }
@@ -310,16 +595,33 @@ export async function updateInvoice(invoiceId: number, data: unknown) {
     notes,
     dueDate,
     transportCost,
+    freightCharge,
+    loadingCharge,
+    installationCharge,
+    roadPermit,
     supplyType,
     placeOfSupply,
   } = parsed.data
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { payments: true },
+    include: { payments: true, items: { select: { slabId: true, batchId: true, slab: { select: { sqft: true } } } } },
   })
   if (!invoice) return { success: false, error: 'Invoice not found' }
   if (invoice.invoiceStatus !== 'ACTIVE') return { success: false, error: 'Only active invoices can be edited' }
+
+  // Replacing serialized slabs after sale would orphan the physical inventory trail.
+  // Use a credit note and a fresh invoice for a slab substitution instead.
+  const existingSlabIds = invoice.items.flatMap(item => item.slabId ? [item.slabId] : []).sort((a, b) => a - b)
+  const requestedSlabIds = items.flatMap(item => item.slabId ? [item.slabId] : []).sort((a, b) => a - b)
+  if (existingSlabIds.length !== requestedSlabIds.length || existingSlabIds.some((id, index) => id !== requestedSlabIds[index])) {
+    return { success: false, error: 'Serialized slab lines cannot be changed after invoicing. Issue a credit note and create a new invoice instead.' }
+  }
+  const existingBatchIds = invoice.items.flatMap(item => item.batchId ? [item.batchId] : []).sort((a, b) => a - b)
+  const requestedBatchIds = items.flatMap(item => item.batchId ? [item.batchId] : []).sort((a, b) => a - b)
+  if (existingBatchIds.length !== requestedBatchIds.length || existingBatchIds.some((id, index) => id !== requestedBatchIds[index])) {
+    return { success: false, error: 'Batch allocations cannot be changed after invoicing. Issue a credit note and create a new invoice instead.' }
+  }
 
   const gstNumberValue = typeof gstNumber === 'string'
     ? gstNumber.trim().toUpperCase()
@@ -353,23 +655,29 @@ export async function updateInvoice(invoiceId: number, data: unknown) {
   const settings = await prisma.storeSettings.findFirst({ where: { id: 1 } })
   const gstRate = settings?.gstRate ?? 18
 
-  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  const resolvedItems = items.map(item => {
+    const unitOfMeasure = item.unitOfMeasure || (item.slabId ? 'SLAB' : 'PCS')
+    const storedSlab = item.slabId ? invoice.items.find(existingItem => existingItem.slabId === item.slabId)?.slab : null
+    const areaSqft = item.areaSqft ?? storedSlab?.sqft
+    return { ...item, unitOfMeasure, areaSqft, lineAmount: calculateInvoiceLineAmount({ ...item, unitOfMeasure, areaSqft }) }
+  })
+  const subtotal = resolvedItems.reduce((sum, item) => sum + item.lineAmount, 0)
   let discountAmount = 0
   if (discountType === 'flat') discountAmount = Math.min(discount, subtotal)
   else if (discountType === 'percent') discountAmount = Math.round(subtotal * discount / 100)
 
   let remainingDiscount = discountAmount
-  const discountSplits = items.map((item, index) => {
+  const discountSplits = resolvedItems.map((item, index) => {
     if (discountAmount <= 0 || subtotal <= 0) return 0
     if (index === items.length - 1) return remainingDiscount
-    const share = Math.round((item.price * item.quantity / subtotal) * discountAmount)
+    const share = Math.round((item.lineAmount / subtotal) * discountAmount)
     remainingDiscount -= share
     return share
   })
 
   const resolvedSupplyType = supplyType === 'INTERSTATE' ? 'INTERSTATE' : 'INTRASTATE'
-  const itemRows = items.map((item, index) => {
-    const lineTotal = item.price * item.quantity
+  const itemRows = resolvedItems.map((item, index) => {
+    const lineTotal = item.lineAmount
     const discountShare = discountSplits[index] || 0
     const taxableAmount = Math.max(0, lineTotal - discountShare)
     const rate = typeof item.gstRate === 'number' ? item.gstRate : gstRate
@@ -394,7 +702,7 @@ export async function updateInvoice(invoiceId: number, data: unknown) {
   const igst = itemRows.reduce((sum, item) => sum + item.igst, 0)
   const cgst = itemRows.reduce((sum, item) => sum + item.cgst, 0)
   const sgst = itemRows.reduce((sum, item) => sum + item.sgst, 0)
-  const total = totalTaxable + totalGst + (transportCost || 0)
+  const total = totalTaxable + totalGst + (transportCost || 0) + (freightCharge || 0) + (loadingCharge || 0) + (installationCharge || 0)
 
   const paidSoFar = invoice.payments.reduce((sum, p) => sum + p.amount, 0)
   const amountPaid = Math.min(paidSoFar, total)
@@ -420,6 +728,10 @@ export async function updateInvoice(invoiceId: number, data: unknown) {
       sgst,
       igst,
       transportCost: transportCost || 0,
+      freightCharge: freightCharge || 0,
+      loadingCharge: loadingCharge || 0,
+      installationCharge: installationCharge || 0,
+      roadPermit: roadPermit?.trim() || null,
       total,
       amountPaid,
       balanceDue,
@@ -437,7 +749,12 @@ export async function updateInvoice(invoiceId: number, data: unknown) {
           name: item.name,
           sku: item.sku,
           quantity: item.quantity,
+          unitOfMeasure: item.unitOfMeasure,
+          areaSqft: item.areaSqft,
+          coveragePerBox: item.coveragePerBox,
           price: item.price,
+          slabId: item.slabId,
+          batchId: item.batchId,
           hsnCode: item.hsnCode,
           gstRate: item.gstRate,
           cgst: item.cgst,
@@ -504,13 +821,13 @@ export async function recordPayment(data: unknown) {
 // ─── CANCEL INVOICE ────────────────────────────────────
 
 export async function cancelInvoice(invoiceId: number) {
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } })
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: { items: true } })
   if (!invoice) return { success: false, error: 'Invoice not found' }
   if (invoice.invoiceStatus !== 'ACTIVE') return { success: false, error: 'Invoice is already cancelled or refunded' }
 
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { invoiceStatus: 'CANCELLED' },
+  await prisma.$transaction(async tx => {
+    await restoreInvoiceInventory(tx, invoice)
+    await tx.invoice.update({ where: { id: invoiceId }, data: { invoiceStatus: 'CANCELLED' } })
   })
 
   revalidatePath('/billing')
@@ -525,9 +842,13 @@ export async function createCreditNote(data: unknown) {
 
   const { invoiceId, amount, reason } = parsed.data
 
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } })
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: { items: true } })
   if (!invoice) return { success: false, error: 'Invoice not found' }
   if (invoice.invoiceStatus !== 'ACTIVE') return { success: false, error: 'Cannot create credit note for cancelled invoice' }
+  const creditedSoFar = (await prisma.creditNote.aggregate({ where: { invoiceId }, _sum: { amount: true } }))._sum.amount || 0
+  if (amount > invoice.total - creditedSoFar) {
+    return { success: false, error: 'Credit note cannot exceed the remaining invoice value' }
+  }
 
   // Generate credit note display ID
   const lastCN = await prisma.creditNote.findFirst({
@@ -541,19 +862,15 @@ export async function createCreditNote(data: unknown) {
   }
   const displayId = `CN-${String(nextNum).padStart(4, '0')}`
 
-  await prisma.creditNote.create({
-    data: { displayId, invoiceId, amount, reason },
+  await prisma.$transaction(async tx => {
+    await tx.creditNote.create({ data: { displayId, invoiceId, amount, reason } })
+    const allCredits = await tx.creditNote.findMany({ where: { invoiceId }, select: { amount: true } })
+    const totalCredited = allCredits.reduce((sum, cn) => sum + cn.amount, 0)
+    if (totalCredited >= invoice.total) {
+      await restoreInvoiceInventory(tx, invoice)
+      await tx.invoice.update({ where: { id: invoiceId }, data: { invoiceStatus: 'REFUNDED' } })
+    }
   })
-
-  // If credit note covers the full invoice, mark as refunded
-  const allCredits = await prisma.creditNote.findMany({ where: { invoiceId } })
-  const totalCredited = allCredits.reduce((sum, cn) => sum + cn.amount, 0)
-  if (totalCredited >= invoice.total) {
-    await prisma.invoice.update({
-      where: { id: invoiceId },
-      data: { invoiceStatus: 'REFUNDED' },
-    })
-  }
 
   revalidatePath('/billing')
   return { success: true }
@@ -562,14 +879,20 @@ export async function createCreditNote(data: unknown) {
 // ─── FINALIZE HELD BILL ────────────────────────────────
 
 export async function finalizeHeldInvoice(invoiceId: number) {
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } })
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: { items: true } })
   if (!invoice) return { success: false, error: 'Invoice not found' }
   if (!invoice.heldAt) return { success: false, error: 'Invoice is not held' }
 
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { heldAt: null },
-  })
+  try {
+    const godownId = invoice.godownId || await resolveInvoiceGodownId()
+    await prisma.$transaction(async tx => {
+      const released = await tx.invoice.updateMany({ where: { id: invoiceId, heldAt: { not: null } }, data: { heldAt: null } })
+      if (released.count !== 1) throw new Error('This held invoice was already finalized')
+      await consumeInvoiceInventory(tx, invoiceId, invoice.items as InventoryInvoiceLine[], godownId)
+    })
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Could not finalize held invoice' }
+  }
 
   revalidatePath('/billing')
   return { success: true }

@@ -18,7 +18,15 @@ async function seedFurniture() {
   console.log('  → Store settings')
   await prisma.storeSettings.upsert({
     where: { id: 1 },
-    update: {},
+    update: {
+      storeName: 'Tiles, Granite & Marble Showroom',
+      phone: '+91 98765 11223',
+      email: 'info@homzentic.com',
+      address: 'Ring Road, Industrial Area, Ahmedabad - 380015',
+      gstNumber: '24ABCDE5678G1Z9',
+      gstRate: 18.0,
+      currency: 'INR',
+    },
     create: {
       id: 1,
       storeName: 'Furniture Store',
@@ -475,9 +483,9 @@ async function seedFurniture() {
   console.log('   Staff login: [staff email] / staff123')
 }
 
-// ─── TILES & SANITARY SEED (tiles vertical) ───────────
+// ─── TILES, GRANITE & MARBLE SEED (tiles vertical) ────
 // Runs when BUSINESS_TYPE=tiles. Keeps the furniture data out of the
-// tiles database by seeding tiles/sanitary-specific defaults instead.
+// combined TGM database by seeding tile, stone and fabrication-ready data.
 async function seedTiles() {
   console.log('🌱 Seeding database...\n')
 
@@ -488,9 +496,9 @@ async function seedTiles() {
     update: {},
     create: {
       id: 1,
-      storeName: 'Tiles & Sanitary Showroom',
+      storeName: 'Tiles, Granite & Marble Showroom',
       phone: '+91 98765 11223',
-      email: 'info@tilescrm.com',
+      email: 'info@homzentic.com',
       address: 'Ring Road, Industrial Area, Ahmedabad - 380015',
       gstNumber: '24ABCDE5678G1Z9',
       gstRate: 18.0,
@@ -501,8 +509,11 @@ async function seedTiles() {
   // ─── CATEGORIES & WAREHOUSES ────────────────────────
   console.log('  → Categories & warehouses')
   const categoryNames = [
-    'Floor Tiles', 'Wall Tiles', 'Vitrified Tiles', 'Bathroom Fittings',
-    'Sanitaryware', 'Faucets', 'Adhesives & Grouts', 'Kitchen Sinks',
+    'Vitrified Tiles (GVT/PGVT)', 'Ceramic Tiles', 'Wall Tiles', 'Digital Tiles',
+    'Outdoor / Anti-Skid Tiles', 'Wood-Finish Tiles', 'Granite Slabs',
+    'Granite Tiles', 'Marble Slabs (Indian)', 'Marble Slabs (Imported)',
+    'Engineered Quartz', 'Sandstone / Kota', 'Tile Adhesive & Grout',
+    'Trims & Edge Profiles',
   ]
   const categories: Record<string, any> = {}
   for (const name of categoryNames) {
@@ -526,12 +537,21 @@ async function seedTiles() {
   // ─── PRODUCTS ───────────────────────────────────────
   console.log('  → Products')
   const productsData = [
-    { sku: 'VIT-600', name: 'Glaze 600x600 Vitrified Tile', category: 'Vitrified Tiles', price: 65, stock: 4200, sold: 1800, reorderLevel: 500, image: '🟫', material: 'Vitrified', color: 'Ivory', description: '600x600 double-charged vitrified floor tile (per sq.ft)', warehouse: 'Main Showroom', lastRestocked: '2026-03-12' },
-    { sku: 'FLR-200', name: 'Terra Anti-Skid Floor Tile', category: 'Floor Tiles', price: 42, stock: 3600, sold: 1450, reorderLevel: 400, image: '🟧', material: 'Ceramic', color: 'Terracotta', description: '300x300 matte anti-skid ceramic floor tile (per sq.ft)', warehouse: 'Godown', lastRestocked: '2026-03-10' },
-    { sku: 'WAL-300', name: 'Aqua Glossy Wall Tile', category: 'Wall Tiles', price: 38, stock: 2800, sold: 1120, reorderLevel: 300, image: '🔷', material: 'Ceramic', color: 'Sky Blue', description: '300x450 glossy ceramic wall tile for bathrooms (per sq.ft)', warehouse: 'Main Showroom', lastRestocked: '2026-03-11' },
-    { sku: 'SAN-WB1', name: 'Elegance Wall-Hung Wash Basin', category: 'Sanitaryware', price: 4500, stock: 24, sold: 38, reorderLevel: 6, image: '🚿', material: 'Ceramic', color: 'White', description: 'Wall-hung wash basin with overflow, glossy white finish', warehouse: 'Main Showroom', lastRestocked: '2026-03-09' },
-    { sku: 'FAU-MX1', name: 'ChromeFlow Single-Lever Basin Faucet', category: 'Faucets', price: 2800, stock: 40, sold: 52, reorderLevel: 10, image: '🚰', material: 'Brass + Chrome', color: 'Chrome', description: 'Single-lever basin mixer faucet, brass body with chrome plating', warehouse: 'Main Showroom', lastRestocked: '2026-03-14' },
-    { sku: 'ADH-20K', name: 'BondTite Tile Adhesive 20kg', category: 'Adhesives & Grouts', price: 480, stock: 150, sold: 220, reorderLevel: 30, image: '🪣', material: 'Cement-based', color: 'Grey', description: 'Polymer-modified tile adhesive, 20kg bag', warehouse: 'Godown', lastRestocked: '2026-03-13' },
+    { sku: 'GVT-600-01', name: 'Ivory Vein 600x600 GVT Tile', category: 'Vitrified Tiles (GVT/PGVT)', price: 1120, stock: 96, sold: 180, reorderLevel: 20, image: '🟫', material: 'GVT', color: 'Ivory', description: 'Glossy 600x600 vitrified floor tile; sold by box, 17.22 sq.ft per box', warehouse: 'Main Showroom', unitOfMeasure: 'BOX', materialCategory: 'TILE', tileSize: '600x600', finish: 'glossy', coveragePerBox: 17.22, tilesPerBox: 4, surfaceType: 'Glossy', applicationArea: 'floor', hsnCode: '6908' },
+    { sku: 'CER-300-01', name: 'Cotto Terra 300x300 Ceramic Tile', category: 'Ceramic Tiles', price: 640, stock: 80, sold: 140, reorderLevel: 18, image: '🟧', material: 'Ceramic', color: 'Terracotta', description: 'Matte ceramic floor tile; sold by box, 11.62 sq.ft per box', warehouse: 'Godown', unitOfMeasure: 'BOX', materialCategory: 'TILE', tileSize: '300x300', finish: 'matte', coveragePerBox: 11.62, tilesPerBox: 15, surfaceType: 'Matte', applicationArea: 'floor', hsnCode: '6907' },
+    { sku: 'WAL-300-01', name: 'Aqua Mist 300x450 Wall Tile', category: 'Wall Tiles', price: 520, stock: 74, sold: 125, reorderLevel: 16, image: '🔷', material: 'Ceramic', color: 'Aqua', description: 'Glossy ceramic wall tile; sold by box, 14.53 sq.ft per box', warehouse: 'Main Showroom', unitOfMeasure: 'BOX', materialCategory: 'TILE', tileSize: '300x450', finish: 'glossy', coveragePerBox: 14.53, tilesPerBox: 10, surfaceType: 'Glossy', applicationArea: 'wall', hsnCode: '6908' },
+    { sku: 'DIG-600-01', name: 'Calacatta Digital 600x1200 Tile', category: 'Digital Tiles', price: 1680, stock: 48, sold: 78, reorderLevel: 12, image: '⬜', material: 'Porcelain', color: 'White / Grey Vein', description: 'Digital marble-look porcelain tile; 15.50 sq.ft per box', warehouse: 'Main Showroom', unitOfMeasure: 'BOX', materialCategory: 'TILE', tileSize: '600x1200', finish: 'polished', coveragePerBox: 15.50, tilesPerBox: 2, surfaceType: 'Polished', applicationArea: 'floor', hsnCode: '6908' },
+    { sku: 'OUT-300-01', name: 'Slate Ash Outdoor Anti-Skid Tile', category: 'Outdoor / Anti-Skid Tiles', price: 820, stock: 62, sold: 90, reorderLevel: 14, image: '⬛', material: 'Porcelain', color: 'Ash Grey', description: 'Flamed-look outdoor anti-skid tile; 10.76 sq.ft per box', warehouse: 'Godown', unitOfMeasure: 'BOX', materialCategory: 'TILE', tileSize: '300x300', finish: 'anti-skid', coveragePerBox: 10.76, tilesPerBox: 12, surfaceType: 'Anti-Skid', applicationArea: 'outdoor', hsnCode: '6908' },
+    { sku: 'WOOD-200-01', name: 'Oakline Wood-Finish 200x1200 Tile', category: 'Wood-Finish Tiles', price: 1040, stock: 55, sold: 66, reorderLevel: 12, image: '🟫', material: 'Porcelain', color: 'Oak', description: 'Wood-look porcelain plank tile; 15.50 sq.ft per box', warehouse: 'Main Showroom', unitOfMeasure: 'BOX', materialCategory: 'TILE', tileSize: '200x1200', finish: 'matte', coveragePerBox: 15.50, tilesPerBox: 6, surfaceType: 'Matt', applicationArea: 'floor', hsnCode: '6908' },
+    { sku: 'ADH-20K-01', name: 'BondTite Tile Adhesive 20kg', category: 'Tile Adhesive & Grout', price: 520, stock: 140, sold: 220, reorderLevel: 30, image: '🪣', material: 'Cement-based', color: 'Grey', description: 'Polymer-modified tile adhesive, 20kg bag', warehouse: 'Godown', unitOfMeasure: 'PCS', materialCategory: 'ADHESIVE_GROUT', applicationArea: 'floor', hsnCode: '3214' },
+    { sku: 'GRT-5K-01', name: 'ColorLock Epoxy Grout 5kg', category: 'Tile Adhesive & Grout', price: 760, stock: 45, sold: 64, reorderLevel: 10, image: '🪣', material: 'Epoxy', color: 'Pearl Grey', description: 'Stain-resistant epoxy grout for tile joints', warehouse: 'Godown', unitOfMeasure: 'PCS', materialCategory: 'ADHESIVE_GROUT', applicationArea: 'wall', hsnCode: '3214' },
+    { sku: 'TRM-SS-10', name: 'Brushed Steel Edge Profile 10mm', category: 'Trims & Edge Profiles', price: 260, stock: 120, sold: 80, reorderLevel: 20, image: '📏', material: 'Stainless Steel', color: 'Brushed Steel', description: '10mm edge trim sold by running foot', warehouse: 'Main Showroom', unitOfMeasure: 'RFT', materialCategory: 'TRIM_PROFILE', applicationArea: 'wall', hsnCode: '6802' },
+    { sku: 'GRN-BG-18', name: 'Black Galaxy Granite 18mm Polished', category: 'Granite Slabs', price: 245, stock: 0, sold: 0, reorderLevel: 0, image: '⬛', material: 'Granite', color: 'Black / Gold Fleck', description: 'Natural granite slab from Andhra Pradesh; each slab is individually measured', warehouse: 'Main Showroom', unitOfMeasure: 'SLAB', materialCategory: 'GRANITE', origin: 'Andhra Pradesh', thicknessMm: 18, qualityGrade: 'Premium', finish: 'polished', applicationArea: 'kitchen_platform', hsnCode: '68022300', isSlabTracked: true },
+    { sku: 'GRN-TB-18', name: 'Tan Brown Granite 18mm Polished', category: 'Granite Slabs', price: 185, stock: 0, sold: 0, reorderLevel: 0, image: '🟫', material: 'Granite', color: 'Tan Brown', description: 'Warm brown granite slab from Telangana; lot/shade matching required', warehouse: 'Main Showroom', unitOfMeasure: 'SLAB', materialCategory: 'GRANITE', origin: 'Telangana', thicknessMm: 18, qualityGrade: 'Grade A', finish: 'polished', applicationArea: 'kitchen_platform', hsnCode: '68022300', isSlabTracked: true },
+    { sku: 'GRN-KW-18', name: 'Kashmir White Granite 18mm Polished', category: 'Granite Slabs', price: 220, stock: 0, sold: 0, reorderLevel: 0, image: '⬜', material: 'Granite', color: 'White / Grey', description: 'Light granite slab with grey mineral pattern', warehouse: 'Main Showroom', unitOfMeasure: 'SLAB', materialCategory: 'GRANITE', origin: 'Tamil Nadu', thicknessMm: 18, qualityGrade: 'Premium', finish: 'polished', applicationArea: 'kitchen_platform', hsnCode: '68022300', isSlabTracked: true },
+    { sku: 'MBL-MK-18', name: 'Makrana White Marble 18mm Polished', category: 'Marble Slabs (Indian)', price: 290, stock: 0, sold: 0, reorderLevel: 0, image: '⬜', material: 'Marble', color: 'White', description: 'Indian Makrana marble slab for flooring and vanity applications', warehouse: 'Main Showroom', unitOfMeasure: 'SLAB', materialCategory: 'MARBLE', origin: 'Rajasthan - Makrana', thicknessMm: 18, qualityGrade: 'Premium', finish: 'polished', applicationArea: 'floor', hsnCode: '68022110', isSlabTracked: true },
+    { sku: 'MBL-RJ-18', name: 'Rajnagar White Marble 18mm Polished', category: 'Marble Slabs (Indian)', price: 225, stock: 0, sold: 0, reorderLevel: 0, image: '⬜', material: 'Marble', color: 'White / Soft Grey', description: 'Indian Rajnagar marble slab for flooring, wall cladding and vanity applications', warehouse: 'Main Showroom', unitOfMeasure: 'SLAB', materialCategory: 'MARBLE', origin: 'Rajasthan - Rajnagar', thicknessMm: 18, qualityGrade: 'Grade A', finish: 'polished', applicationArea: 'wall_cladding', hsnCode: '68022110', isSlabTracked: true },
+    { sku: 'MBL-ST-20', name: 'Italian Statuario Marble 20mm Polished', category: 'Marble Slabs (Imported)', price: 780, stock: 0, sold: 0, reorderLevel: 0, image: '⬜', material: 'Marble', color: 'White / Dramatic Vein', description: 'Imported Statuario marble slab; approve actual slab before cutting', warehouse: 'Main Showroom', unitOfMeasure: 'SLAB', materialCategory: 'MARBLE', origin: 'Italy', thicknessMm: 20, qualityGrade: 'Premium', finish: 'polished', applicationArea: 'wall_cladding', hsnCode: '68022110', isSlabTracked: true },
   ]
 
   for (const p of productsData) {
@@ -542,8 +562,93 @@ async function seedTiles() {
         sku: p.sku, name: p.name, categoryId: categories[p.category].id, price: p.price,
         stock: p.stock, sold: p.sold, reorderLevel: p.reorderLevel, image: p.image,
         material: p.material, color: p.color, description: p.description,
-        warehouseId: warehouses[p.warehouse].id, lastRestocked: new Date(p.lastRestocked),
+        warehouseId: warehouses[p.warehouse].id, lastRestocked: new Date((p as { lastRestocked?: string }).lastRestocked || '2026-08-01'),
+        unitOfMeasure: p.unitOfMeasure, materialCategory: p.materialCategory,
+        isSlabTracked: p.isSlabTracked || false, origin: p.origin,
+        thicknessMm: p.thicknessMm, qualityGrade: p.qualityGrade,
+        finish: p.finish, tileSize: p.tileSize, coveragePerBox: p.coveragePerBox,
+        tilesPerBox: p.tilesPerBox, surfaceType: p.surfaceType,
+        applicationArea: p.applicationArea, hsnCode: p.hsnCode,
       },
+    })
+  }
+
+  // ─── STONE SUPPLIER, GODOWN & SERIALIZED SLABS ─────
+  console.log('  → Stone lots and slabs')
+  const supplier = await prisma.supplier.findFirst({ where: { name: 'Demo Stone Imports & Exports' } })
+    ?? await prisma.supplier.create({ data: {
+      name: 'Demo Stone Imports & Exports', phone: '+91 98765 44556',
+      email: 'purchase@demostone.example', address: 'Kishangarh Marble Market, Rajasthan',
+      contactPerson: 'Vikram Singh',
+    } })
+  const godown = await prisma.godown.findFirst({ where: { name: 'Stone Yard' } })
+    ?? await prisma.godown.create({ data: { name: 'Stone Yard', type: 'Warehouse', isDefault: false, address: 'Vatva GIDC, Ahmedabad' } })
+
+  const lotData = [
+    { lotNumber: 'BG-2608-A', sku: 'GRN-BG-18', origin: 'Andhra Pradesh - Ongole', shadeCode: 'BG-AUG-26', qualityGrade: 'Premium', costPerSqft: 175, slabs: [['01/06', 126, 74], ['02/06', 128, 76], ['03/06', 124, 73]] },
+    { lotNumber: 'TB-2608-B', sku: 'GRN-TB-18', origin: 'Telangana - Karimnagar', shadeCode: 'TB-AUG-26', qualityGrade: 'Grade A', costPerSqft: 132, slabs: [['01/08', 118, 70], ['02/08', 120, 72], ['03/08', 116, 68]] },
+    { lotNumber: 'KW-2608-C', sku: 'GRN-KW-18', origin: 'Tamil Nadu - Madurai', shadeCode: 'KW-AUG-26', qualityGrade: 'Premium', costPerSqft: 160, slabs: [['01/05', 124, 75], ['02/05', 122, 74]] },
+    { lotNumber: 'MK-2608-D', sku: 'MBL-MK-18', origin: 'Rajasthan - Makrana', shadeCode: 'MK-AUG-26', qualityGrade: 'Premium', costPerSqft: 210, slabs: [['01/06', 120, 72], ['02/06', 118, 70]] },
+    { lotNumber: 'RJ-2608-E', sku: 'MBL-RJ-18', origin: 'Rajasthan - Rajnagar', shadeCode: 'RJ-AUG-26', qualityGrade: 'Grade A', costPerSqft: 165, slabs: [['01/05', 122, 72], ['02/05', 120, 70]] },
+    { lotNumber: 'ST-2608-F', sku: 'MBL-ST-20', origin: 'Italy - Carrara', shadeCode: 'ST-IMPORTED-26', qualityGrade: 'Premium', costPerSqft: 620, slabs: [['01/04', 118, 70], ['02/04', 120, 72]] },
+  ] as const
+
+  for (const lotInput of lotData) {
+    const product = await prisma.product.findUnique({ where: { sku: lotInput.sku } })
+    if (!product) continue
+    const lot = await prisma.stoneLot.upsert({
+      where: { lotNumber: lotInput.lotNumber },
+      update: { productId: product.id, supplierId: supplier.id, origin: lotInput.origin, shadeCode: lotInput.shadeCode, qualityGrade: lotInput.qualityGrade, costPerSqft: lotInput.costPerSqft },
+      create: { lotNumber: lotInput.lotNumber, productId: product.id, supplierId: supplier.id, origin: lotInput.origin, shadeCode: lotInput.shadeCode, qualityGrade: lotInput.qualityGrade, costPerSqft: lotInput.costPerSqft, photos: [] },
+    })
+    for (const [slabNumber, lengthInches, widthInches] of lotInput.slabs) {
+      const sqft = Math.round((lengthInches * widthInches / 144) * 100) / 100
+      await prisma.slab.upsert({
+        where: { lotId_slabNumber: { lotId: lot.id, slabNumber } },
+        update: { lengthInches, widthInches, sqft, thicknessMm: product.thicknessMm, godownId: godown.id },
+        create: { lotId: lot.id, slabNumber, lengthInches, widthInches, sqft, thicknessMm: product.thicknessMm, godownId: godown.id, status: 'AVAILABLE' },
+      })
+    }
+    const totals = await prisma.slab.aggregate({ where: { lotId: lot.id }, _count: { _all: true }, _sum: { sqft: true } })
+    const available = await prisma.slab.aggregate({ where: { lotId: lot.id, status: 'AVAILABLE' }, _sum: { sqft: true } })
+    await prisma.stoneLot.update({ where: { id: lot.id }, data: { totalSlabs: totals._count._all, totalSqft: totals._sum.sqft || 0, availableSqft: available._sum.sqft || 0, status: 'IN_STOCK' } })
+  }
+
+  // ─── HSN / GST MASTER DATA ─────────────────────────
+  console.log('  → HSN codes')
+  const hsnCodes = [
+    ['2515', 'Marble, travertine and ecaussine blocks / rough stone', 5],
+    ['2516', 'Granite, porphyry and basalt blocks / rough stone', 5],
+    ['68022110', 'Marble, worked, polished or cut-to-size', 18],
+    ['68022300', 'Granite, worked, polished or cut-to-size', 18],
+    ['6907', 'Ceramic flags and tiles, unglazed', 18],
+    ['6908', 'Glazed ceramic and vitrified tiles', 18],
+    ['3214', 'Tile adhesive, grout and mastic', 18],
+    ['68029200', 'Other calcareous stone including Kota, sandstone and limestone', 18],
+  ] as const
+  for (const [code, description, gstRate] of hsnCodes) {
+    await prisma.hsnCode.upsert({ where: { code }, update: { description, gstRate }, create: { code, description, gstRate, cessRate: 0, type: 'GOODS' } })
+  }
+
+  // ─── TGM WORK CENTERS ───────────────────────────────
+  console.log('  → TGM work centers')
+  const workCenters = [
+    ['Gangsaw / Block Cutting', 'Gangsaw/Block-Cutting'],
+    ['CNC / Waterjet Cutting', 'CNC/Waterjet Cutting'],
+    ['Edge Profiling', 'Edge Profiling'],
+    ['Polishing', 'Polishing'],
+    ['Resin & Epoxy Filling', 'Resin & Epoxy Filling'],
+    ['Line Polishing / Calibration', 'Line Polishing/Calibration'],
+    ['Template & Site Measurement', 'Template & Site Measurement'],
+    ['QC / Grading', 'QC/Grading'],
+    ['Packing & Crating', 'Packing & Crating'],
+    ['General', 'General'],
+  ] as const
+  for (const [name, type] of workCenters) {
+    await prisma.workCenter.upsert({
+      where: { name },
+      update: { type, status: 'Active' },
+      create: { name, type, status: 'Active', capacity: 1 },
     })
   }
 
@@ -555,6 +660,40 @@ async function seedTiles() {
     update: {},
     create: { email: 'admin@tilescrm.com', name: 'Admin', hashedPassword, role: 'ADMIN' },
   })
+
+  // ─── TGM WHATSAPP / RAG KNOWLEDGE ───────────────────
+  console.log('  → TGM knowledge documents')
+  const admin = await prisma.user.findUnique({ where: { email: 'admin@tilescrm.com' }, select: { id: true } })
+  if (admin) {
+    const documents = [
+      {
+        title: 'TGM Product and Application Guide',
+        raw_text: `Homzentic sells vitrified, ceramic, digital, outdoor anti-skid and wood-finish tiles by box. Natural granite, marble, quartzite, sandstone and engineered quartz are sold by actual slab and measured square feet. Ask for application first: floor, wall, bathroom, kitchen platform, vanity top, staircase, window sill or wall cladding. Tile box coverage, wastage and shade/batch matching must be confirmed before quotation.`,
+      },
+      {
+        title: 'TGM Slab Approval and Fabrication Policy',
+        raw_text: `Natural stone varies in shade, vein, mineral pattern and usable dimensions from slab to slab. For large flooring, cladding or fabrication jobs, keep the same lot and shade wherever possible. Share actual lot or slab photos and obtain customer approval before cutting. Site measurement, template method, edge profile, sink or hob cutouts, polishing, transport and installation are confirmed separately. Never promise stock, exact shade or final price without measured area and slab approval.`,
+      },
+      {
+        title: 'TGM Commercial and Service FAQs',
+        raw_text: `Material and fabrication labour may be billed separately. Installation, loading, unloading, transport and breakage-in-transit terms depend on the project and must be confirmed by the team. GST invoice is available. For a quote, collect customer name, material or application, approximate area in square feet, city or site, timeline and phone number. If the customer asks for exact price or unavailable policy details, transfer to a showroom specialist.`,
+      },
+    ]
+    for (const document of documents) {
+      const existing = await prisma.waKnowledgeDoc.findFirst({ where: { user_id: String(admin.id), title: document.title } })
+      if (existing) {
+        await prisma.waKnowledgeChunk.deleteMany({ where: { doc_id: existing.id } })
+        await prisma.waKnowledgeDoc.update({
+          where: { id: existing.id },
+          data: { raw_text: document.raw_text, char_count: document.raw_text.length, status: 'pending', error: null },
+        })
+      } else {
+        await prisma.waKnowledgeDoc.create({
+          data: { user_id: String(admin.id), title: document.title, source_type: 'seed', raw_text: document.raw_text, char_count: document.raw_text.length, status: 'pending' },
+        })
+      }
+    }
+  }
 
   console.log('\n✅ Seed complete!')
   console.log('   Admin login: admin@tilescrm.com / admin123')

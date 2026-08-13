@@ -13,6 +13,9 @@ import {
 } from '@/lib/validations/custom-order'
 import type { CustomOrderStatus, Prisma } from '@prisma/client'
 import { sendEmail } from '@/lib/email'
+import { syncStoneLotTotals } from '@/lib/stone-inventory'
+import { requireRole } from '@/lib/auth-helpers'
+import { getBrand } from '@/lib/brand'
 
 const statusMap: Record<string, CustomOrderStatus> = {
   'Measurement Scheduled': 'MEASUREMENT_SCHEDULED',
@@ -63,6 +66,10 @@ export async function getCustomOrders() {
         },
         orderBy: { createdAt: 'desc' },
       },
+      slabAllocations: {
+        include: { lot: { include: { product: { select: { name: true, sku: true } } } } },
+        orderBy: { slabNumber: 'asc' },
+      },
     },
     orderBy: { date: 'desc' },
   })
@@ -97,6 +104,20 @@ export async function getCustomOrders() {
       quotedPrice: o.quotedPrice,
       advancePaid: o.advancePaid,
       productionNotes: o.productionNotes,
+      installationType: o.installationType,
+      edgeProfile: o.edgeProfile,
+      cutouts: o.cutouts,
+      templateMethod: o.templateMethod,
+      areaSqft: o.areaSqft,
+      wastagePercent: o.wastagePercent,
+      slabAllocations: o.slabAllocations.map(slab => ({
+        id: slab.id,
+        slabNumber: slab.slabNumber,
+        sqft: slab.sqft,
+        status: slab.status,
+        lotNumber: slab.lot.lotNumber,
+        productName: slab.lot.product.name,
+      })),
       timeline: o.timeline.map(t => ({
         id: t.id,
         date: t.date.toISOString().split('T')[0],
@@ -152,8 +173,11 @@ export async function createCustomOrder(data: unknown) {
     customer, phone, address, type, assignedStaffId,
     estimatedDelivery, measurements, referenceProductId, referenceImages,
     materials, color, quotedPrice, advancePaid, productionNotes,
+    installationType, edgeProfile, cutouts, templateMethod, areaSqft, wastagePercent, slabIds,
     scheduleVisit, visitDate, visitTime, visitStaffId,
   } = parsed.data
+
+  const uniqueSlabIds = [...new Set(slabIds || [])]
 
   // Find or create contact
   let contact = await prisma.contact.findFirst({ where: { phone } })
@@ -175,8 +199,17 @@ export async function createCustomOrder(data: unknown) {
 
   const now = new Date()
 
-  const order = await prisma.customOrder.create({
-    data: {
+  let order
+  try {
+    order = await prisma.$transaction(async tx => {
+      if (uniqueSlabIds.length > 0) {
+        const slabs = await tx.slab.findMany({ where: { id: { in: uniqueSlabIds } }, select: { id: true, status: true } })
+        if (slabs.length !== uniqueSlabIds.length) throw new Error('One or more selected slabs no longer exist')
+        if (slabs.some(s => s.status !== 'AVAILABLE')) throw new Error('A selected slab is no longer available for this fabrication job')
+      }
+
+      const createdOrder = await tx.customOrder.create({
+        data: {
       displayId,
       contactId: contact.id,
       phone,
@@ -193,6 +226,13 @@ export async function createCustomOrder(data: unknown) {
       quotedPrice,
       advancePaid,
       productionNotes,
+      installationType,
+      edgeProfile,
+      cutouts: cutouts || undefined,
+      templateMethod,
+      areaSqft,
+      wastagePercent,
+      slabAllocations: uniqueSlabIds.length > 0 ? { connect: uniqueSlabIds.map(id => ({ id })) } : undefined,
       timeline: {
         create: {
           date: now,
@@ -201,8 +241,21 @@ export async function createCustomOrder(data: unknown) {
           updatedBy: 'Manager',
         },
       },
-    },
-  })
+        },
+      })
+
+      if (uniqueSlabIds.length > 0) {
+        const reservation = await tx.slab.updateMany({
+          where: { id: { in: uniqueSlabIds }, status: 'AVAILABLE' },
+          data: { status: 'RESERVED', reservedForCustomId: createdOrder.id },
+        })
+        if (reservation.count !== uniqueSlabIds.length) throw new Error('A selected slab was reserved by another job. Please select it again.')
+      }
+      return createdOrder
+    })
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Could not create fabrication job' }
+  }
 
   // Schedule visit if requested
   if (scheduleVisit && visitDate && visitTime) {
@@ -248,20 +301,40 @@ export async function createCustomOrder(data: unknown) {
 // ─── UPDATE STATUS (Manager) ────────────────────────────
 
 export async function updateCustomOrderStatus(id: number, status: string) {
+  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
   const dbStatus = statusMap[status]
   if (!dbStatus) return { success: false, error: 'Invalid status' }
 
   const order = await prisma.customOrder.findUnique({ where: { id } })
   if (!order) return { success: false, error: 'Order not found' }
+  if (order.status === 'DELIVERED' && dbStatus !== 'DELIVERED') return { success: false, error: 'A delivered fabrication order cannot move backwards' }
+  const currentIndex = statusOrder.indexOf(order.status)
+  const nextIndex = statusOrder.indexOf(dbStatus)
+  if (nextIndex < currentIndex) return { success: false, error: 'A fabrication job cannot move backwards in its workflow' }
+  if (nextIndex === currentIndex) return { success: true }
 
   const now = new Date()
 
-  await prisma.$transaction([
-    prisma.customOrder.update({
+  await prisma.$transaction(async tx => {
+    if (dbStatus === 'DELIVERED') {
+      const allocatedSlabs = await tx.slab.findMany({
+        where: { reservedForCustomId: id, status: { in: ['RESERVED', 'IN_PROCESSING'] } },
+        select: { id: true, lotId: true },
+      })
+      await tx.slab.updateMany({
+        where: { reservedForCustomId: id, status: { in: ['RESERVED', 'IN_PROCESSING'] } },
+        data: { status: 'SOLD', reservedForCustomId: null, soldAt: now },
+      })
+      for (const lotId of new Set(allocatedSlabs.map(slab => slab.lotId))) {
+        await syncStoneLotTotals(tx, lotId)
+      }
+    }
+
+    await tx.customOrder.update({
       where: { id },
       data: { status: dbStatus },
-    }),
-    prisma.customOrderTimeline.create({
+    })
+    await tx.customOrderTimeline.create({
       data: {
         customOrderId: id,
         date: now,
@@ -269,8 +342,8 @@ export async function updateCustomOrderStatus(id: number, status: string) {
         status: 'done',
         updatedBy: 'Manager',
       },
-    }),
-  ])
+    })
+  })
 
   revalidatePath('/custom-orders')
   revalidatePath('/staff-portal')
@@ -819,7 +892,7 @@ export async function sendProgressNotification(data: {
       errors.push('Email: no email address on file for this customer')
     } else {
       const settings = await prisma.storeSettings.findFirst({ where: { id: 1 } })
-      const storeName = settings?.storeName || 'Furniture Store'
+      const storeName = settings?.storeName || getBrand().name
       const statusLabel = statusDisplay[order.status]
       const html = `
         <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;background:#fff;">

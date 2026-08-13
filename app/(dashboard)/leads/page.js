@@ -6,6 +6,11 @@ import { getLeads, createLead, updateLeadStatus, addFollowUp } from '@/app/actio
 import { moveLeadToDraft } from '@/app/actions/drafts';
 import Modal from '@/components/Modal';
 import { useAlertToast } from '@/components/AlertToastProvider';
+import { getActiveVertical } from '@/lib/brand';
+
+const IS_TGM = getActiveVertical() === 'tiles';
+const TGM_MATERIAL_OPTIONS = ['Tiles', 'Granite', 'Marble', 'Quartzite', 'Engineered Quartz', 'Adhesive / Grout', 'Other'];
+const TGM_APPLICATION_OPTIONS = ['Kitchen', 'Floor', 'Wall', 'Bathroom', 'Staircase', 'Outdoor', 'Commercial', 'Other'];
 
 const pipelineStages = ['New', 'Contacted', 'Showroom Visit', 'Quotation', 'Won', 'Lost'];
 
@@ -94,6 +99,9 @@ export default function LeadsPage() {
       name: f.fullName.value, phone: f.phone.value, email: f.email.value,
       source: f.source.value, budget: f.budget.value,
       interest: f.interest.value, notes: f.notes.value,
+      materialCategory: IS_TGM ? f.materialCategory.value : undefined,
+      applicationArea: IS_TGM ? f.applicationArea.value : undefined,
+      areaSqft: IS_TGM && f.areaSqft.value ? Number(f.areaSqft.value) : undefined,
     });
     if (res.success) { setShowAddModal(false); await refresh(); }
   };
@@ -415,6 +423,10 @@ export default function LeadsPage() {
                 <p className="text-xs text-muted mb-1">Source</p>
                 <p className="text-sm font-medium text-foreground">{selectedLead.source}</p>
               </div>
+              {IS_TGM && <>
+                <div className="p-3 rounded-xl bg-surface"><p className="text-xs text-muted mb-1">Material</p><p className="text-sm font-medium text-foreground">{selectedLead.materialCategory || '—'}</p></div>
+                <div className="p-3 rounded-xl bg-surface"><p className="text-xs text-muted mb-1">Application / Area</p><p className="text-sm font-medium text-foreground">{selectedLead.applicationArea || '—'}{selectedLead.areaSqft ? ` · ${selectedLead.areaSqft} sq.ft` : ''}</p></div>
+              </>}
               <div className="p-3 rounded-xl bg-surface">
                 <p className="text-xs text-muted mb-1">Date Added</p>
                 <p className="text-sm font-medium text-foreground">{selectedLead.date}</p>
@@ -535,8 +547,13 @@ export default function LeadsPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-muted mb-1.5">Product Interest</label>
-            <input type="text" name="interest" required placeholder="e.g., L-Shaped Sofa" className="w-full" />
+            <input type="text" name="interest" required placeholder={IS_TGM ? 'e.g., Granite kitchen platform, ~55 sq.ft' : 'e.g., L-Shaped Sofa'} className="w-full" />
           </div>
+          {IS_TGM && <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div><label className="block text-xs font-medium text-muted mb-1.5">Material</label><select name="materialCategory" className="w-full"><option value="">Select material</option>{TGM_MATERIAL_OPTIONS.map(option => <option key={option}>{option}</option>)}</select></div>
+            <div><label className="block text-xs font-medium text-muted mb-1.5">Application Area</label><select name="applicationArea" className="w-full"><option value="">Select area</option>{TGM_APPLICATION_OPTIONS.map(option => <option key={option}>{option}</option>)}</select></div>
+            <div><label className="block text-xs font-medium text-muted mb-1.5">Approx. Area (sq.ft)</label><input type="number" min="0" step="0.01" name="areaSqft" placeholder="e.g. 250" className="w-full" /></div>
+          </div>}
           <div>
             <label className="block text-xs font-medium text-muted mb-1.5">Notes</label>
             <textarea rows={3} name="notes" placeholder="Additional notes..." className="w-full" />

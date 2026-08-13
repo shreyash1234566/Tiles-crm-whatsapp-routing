@@ -7,6 +7,9 @@ export const quotationItemSchema = z.object({
   description: z.string().optional(),
   quantity: z.number().int().min(1, 'Quantity must be at least 1'),
   rate: z.number().min(0, 'Rate cannot be negative'),
+  unitOfMeasure: z.enum(['PCS', 'SQFT', 'SQM', 'BOX', 'SLAB', 'RFT']).optional(),
+  areaSqft: z.number().positive().optional(),
+  coveragePerBox: z.number().positive().optional(),
   referenceImage: z.string().optional(),
 })
 

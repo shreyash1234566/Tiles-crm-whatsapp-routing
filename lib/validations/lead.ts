@@ -7,6 +7,9 @@ export const createLeadSchema = z.object({
   email: z.string().email().optional().or(z.literal('')),
   source: z.enum(LEAD_SOURCE_OPTIONS),
   interest: z.string().min(1, 'Product interest is required'),
+  materialCategory: z.string().optional(),
+  applicationArea: z.string().optional(),
+  areaSqft: z.number().positive().optional(),
   budget: z.string().optional(),
   notes: z.string().optional(),
 })

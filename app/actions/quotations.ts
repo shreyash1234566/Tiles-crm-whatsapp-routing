@@ -3,6 +3,8 @@
 import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { createQuotationSchema, updateQuotationSchema, updateQuotationStatusSchema } from '@/lib/validations/quotation'
+import { getBillableArea } from '@/lib/units'
+import { createInvoice } from '@/app/actions/invoices'
 import type { Quotation, QuotationItem, QuotationStatus, Contact, Product } from '@prisma/client'
 
 type QuotationWithRelations = Quotation & {
@@ -124,6 +126,17 @@ function getPreferredItemDescription(
   return detailParts.length > 0 ? detailParts.join(' | ') : null
 }
 
+function calculateQuotationLineAmount(item: { quantity: number; rate: number; unitOfMeasure?: string; areaSqft?: number; coveragePerBox?: number }, product?: { unitOfMeasure?: string | null; coveragePerBox?: number | null } | null) {
+  const quantity = Math.max(1, Number(item.quantity) || 1)
+  const rate = Math.max(0, Math.round(Number(item.rate) || 0))
+  const unit = String(item.unitOfMeasure || product?.unitOfMeasure || 'PCS').toUpperCase()
+  const areaSqft = Math.max(0, Number(item.areaSqft) || 0)
+  const coverage = Math.max(0, Number(item.coveragePerBox ?? product?.coveragePerBox) || 0)
+  if (unit === 'SQFT' || unit === 'SQM' || unit === 'SLAB') return Math.round(getBillableArea(areaSqft, quantity, unit) * rate)
+  if (unit === 'BOX' && coverage > 0 && areaSqft > 0) return Math.ceil(areaSqft / coverage) * rate
+  return quantity * rate
+}
+
 function formatQuotation(quotation: QuotationWithRelations) {
   const { bankDetails, cleanNotes } = parseNotesMetadata(quotation.notes)
 
@@ -138,6 +151,9 @@ function formatQuotation(quotation: QuotationWithRelations) {
       sku: item.sku,
       description: item.description,
       quantity: item.quantity,
+      unitOfMeasure: item.unitOfMeasure,
+      areaSqft: item.areaSqft,
+      coveragePerBox: item.coveragePerBox,
       rate: item.rate,
       amount: item.amount,
       referenceImage: item.referenceImage,
@@ -274,6 +290,8 @@ export async function createQuotation(data: unknown) {
           name: true,
           sku: true,
           price: true,
+          unitOfMeasure: true,
+          coveragePerBox: true,
           description: true,
           material: true,
           color: true,
@@ -293,7 +311,10 @@ export async function createQuotation(data: unknown) {
     const product = item.productId ? productById.get(item.productId) : null
     const quantity = Math.max(1, item.quantity)
     const rate = Math.max(0, Math.round(item.rate || product?.price || 0))
-    const amount = quantity * rate
+    const unitOfMeasure = item.unitOfMeasure || product?.unitOfMeasure || 'PCS'
+    const areaSqft = item.areaSqft == null ? null : Math.max(0, Number(item.areaSqft) || 0)
+    const coveragePerBox = item.coveragePerBox == null ? product?.coveragePerBox ?? null : Math.max(0, Number(item.coveragePerBox) || 0)
+    const amount = calculateQuotationLineAmount({ quantity, rate, unitOfMeasure, areaSqft: areaSqft ?? undefined, coveragePerBox: coveragePerBox ?? undefined }, product)
 
     return {
       productId: item.productId,
@@ -301,6 +322,9 @@ export async function createQuotation(data: unknown) {
       sku: item.sku || product?.sku || null,
       description: getPreferredItemDescription(item.description, product),
       quantity,
+      unitOfMeasure,
+      areaSqft,
+      coveragePerBox,
       rate,
       amount,
       referenceImage: item.referenceImage,
@@ -453,6 +477,8 @@ export async function updateQuotation(data: unknown) {
           name: true,
           sku: true,
           price: true,
+          unitOfMeasure: true,
+          coveragePerBox: true,
           description: true,
           material: true,
           color: true,
@@ -472,7 +498,10 @@ export async function updateQuotation(data: unknown) {
     const product = item.productId ? productById.get(item.productId) : null
     const quantity = Math.max(1, item.quantity)
     const rate = Math.max(0, Math.round(item.rate || product?.price || 0))
-    const amount = quantity * rate
+    const unitOfMeasure = item.unitOfMeasure || product?.unitOfMeasure || 'PCS'
+    const areaSqft = item.areaSqft == null ? null : Math.max(0, Number(item.areaSqft) || 0)
+    const coveragePerBox = item.coveragePerBox == null ? product?.coveragePerBox ?? null : Math.max(0, Number(item.coveragePerBox) || 0)
+    const amount = calculateQuotationLineAmount({ quantity, rate, unitOfMeasure, areaSqft: areaSqft ?? undefined, coveragePerBox: coveragePerBox ?? undefined }, product)
 
     return {
       productId: item.productId,
@@ -480,6 +509,9 @@ export async function updateQuotation(data: unknown) {
       sku: item.sku || product?.sku || null,
       description: getPreferredItemDescription(item.description, product),
       quantity,
+      unitOfMeasure,
+      areaSqft,
+      coveragePerBox,
       rate,
       amount,
       referenceImage: item.referenceImage,
@@ -553,6 +585,85 @@ export async function updateQuotationStatus(data: unknown) {
 
   revalidatePath('/quotations')
   return { success: true }
+}
+
+/**
+ * Creates a parked invoice from an accepted quotation. The invoice remains held
+ * so payment and, for slab-tracked products, physical slab allocation can be
+ * completed at checkout without consuming inventory prematurely.
+ */
+export async function convertQuotationToInvoice(quotationId: number) {
+  const quotation = await prisma.quotation.findUnique({
+    where: { id: quotationId },
+    include: {
+      contact: true,
+      items: { include: { product: true }, orderBy: { sortOrder: 'asc' } },
+    },
+  })
+
+  if (!quotation) return { success: false, error: 'Quotation not found' }
+  if (quotation.status === 'DRAFT' || quotation.status === 'REJECTED') {
+    return { success: false, error: 'Only sent or approved quotations can be converted to an invoice' }
+  }
+
+  const marker = `Converted from quotation ${quotation.displayId}`
+  const existing = await prisma.invoice.findFirst({
+    where: { notes: { contains: marker } },
+    select: { id: true, displayId: true, heldAt: true },
+  })
+  if (existing) {
+    return { success: false, error: `This quotation is already linked to invoice ${existing.displayId}` }
+  }
+
+  const missingProduct = quotation.items.find(item => !item.productId || !item.product)
+  if (missingProduct) {
+    return { success: false, error: `Item "${missingProduct.name}" is not linked to an inventory product` }
+  }
+
+  const slabItem = quotation.items.find(item => item.product?.isSlabTracked)
+  if (slabItem) {
+    return {
+      success: false,
+      error: `Quotation item "${slabItem.name}" is slab-tracked. Select the physical slab in Billing before invoicing this quotation.`,
+    }
+  }
+
+  const invoiceResult = await createInvoice({
+    customer: quotation.contact.name,
+    phone: quotation.contact.phone,
+    address: quotation.dispatchAddress || quotation.contact.address || undefined,
+    gstNumber: quotation.contact.gstNumber || undefined,
+    items: quotation.items.map(item => ({
+      productId: item.productId as number,
+      name: item.name,
+      sku: item.sku || item.product?.sku || '',
+      quantity: item.quantity,
+      price: item.rate,
+      unitOfMeasure: item.unitOfMeasure,
+      areaSqft: item.areaSqft || undefined,
+      coveragePerBox: item.coveragePerBox || undefined,
+      hsnCode: item.product?.hsnCode || undefined,
+      gstRate: quotation.gstPercent,
+    })),
+    discount: quotation.discountValue,
+    discountType: quotation.discountType === 'FLAT' ? 'flat' : 'percent',
+    payments: [{ amount: 0, method: 'Cash', notes: marker }],
+    isHeld: true,
+    freightCharge: quotation.freightCharge,
+    loadingCharge: quotation.loadingCharge,
+    installationCharge: quotation.installationCharge,
+    roadPermit: quotation.roadPermit || undefined,
+    notes: [marker, quotation.notes].filter(Boolean).join('\n'),
+  })
+
+  if (!invoiceResult.success) return invoiceResult
+
+  if (quotation.status !== 'APPROVED') {
+    await prisma.quotation.update({ where: { id: quotation.id }, data: { status: 'APPROVED' } })
+  }
+  revalidatePath('/quotations')
+  revalidatePath('/billing')
+  return { success: true, data: invoiceResult.data }
 }
 
 export async function getQuotationStats() {

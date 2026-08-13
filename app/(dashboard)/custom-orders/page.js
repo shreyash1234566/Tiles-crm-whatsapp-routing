@@ -21,9 +21,13 @@ import {
 import { moveCustomOrderToDraft } from '@/app/actions/drafts';
 import { getStaff } from '@/app/actions/staff';
 import { getProducts } from '@/app/actions/products';
+import { getStoneLots } from '@/app/actions/stone-inventory';
 import { getChannelConfigs } from '@/app/actions/channels';
 import { searchContacts, getCustomerProfile } from '@/app/actions/invoices';
 import ReturningCustomerCard from '@/components/ReturningCustomerCard';
+import { getActiveVertical } from '@/lib/brand';
+
+const IS_TGM = getActiveVertical() === 'tiles';
 
 const customOrderStatuses = ['All', 'Measurement Scheduled', 'In Production', 'Quality Check', 'Delivered'];
 
@@ -31,12 +35,12 @@ const notifyTemplateOptions = [
   {
     key: 'ORDER_CONFIRMED',
     label: 'Order Confirmed',
-    buildMessage: (o) => `Hi ${o.customer}! Your custom furniture order ${o.id} has been confirmed. Our team will visit you at ${o.address} to take measurements. We'll keep you updated every step of the way! 🛋️`,
+    buildMessage: (o) => `Hi ${o.customer}! Your ${IS_TGM ? 'fabrication job' : 'custom order'} ${o.id} has been confirmed. Our team will visit you at ${o.address} to take measurements and verify the requirements. We'll keep you updated every step of the way!`,
   },
   {
     key: 'DELIVERED',
     label: 'Delivered',
-    buildMessage: (o) => `Hi ${o.customer}! 🎉 Your custom ${o.type} (Order ${o.id}) has been delivered! Thank you for choosing us. We hope you love your new furniture. Please share your feedback anytime!`,
+    buildMessage: (o) => `Hi ${o.customer}! 🎉 Your ${o.type} (Job ${o.id}) has been delivered! Thank you for choosing us. Please share your feedback anytime!`,
   },
 ];
 
@@ -379,6 +383,13 @@ export default function CustomOrdersPage() {
       quotedPrice: form.get('quotedPrice') ? parseInt(form.get('quotedPrice')) : undefined,
       advancePaid: form.get('advancePaid') ? parseInt(form.get('advancePaid')) : 0,
       productionNotes: form.get('productionNotes') || undefined,
+      installationType: form.get('installationType') || undefined,
+      edgeProfile: form.get('edgeProfile') || undefined,
+      templateMethod: form.get('templateMethod') || undefined,
+      areaSqft: form.get('areaSqft') ? Number(form.get('areaSqft')) : undefined,
+      wastagePercent: form.get('wastagePercent') ? Number(form.get('wastagePercent')) : undefined,
+      slabIds: form.getAll('slabIds').map(value => Number(value)).filter(Number.isInteger),
+      cutouts: form.get('cutoutNotes') ? [{ type: 'Fabrication notes', count: 1, position: form.get('cutoutNotes') }] : undefined,
       scheduleVisit: form.get('scheduleVisit') === 'on',
       visitDate: form.get('visitDate') || undefined,
       visitTime: form.get('visitTime') || undefined,
@@ -411,7 +422,7 @@ export default function CustomOrdersPage() {
       <div className="flex items-center justify-between flex-wrap gap-3 md:gap-4">
         <div className="min-w-0">
           <h1 className="text-xl md:text-2xl font-bold text-foreground">Custom Orders</h1>
-          <p className="text-sm text-muted mt-1">On-site measurements, custom furniture & production tracking</p>
+          <p className="text-sm text-muted mt-1">{IS_TGM ? 'Site templates, slab allocation, cutting and installation tracking' : 'On-site measurements, custom furniture & production tracking'}</p>
         </div>
         <button onClick={() => setShowNewOrderModal(true)} className="flex items-center justify-center gap-2 w-full md:w-auto px-4 py-3 md:py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all active:scale-[0.98]">
           <Plus className="w-4 h-4" /> New Custom Order
@@ -833,7 +844,7 @@ export default function CustomOrdersPage() {
                   </div>
                   {selectedOrder.inventoryItems.some(i => i.status === 'READY') && (
                     <p className="text-xs text-emerald-600 mt-3 font-medium">
-                      🎯 Items are ready — update order status to "Delivered" and notify the customer.
+                      🎯 Items are ready — update order status to &quot;Delivered&quot; and notify the customer.
                     </p>
                   )}
                 </div>
@@ -890,7 +901,7 @@ export default function CustomOrdersPage() {
       {/* ═══════════════════════════════════════════════════
           NEW CUSTOM ORDER MODAL
           ═══════════════════════════════════════════════════ */}
-      <Modal isOpen={showNewOrderModal} onClose={() => setShowNewOrderModal(false)} title="New Custom Order" size="lg">
+      <Modal isOpen={showNewOrderModal} onClose={() => setShowNewOrderModal(false)} title={IS_TGM ? 'New Fabrication Job' : 'New Custom Order'} size="lg">
         <NewOrderForm
           staff={activeStaff}
           products={products}
@@ -1198,6 +1209,16 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
   const [showNewOrderDropdown, setShowNewOrderDropdown] = useState(false);
   const [newOrderProfile, setNewOrderProfile] = useState(null);
   const [newOrderProfileLoading, setNewOrderProfileLoading] = useState(false);
+  const [availableStoneLots, setAvailableStoneLots] = useState([]);
+
+  useEffect(() => {
+    if (!IS_TGM) return;
+    let active = true;
+    getStoneLots().then(result => {
+      if (active && result.success) setAvailableStoneLots(result.data);
+    });
+    return () => { active = false; };
+  }, []);
 
   const handleRefImageAdd = (e) => {
     const files = Array.from(e.target.files || []);
@@ -1320,19 +1341,16 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
         <textarea name="address" required rows={2} placeholder="House/Flat No., Street, Area, City, PIN" className="w-full px-4 py-2.5 rounded-xl text-sm resize-none" />
       </div>
 
-      {/* Furniture Type */}
+      {/* Job Type */}
       <div>
-        <label className="block text-xs font-medium text-muted mb-1.5">Furniture Type *</label>
+        <label className="block text-xs font-medium text-muted mb-1.5">{IS_TGM ? 'Fabrication / Installation Type' : 'Furniture Type'} *</label>
         <select name="type" required className="w-full px-4 py-2.5 rounded-xl text-sm">
           <option value="">Select type</option>
-          <option>Modular Kitchen</option>
-          <option>Custom Wardrobe</option>
-          <option>Custom Dining Table</option>
-          <option>Custom Sofa</option>
-          <option>Custom Bed</option>
-          <option>TV Unit / Wall Panel</option>
-          <option>Bookshelf / Storage</option>
-          <option>Office Furniture</option>
+          {IS_TGM ? <>
+            <option>Kitchen Platform</option><option>Vanity Top</option><option>Flooring</option><option>Wall Cladding</option><option>Staircase</option><option>Window Sill</option><option>Bathroom</option><option>Table Top</option>
+          </> : <>
+            <option>Modular Kitchen</option><option>Custom Wardrobe</option><option>Custom Dining Table</option><option>Custom Sofa</option><option>Custom Bed</option><option>TV Unit / Wall Panel</option><option>Bookshelf / Storage</option><option>Office Furniture</option>
+          </>}
           <option>Other</option>
         </select>
       </div>
@@ -1423,9 +1441,30 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
 
       {/* Materials, Color, Price */}
       <div className="grid grid-cols-2 gap-4">
-        <div><label className="block text-xs font-medium text-muted mb-1.5">Materials</label><input type="text" name="materials" placeholder="e.g., Marine Plywood, Marble" className="w-full px-4 py-2.5 rounded-xl text-sm" /></div>
-        <div><label className="block text-xs font-medium text-muted mb-1.5">Color / Finish</label><input type="text" name="color" placeholder="e.g., White Glossy" className="w-full px-4 py-2.5 rounded-xl text-sm" /></div>
+        <div><label className="block text-xs font-medium text-muted mb-1.5">{IS_TGM ? 'Stone / Material' : 'Materials'}</label><input type="text" name="materials" placeholder={IS_TGM ? 'e.g., Black Galaxy Granite 18mm' : 'e.g., Marine Plywood, Marble'} className="w-full px-4 py-2.5 rounded-xl text-sm" /></div>
+        <div><label className="block text-xs font-medium text-muted mb-1.5">Color / Finish</label><input type="text" name="color" placeholder={IS_TGM ? 'e.g., Polished, leathered, honed' : 'e.g., White Glossy'} className="w-full px-4 py-2.5 rounded-xl text-sm" /></div>
       </div>
+      {IS_TGM && (
+        <div className="border border-accent/20 bg-accent/5 rounded-xl p-3 space-y-3">
+          <p className="text-xs font-semibold text-accent">Stone Fabrication Details</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div><label className="block text-xs text-muted mb-1">Measured Area (sq.ft)</label><input type="number" name="areaSqft" min="0" step="0.01" placeholder="e.g., 48.5" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
+            <div><label className="block text-xs text-muted mb-1">Edge Profile</label><select name="edgeProfile" className="w-full px-3 py-2 rounded-xl text-sm"><option value="">Select profile</option><option>Bullnose</option><option>Bevel</option><option>Ogee</option><option>Waterfall</option><option>Eased</option><option>Demi-Bullnose</option><option>Dupont</option><option>Bird&apos;s Beak</option></select></div>
+            <div><label className="block text-xs text-muted mb-1">Template Method</label><select name="templateMethod" className="w-full px-3 py-2 rounded-xl text-sm"><option value="">Select method</option><option>Physical Template</option><option>Digital/Laser Template</option><option>Direct Measurement</option></select></div>
+            <div><label className="block text-xs text-muted mb-1">Expected Wastage (%)</label><input type="number" name="wastagePercent" min="0" max="100" step="0.1" placeholder="e.g., 12" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
+            <div className="sm:col-span-2"><label className="block text-xs text-muted mb-1">Cutouts / fabrication notes</label><input name="cutoutNotes" placeholder="e.g., 1 undermount sink, 1 hob cutout; confirm on template" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
+          </div>
+          <div>
+            <label className="block text-xs text-muted mb-1">Reserve physical slabs for this job</label>
+            <select name="slabIds" multiple size="4" className="w-full px-3 py-2 rounded-xl text-sm bg-surface border border-border">
+              {availableStoneLots.flatMap(lot => lot.slabs.filter(slab => slab.status === 'AVAILABLE').map(slab => (
+                <option key={slab.id} value={slab.id}>{lot.product.name} · Lot {lot.lotNumber} · Slab {slab.slabNumber} · {slab.sqft.toFixed(2)} sq.ft</option>
+              )))}
+            </select>
+            <p className="text-[11px] text-muted mt-1">Use Ctrl/Cmd to select multiple slabs. They are reserved immediately when the fabrication job is created.</p>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
         <div><label className="block text-xs font-medium text-muted mb-1.5">Quoted Price (₹)</label><input type="number" name="quotedPrice" placeholder="0" className="w-full px-4 py-2.5 rounded-xl text-sm" /></div>
         <div><label className="block text-xs font-medium text-muted mb-1.5">Advance Paid (₹)</label><input type="number" name="advancePaid" placeholder="0" className="w-full px-4 py-2.5 rounded-xl text-sm" /></div>

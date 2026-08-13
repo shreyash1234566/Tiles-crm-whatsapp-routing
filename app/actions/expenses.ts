@@ -10,10 +10,11 @@ import {
   cashRegisterSchema,
 } from '@/lib/validations/expenses'
 import { moveExpenseToDraft } from './drafts'
+import { getActiveVertical } from '@/lib/brand'
 
-// ─── DEFAULT CATEGORIES (furniture-specific) ─────────
+const IS_TGM = getActiveVertical() === 'tiles'
 
-const DEFAULT_CATEGORIES = [
+const FURNITURE_DEFAULT_CATEGORIES = [
   { name: 'Raw Materials', icon: 'TreePine', color: '#8B4513', sortOrder: 1 },
   { name: 'Labour & Wages', icon: 'HardHat', color: '#F59E0B', sortOrder: 2 },
   { name: 'Transport & Freight', icon: 'Truck', color: '#6366F1', sortOrder: 3 },
@@ -31,24 +32,66 @@ const DEFAULT_CATEGORIES = [
   { name: 'Miscellaneous', icon: 'MoreHorizontal', color: '#94A3B8', sortOrder: 15 },
 ]
 
-// ─── SEED DEFAULT CATEGORIES ──────────────────────────
+const TGM_DEFAULT_CATEGORIES = [
+  { name: 'Slab & Tile Purchases', icon: 'Layers', color: '#2563EB', sortOrder: 1 },
+  { name: 'Fabrication & Processing', icon: 'HardHat', color: '#F59E0B', sortOrder: 2 },
+  { name: 'Transport / Loading / Unloading', icon: 'Truck', color: '#6366F1', sortOrder: 3 },
+  { name: 'Showroom & Display', icon: 'Store', color: '#EC4899', sortOrder: 4 },
+  { name: 'Godown & Handling', icon: 'Warehouse', color: '#78716C', sortOrder: 5 },
+  { name: 'Packaging & Crating', icon: 'Package', color: '#14B8A6', sortOrder: 6 },
+  { name: 'Marketing & Samples', icon: 'Megaphone', color: '#F97316', sortOrder: 7 },
+  { name: 'Office & Admin', icon: 'FileText', color: '#64748B', sortOrder: 8 },
+  { name: 'Fuel & Vehicle', icon: 'Fuel', color: '#EF4444', sortOrder: 9 },
+  { name: 'Staff Meals / Refreshments', icon: 'Coffee', color: '#A855F7', sortOrder: 10 },
+  { name: 'Finance / Bank Charges', icon: 'Landmark', color: '#0EA5E9', sortOrder: 11 },
+  { name: 'Rent', icon: 'Home', color: '#10B981', sortOrder: 12 },
+  { name: 'Electricity & Utilities', icon: 'Zap', color: '#FBBF24', sortOrder: 13 },
+  { name: 'Tools & Equipment', icon: 'Wrench', color: '#6B7280', sortOrder: 14 },
+  { name: 'Miscellaneous', icon: 'MoreHorizontal', color: '#94A3B8', sortOrder: 15 },
+]
+
+const DEFAULT_CATEGORIES = IS_TGM ? TGM_DEFAULT_CATEGORIES : FURNITURE_DEFAULT_CATEGORIES
+
+// ─── ENSURE DEFAULT CATEGORIES ───────────────────────
+
+async function ensureDefaultExpenseCategories() {
+  let created = 0
+  let updated = 0
+  for (const cat of DEFAULT_CATEGORIES) {
+    // Reuse existing default rows in a migrated TGM database so historical
+    // expenses remain linked while their visible labels become TGM-specific.
+    let exists = IS_TGM
+      ? await prisma.expenseCategory.findFirst({ where: { isDefault: true, sortOrder: cat.sortOrder } })
+      : await prisma.expenseCategory.findFirst({ where: { name: cat.name } })
+    if (!exists) exists = await prisma.expenseCategory.findFirst({ where: { name: cat.name } })
+
+    if (exists) {
+      if (IS_TGM && (exists.name !== cat.name || exists.icon !== cat.icon || exists.color !== cat.color || !exists.isActive)) {
+        await prisma.expenseCategory.update({
+          where: { id: exists.id },
+          data: { name: cat.name, icon: cat.icon, color: cat.color, isDefault: true, isActive: true, sortOrder: cat.sortOrder },
+        })
+        updated++
+      }
+      continue
+    }
+
+    await prisma.expenseCategory.create({ data: { ...cat, isDefault: true } })
+    created++
+  }
+  return { created, updated }
+}
 
 export async function seedExpenseCategories() {
-  let created = 0
-  for (const cat of DEFAULT_CATEGORIES) {
-    const exists = await prisma.expenseCategory.findFirst({ where: { name: cat.name } })
-    if (!exists) {
-      await prisma.expenseCategory.create({ data: { ...cat, isDefault: true } })
-      created++
-    }
-  }
+  const result = await ensureDefaultExpenseCategories()
   revalidatePath('/expenses')
-  return { success: true, data: { created } }
+  return { success: true, data: result }
 }
 
 // ─── CATEGORIES ───────────────────────────────────────
 
 export async function getExpenseCategories() {
+  await ensureDefaultExpenseCategories()
   const categories = await prisma.expenseCategory.findMany({
     where: { isActive: true },
     orderBy: { sortOrder: 'asc' },

@@ -1,9 +1,9 @@
 /**
  * lib/ai-agent/retriever.ts
  *
- * pgvector cosine-similarity search over wa_knowledge_chunks.
- * The `embedding` column is NOT in the Prisma schema (pgvector isn't supported
- * natively), so we use a $queryRaw with the <=> operator.
+ * Portable cosine-similarity search over wa_knowledge_chunks.
+ * Embeddings are stored as JSONB so standard PostgreSQL installs do not need
+ * the optional pgvector extension.
  */
 
 import { prisma } from '@/lib/db'
@@ -28,25 +28,29 @@ export async function retrieveChunks(
   topK = 3,
   minSimilarity = 0.4,
 ): Promise<RetrievedChunk[]> {
-  // MUST use $queryRawUnsafe — Prisma's tagged-template $queryRaw binds the
-  // vector literal as a text parameter ($1::text) which the pg driver cannot
-  // implicitly cast to the vector type. The literal is built server-side from
-  // a number[] so there is no SQL-injection risk.
-  const vectorLiteral = `[${queryEmbedding.join(',')}]`
-
-  const rows = await prisma.$queryRawUnsafe<RetrievedChunk[]>(`
-    SELECT
-      id,
-      content,
-      1 - (embedding <=> $1::vector) AS similarity
+  const rows = await prisma.$queryRawUnsafe<Array<{ id: string; content: string; embedding: unknown }>>(`
+    SELECT id, content, embedding
     FROM wa_knowledge_chunks
-    WHERE
-      user_id = $2
-      AND embedding IS NOT NULL
-      AND 1 - (embedding <=> $1::vector) >= $3
-    ORDER BY embedding <=> $1::vector
-    LIMIT $4
-  `, vectorLiteral, userId, minSimilarity, topK)
+    WHERE user_id = $1 AND embedding IS NOT NULL
+  `, userId)
 
-  return rows
+  const queryNorm = Math.sqrt(queryEmbedding.reduce((sum, value) => sum + value * value, 0)) || 1
+  return rows.map(row => {
+    const embedding = Array.isArray(row.embedding)
+      ? row.embedding.map(Number)
+      : typeof row.embedding === 'string'
+        ? JSON.parse(row.embedding).map(Number)
+        : []
+    const length = Math.min(queryEmbedding.length, embedding.length)
+    let dot = 0
+    let embeddingNorm = 0
+    for (let i = 0; i < length; i++) {
+      dot += queryEmbedding[i] * embedding[i]
+      embeddingNorm += embedding[i] * embedding[i]
+    }
+    const similarity = embeddingNorm > 0 ? dot / (queryNorm * Math.sqrt(embeddingNorm)) : 0
+    return { id: row.id, content: row.content, similarity }
+  }).filter(row => row.similarity >= minSimilarity)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, topK)
 }

@@ -76,10 +76,10 @@ export async function sendInquiryWelcomeMessage(opts: InquirySendOptions): Promi
 
     const wa = getWaBrand()
     const specialtiesLine = wa.isTiles
-      ? 'Hum tiles & sanitaryware ke specialist hain — floor tiles, wall tiles, bathroom fittings aur sanitaryware.'
+      ? 'Hum tiles, granite, marble, quartz aur stone-fabrication ke specialist hain — floor, wall, kitchen platform aur staircase applications ke liye.'
       : 'Hum institutional furniture ke specialist hain — office, school, hospital aur custom furniture.'
-    const productsDesc = wa.isTiles ? 'tiles & sanitaryware' : 'furniture'
-    const headerEmoji = wa.isTiles ? '🧱' : '🪑'
+    const productsDesc = wa.isTiles ? 'tiles, granite, marble aur fabrication services' : 'furniture'
+    const headerEmoji = wa.isTiles ? '🪨' : '🪑'
 
     const bodyText =
       `Namaste *${firstName}* ji! 🙏\n\n` +
@@ -166,17 +166,17 @@ export async function sendProductInfoMessage(
     const accessToken = decrypt(waConfig.access_token)
     const wa = getWaBrand()
     const text = wa.isTiles
-      ? `🧱 *${wa.companyName} — Catalog*\n\n` +
+      ? `🪨 *${wa.companyName} — Tiles, Granite & Marble Catalog*\n\n` +
       `Hum in products ke specialist hain:\n\n` +
       `🏠 *Floor & Wall Tiles*\n` +
-      `  • Vitrified, ceramic aur designer tiles\n\n` +
-      `🚿 *Bathroom Fittings*\n` +
-      `  • Faucets, showers, accessories\n\n` +
-      `🪣 *Sanitaryware*\n` +
-      `  • Wash basins, water closets, kitchen sinks\n\n` +
-      `🧰 *Adhesives & Grouts*\n` +
-      `  • Tile adhesives, grouts, sealants\n\n` +
-      `Quote ya details ke liye humse baat karein:\n📞 ${wa.phone}`
+      `  • Vitrified, ceramic, digital, outdoor aur wood-finish tiles\n\n` +
+      `🪨 *Granite & Marble Slabs*\n` +
+      `  • Actual slab selection, lot/shade matching aur measured sq.ft pricing\n\n` +
+      `📐 *Fabrication & Installation*\n` +
+      `  • Kitchen platforms, vanity tops, staircases, cladding, edge profiles aur cutouts\n\n` +
+      `🧰 *Adhesives, Grouts & Trims*\n` +
+      `  • Tile adhesive, epoxy grout, profiles aur sealants\n\n` +
+      `Kripya application aur approx area (sq.ft) batayein; team lot/slab aur quote share karegi.\n📞 ${wa.phone}`
       : `🪑 *${wa.companyName} — Products*\n\n` +
       `Hum in products ke specialist hain:\n\n` +
       `🏢 *Office Furniture*\n` +

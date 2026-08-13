@@ -1,7 +1,7 @@
 """
-Furzentic AI Calling Agent (livekit-agents v1.5.x)
+Vertical-aware AI Calling Agent (livekit-agents v1.5.x)
 Uses LiveKit + Deepgram STT/TTS + Groq LLM + Vobiz sip
-Handles both inbound and outbound calls for furniture businesses
+Handles both inbound and outbound calls for the configured business vertical.
 """
 
 import asyncio
@@ -34,11 +34,15 @@ from config import (
     SARVAM_MODEL,
     STT_LANGUAGE,
     STT_MODEL,
+    BRAND_NAME,
+    IS_TGM,
+    ENV_FILE,
 )
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(dotenv_path=ENV_FILE, override=False)
 
-logger = logging.getLogger("furniture-crm-agent")
+WORKER_NAME = os.getenv("LIVEKIT_AGENT_NAME", "tgm-crm-agent" if IS_TGM else "furniture-crm-agent")
+logger = logging.getLogger(WORKER_NAME)
 logger.setLevel(logging.INFO)
 
 # ─── Config ───
@@ -71,7 +75,7 @@ def _env_int(name: str, default: int) -> int:
 
 # ─── Tools ───
 
-class FurnitureCRMTools(llm.ToolContext):
+class CRMTools(llm.ToolContext):
     def __init__(self, ctx: JobContext, phone_number: Optional[str] = None) -> None:
         super().__init__(tools=[])
         self._ctx = ctx
@@ -317,7 +321,7 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     # Tools
-    tools_ctx = FurnitureCRMTools(ctx, phone_number)
+    tools_ctx = CRMTools(ctx, phone_number)
 
     # System prompt
     system_prompt = OUTBOUND_SYSTEM_PROMPT if call_type == "outbound" else INBOUND_SYSTEM_PROMPT
@@ -458,7 +462,7 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("Inbound/browser mode — waiting for participant...")
         await ctx.wait_for_participant()
         await session.say(
-            "नमस्ते! कॉस्मिक फर्नीचर में आपका स्वागत है, मैं अनुष्का बोल रही हूँ — कैसे मदद करूँ?",
+            f"नमस्ते! {BRAND_NAME} में आपका स्वागत है, मैं अनुष्का बोल रही हूँ — कैसे मदद करूँ?",
             allow_interruptions=True,
         )
 
@@ -499,6 +503,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
-            agent_name="furniture-crm-agent",
+            agent_name=WORKER_NAME,
         ),
     )

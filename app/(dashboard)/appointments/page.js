@@ -6,6 +6,9 @@ import { getAppointments, createAppointment, updateAppointmentStatus, cancelAppo
 import { moveAppointmentToDraft } from '@/app/actions/drafts';
 import Modal from '@/components/Modal';
 import { useAlertToast } from '@/components/AlertToastProvider';
+import { getActiveVertical } from '@/lib/brand';
+
+const IS_TGM = getActiveVertical() === 'tiles';
 
 const statusColors = {
   Scheduled: 'bg-info-light text-info',
@@ -328,11 +331,7 @@ export default function AppointmentsPage() {
           <div>
             <label className="block text-xs font-medium text-muted mb-1.5">Purpose</label>
             <select name="purpose" className="w-full">
-              <option>Sofa Collection Viewing</option>
-              <option>Bed Selection</option>
-              <option>Dining Table Measurement</option>
-              <option>Kitchen Design Consultation</option>
-              <option>Wardrobe Design Discussion</option>
+              {IS_TGM ? <><option>Tile & Surface Consultation</option><option>Slab Selection & Lot Approval</option><option>Kitchen Platform Site Measurement</option><option>Fabrication Template Visit</option><option>Flooring / Cladding Consultation</option></> : <><option>Sofa Collection Viewing</option><option>Bed Selection</option><option>Dining Table Measurement</option><option>Kitchen Design Consultation</option><option>Wardrobe Design Discussion</option></>}
               <option>General Showroom Visit</option>
               <option>Order Pickup</option>
             </select>

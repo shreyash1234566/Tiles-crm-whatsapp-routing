@@ -15,6 +15,7 @@ const createBatchSchema = z.object({
   costPrice: z.number().min(0).default(0),
   supplierId: z.number().optional(),
   poId: z.number().optional(),
+  shadeCode: z.string().trim().optional(),
 })
 
 export async function getBatches(productId?: number) {

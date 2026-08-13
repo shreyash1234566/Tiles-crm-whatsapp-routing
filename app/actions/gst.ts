@@ -40,6 +40,16 @@ function periodRange(period: string) {
   }
 }
 
+function gstUqc(unitOfMeasure?: string) {
+  switch (String(unitOfMeasure || 'PCS').toUpperCase()) {
+    case 'SQFT': return 'SQF'
+    case 'SQM': return 'SQM'
+    case 'RFT': return 'MTR'
+    case 'BOX': return 'BOX'
+    default: return 'NOS'
+  }
+}
+
 // ─── GSTR-1 (Outward Supplies) ───────────────────────
 
 export async function generateGSTR1(period: string) {
@@ -94,19 +104,24 @@ export async function generateGSTR1(period: string) {
   for (const inv of invoices) {
     for (const item of inv.items) {
       const hsn = item.hsnCode || 'OTHERS'
-      if (!hsnMap[hsn]) hsnMap[hsn] = { description: item.name, uqc: 'NOS', qty: 0, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }
+      const uqc = gstUqc(item.unitOfMeasure)
+      const key = `${hsn}:${uqc}`
+      if (!hsnMap[key]) hsnMap[key] = { description: item.name, uqc, qty: 0, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 }
       const taxable = item.taxableAmount || item.quantity * item.price
       const rate = item.gstRate || (store?.gstRate || 18)
       const itemGST = Math.round(taxable * rate / 100)
-      hsnMap[hsn].qty += item.quantity
-      hsnMap[hsn].taxableValue += taxable
+      const measuredQty = ['SQFT', 'SQM'].includes(String(item.unitOfMeasure || '').toUpperCase()) && item.areaSqft
+        ? item.areaSqft
+        : item.quantity
+      hsnMap[key].qty += measuredQty
+      hsnMap[key].taxableValue += taxable
       if (inv.supplyType === 'INTERSTATE') {
-        hsnMap[hsn].igst += itemGST
+        hsnMap[key].igst += itemGST
       } else {
-        hsnMap[hsn].cgst += Math.round(itemGST / 2)
-        hsnMap[hsn].sgst += itemGST - Math.round(itemGST / 2)
+        hsnMap[key].cgst += Math.round(itemGST / 2)
+        hsnMap[key].sgst += itemGST - Math.round(itemGST / 2)
       }
-      hsnMap[hsn].cess += item.cess || 0
+      hsnMap[key].cess += item.cess || 0
     }
   }
 

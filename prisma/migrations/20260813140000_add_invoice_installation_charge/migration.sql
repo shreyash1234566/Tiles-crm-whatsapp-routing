@@ -1,0 +1,1 @@
+ALTER TABLE "Invoice" ADD COLUMN "installationCharge" INTEGER NOT NULL DEFAULT 0;

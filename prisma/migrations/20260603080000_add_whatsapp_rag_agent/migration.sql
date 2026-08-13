@@ -1,8 +1,6 @@
 -- Add WhatsApp RAG agent tables and pgvector support.
 -- Idempotent so it can be deployed safely on databases that were previously updated with db push.
 
-CREATE EXTENSION IF NOT EXISTS vector;
-
 DO $$
 BEGIN
   IF to_regclass('public.conversations') IS NOT NULL THEN
@@ -54,13 +52,13 @@ CREATE TABLE IF NOT EXISTS "wa_knowledge_chunks" (
   "doc_id" TEXT NOT NULL,
   "chunk_index" INTEGER NOT NULL,
   "content" TEXT NOT NULL,
-  "embedding" vector(768),
+  "embedding" JSONB,
   "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "wa_knowledge_chunks_pkey" PRIMARY KEY ("id")
 );
 
 ALTER TABLE "wa_knowledge_chunks"
-  ADD COLUMN IF NOT EXISTS "embedding" vector(768);
+  ADD COLUMN IF NOT EXISTS "embedding" JSONB;
 
 DO $$
 BEGIN
@@ -81,8 +79,3 @@ CREATE INDEX IF NOT EXISTS "wa_knowledge_chunks_user_id_idx"
 
 CREATE INDEX IF NOT EXISTS "wa_knowledge_chunks_doc_id_idx"
   ON "wa_knowledge_chunks" ("doc_id");
-
-CREATE INDEX IF NOT EXISTS "wa_knowledge_chunks_embedding_idx"
-  ON "wa_knowledge_chunks"
-  USING ivfflat ("embedding" vector_cosine_ops)
-  WITH (lists = 100);

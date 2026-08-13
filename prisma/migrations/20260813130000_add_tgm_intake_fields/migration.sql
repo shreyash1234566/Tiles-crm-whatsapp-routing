@@ -1,0 +1,8 @@
+ALTER TABLE "Lead" ADD COLUMN "materialCategory" TEXT;
+ALTER TABLE "Lead" ADD COLUMN "applicationArea" TEXT;
+ALTER TABLE "Lead" ADD COLUMN "areaSqft" DOUBLE PRECISION;
+
+ALTER TABLE "Walkin" ADD COLUMN "roomType" TEXT;
+ALTER TABLE "Walkin" ADD COLUMN "materialCategory" TEXT;
+ALTER TABLE "Walkin" ADD COLUMN "applicationArea" TEXT;
+ALTER TABLE "Walkin" ADD COLUMN "areaSqft" DOUBLE PRECISION;

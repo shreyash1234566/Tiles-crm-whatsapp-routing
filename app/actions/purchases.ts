@@ -5,6 +5,10 @@ import { revalidatePath } from 'next/cache'
 import { requireRole } from '@/lib/auth-helpers'
 import { createSupplierSchema, createPurchaseOrderSchema, createPurchaseReturnSchema } from '@/lib/validations/purchase'
 import { sendEmail } from '@/lib/email'
+import { z } from 'zod'
+import { getOrCreateDefaultGodown, syncProductStockFromGodowns } from './godowns'
+import { syncStoneLotTotals } from '@/lib/stone-inventory'
+import { getBrand } from '@/lib/brand'
 
 function escapeHtml(value: string | number | null | undefined) {
   return String(value || '')
@@ -74,7 +78,7 @@ async function notifySupplierForPurchaseOrder(poId: number, source: 'approved' |
   if (po.status === 'CANCELLED') return { success: false, error: 'Cannot send a cancelled purchase order' }
 
   const settings = await prisma.storeSettings.findFirst({ where: { id: 1 } })
-  const storeName = settings?.storeName || 'Furniture Store'
+  const storeName = settings?.storeName || getBrand().name
 
   const supplierPhone = po.supplier?.phone ? normalizeIndianPhone(po.supplier.phone) : ''
   const hasSupplierEmail = Boolean(po.supplier?.email)
@@ -284,7 +288,7 @@ export async function getPurchaseOrders() {
     orderBy: { date: 'desc' },
     include: {
       supplier: { select: { name: true, phone: true, email: true, contactPerson: true, gstNumber: true, address: true, paymentTerms: true } },
-      items: { include: { product: { select: { name: true, sku: true } } } },
+      items: { include: { product: { select: { name: true, sku: true, isSlabTracked: true, thicknessMm: true } } } },
     },
   })
   return { success: true, data: pos }
@@ -471,7 +475,7 @@ export async function receivePurchaseOrder(id: number) {
 
   const po = await prisma.purchaseOrder.findUnique({
     where: { id },
-    include: { items: true },
+    include: { items: { include: { product: { select: { isSlabTracked: true } } } } },
   })
   if (!po) return { success: false, error: 'Purchase order not found' }
   if (!['APPROVED', 'PARTIALLY_RECEIVED'].includes(po.status)) {
@@ -482,9 +486,18 @@ export async function receivePurchaseOrder(id: number) {
   if (pendingItems.length === 0) {
     return { success: false, error: 'All items in this order are already received' }
   }
+  if (pendingItems.some(item => item.product.isSlabTracked)) {
+    return { success: false, error: 'This purchase order contains slab-tracked stone. Receive it from Inventory → Lot / Slab Explorer with lot, slab dimensions, shade and photos so physical inventory is not lost.' }
+  }
 
   // Use transaction to update stock for each item
   await prisma.$transaction(async (tx) => {
+    let receivingGodown = await tx.godown.findFirst({ where: { isDefault: true } })
+    if (!receivingGodown) receivingGodown = await tx.godown.findFirst({ orderBy: { id: 'asc' } })
+    if (!receivingGodown) {
+      receivingGodown = await tx.godown.create({ data: { name: 'Main Showroom', type: 'Showroom', isDefault: true } })
+    }
+
     for (const item of pendingItems) {
       const pendingQty = Math.max(0, item.quantity - item.receivedQty)
       if (pendingQty === 0) continue
@@ -494,14 +507,54 @@ export async function receivePurchaseOrder(id: number) {
       await tx.product.update({
         where: { id: item.productId },
         data: {
-          stock: { increment: pendingQty },
           costPrice: item.unitCost,
           lastRestocked: now,
         },
       })
+      const existingStock = await tx.godownStock.findUnique({
+        where: { productId_godownId: { productId: item.productId, godownId: receivingGodown.id } },
+      })
+      const balanceAfter = (existingStock?.quantity || 0) + pendingQty
+      await tx.godownStock.upsert({
+        where: { productId_godownId: { productId: item.productId, godownId: receivingGodown.id } },
+        create: { productId: item.productId, godownId: receivingGodown.id, quantity: balanceAfter },
+        update: { quantity: balanceAfter },
+      })
+      await tx.stockLedger.create({
+        data: {
+          productId: item.productId,
+          godownId: receivingGodown.id,
+          entryType: 'IN',
+          quantity: pendingQty,
+          balanceAfter,
+          referenceType: 'PurchaseOrder',
+          referenceId: po.id,
+          notes: `Received against ${po.displayId}`,
+          createdBy: 'Purchases',
+        },
+      })
+      await syncProductStockFromGodowns(item.productId, tx)
       await tx.purchaseOrderItem.update({
         where: { id: item.id },
         data: { receivedQty: item.quantity },
+      })
+      await tx.productBatch.upsert({
+        where: { productId_batchNumber: { productId: item.productId, batchNumber: `PO-${po.displayId}-${item.id}` } },
+        create: {
+          productId: item.productId,
+          batchNumber: `PO-${po.displayId}-${item.id}`,
+          purchaseDate: now,
+          quantity: pendingQty,
+          remainingQty: pendingQty,
+          costPrice: item.unitCost,
+          supplierId: po.supplierId,
+          poId: po.id,
+        },
+        update: {
+          quantity: { increment: pendingQty },
+          remainingQty: { increment: pendingQty },
+          costPrice: item.unitCost,
+        },
       })
       // Log stock update
       await tx.stockUpdate.create({
@@ -524,6 +577,87 @@ export async function receivePurchaseOrder(id: number) {
   revalidatePath('/purchases')
   revalidatePath('/inventory')
   return { success: true }
+}
+
+const stonePurchaseReceiveSchema = z.object({
+  poId: z.number().int().positive(),
+  poItemId: z.number().int().positive(),
+  lotNumber: z.string().trim().min(1),
+  godownId: z.number().int().positive().optional(),
+  origin: z.string().trim().optional(),
+  shadeCode: z.string().trim().optional(),
+  qualityGrade: z.string().trim().optional(),
+  avgThicknessMm: z.number().positive().optional(),
+  costPerSqft: z.number().min(0).default(0),
+  notes: z.string().trim().optional(),
+  slabs: z.array(z.object({
+    slabNumber: z.string().trim().min(1),
+    lengthInches: z.number().positive(),
+    widthInches: z.number().positive(),
+    thicknessMm: z.number().positive().optional(),
+    photo: z.string().optional(),
+    qcGrade: z.string().optional(),
+  })).min(1),
+})
+
+export async function receiveStoneLotFromPurchaseOrder(data: unknown) {
+  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
+  const parsed = stonePurchaseReceiveSchema.safeParse(data)
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+  const input = parsed.data
+  const po = await prisma.purchaseOrder.findUnique({ where: { id: input.poId }, include: { supplier: true, items: { where: { id: input.poItemId }, include: { product: true } } } })
+  const item = po?.items[0]
+  if (!po || !item) return { success: false, error: 'Purchase order item not found' }
+  if (!['APPROVED', 'PARTIALLY_RECEIVED'].includes(po.status)) return { success: false, error: 'Approve the purchase order before receiving stone' }
+  if (!item.product.isSlabTracked) return { success: false, error: 'This item is not configured for slab tracking' }
+  const pendingQty = item.quantity - item.receivedQty
+  if (pendingQty <= 0) return { success: false, error: 'This PO line is already fully received' }
+  if (input.slabs.length > pendingQty) return { success: false, error: `Only ${pendingQty} slab(s) remain to be received for this PO line` }
+
+  try {
+    const result = await prisma.$transaction(async tx => {
+      const totalSqft = input.slabs.reduce((sum, slab) => sum + (slab.lengthInches * slab.widthInches / 144), 0)
+      const lot = await tx.stoneLot.create({
+        data: {
+          lotNumber: input.lotNumber,
+          productId: item.productId,
+          supplierId: po.supplierId,
+          origin: input.origin || null,
+          shadeCode: input.shadeCode || null,
+          qualityGrade: input.qualityGrade || null,
+          avgThicknessMm: input.avgThicknessMm ?? item.product.thicknessMm ?? null,
+          totalSlabs: input.slabs.length,
+          totalSqft,
+          costPerSqft: input.costPerSqft || item.unitCost,
+          notes: input.notes || null,
+          slabs: {
+            create: input.slabs.map(slab => ({
+              slabNumber: slab.slabNumber,
+              lengthInches: slab.lengthInches,
+              widthInches: slab.widthInches,
+              sqft: Math.round((slab.lengthInches * slab.widthInches / 144) * 100) / 100,
+              thicknessMm: slab.thicknessMm ?? input.avgThicknessMm ?? item.product.thicknessMm ?? null,
+              photo: slab.photo || null,
+              qcGrade: slab.qcGrade || null,
+              godownId: input.godownId,
+            })),
+          },
+        },
+      })
+      await syncStoneLotTotals(tx, lot.id)
+      const receivedQty = item.receivedQty + input.slabs.length
+      const allReceived = receivedQty >= item.quantity
+      await tx.purchaseOrderItem.update({ where: { id: item.id }, data: { receivedQty } })
+      await tx.purchaseOrder.update({ where: { id: po.id }, data: { status: allReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED', receivedAt: allReceived ? new Date() : undefined } })
+      return lot
+    })
+    revalidatePath('/purchases')
+    revalidatePath('/inventory')
+    return { success: true, data: result }
+  } catch (error: any) {
+    if (error?.code === 'P2002') return { success: false, error: 'That lot number or slab number already exists' }
+    return { success: false, error: error?.message || 'Could not receive stone lot' }
+  }
 }
 
 export async function recordPurchaseOrderPayment(
@@ -609,40 +743,104 @@ export async function createPurchaseReturn(data: unknown) {
   const parsed = createPurchaseReturnSchema.safeParse(data)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
-  const { supplierId, poId, reason, notes, items } = parsed.data
+  const { supplierId, poId, godownId: requestedGodownId, reason, notes, items } = parsed.data
   const totalAmount = items.reduce((sum, i) => sum + i.quantity * i.unitCost, 0)
+
+  const godown = requestedGodownId
+    ? await prisma.godown.findUnique({ where: { id: requestedGodownId }, select: { id: true } })
+    : await getOrCreateDefaultGodown()
+  if (!godown) return { success: false, error: 'Selected godown was not found' }
+
+  const productIds = Array.from(new Set(items.map(item => item.productId)))
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, name: true, stock: true, isSlabTracked: true },
+  })
+  const productById = new Map(products.map(product => [product.id, product]))
+  for (const item of items) {
+    const product = productById.get(item.productId)
+    if (!product) return { success: false, error: `Product ${item.productId} was not found` }
+    if (product.isSlabTracked) {
+      return { success: false, error: `${product.name} is slab-tracked. Return the exact physical slab from Lot / Slab Explorer instead of reducing aggregate stock.` }
+    }
+  }
 
   const count = await prisma.purchaseReturn.count()
   const displayId = `PRN-${String(count + 1).padStart(4, '0')}`
 
   // Deduct stock in transaction
-  const ret = await prisma.$transaction(async (tx) => {
-    for (const item of items) {
-      await tx.product.update({
-        where: { id: item.productId },
-        data: { stock: { decrement: item.quantity } },
-      })
-    }
-    return tx.purchaseReturn.create({
-      data: {
-        displayId,
-        supplierId,
-        poId,
-        reason,
-        notes,
-        totalAmount,
-        items: {
-          create: items.map(i => ({
-            productId: i.productId,
-            name: i.name,
-            sku: i.sku,
-            quantity: i.quantity,
-            unitCost: i.unitCost,
-          })),
+  let ret
+  try {
+    ret = await prisma.$transaction(async (tx) => {
+      for (const item of items) {
+        const product = productById.get(item.productId)
+        if (!product) throw new Error(`Product ${item.productId} was not found`)
+        let stock = await tx.godownStock.findUnique({
+          where: { productId_godownId: { productId: item.productId, godownId: godown.id } },
+        })
+        if (!stock) {
+          const godownRowCount = await tx.godownStock.count({ where: { productId: item.productId } })
+          if (godownRowCount === 0 && product.stock > 0) {
+            stock = await tx.godownStock.create({ data: { productId: item.productId, godownId: godown.id, quantity: product.stock } })
+            await tx.stockLedger.create({
+              data: {
+                productId: item.productId,
+                godownId: godown.id,
+                entryType: 'OPENING_BALANCE',
+                quantity: product.stock,
+                balanceAfter: product.stock,
+                referenceType: 'PurchaseReturn',
+                notes: 'Legacy product stock migrated to the selected godown before supplier return',
+              },
+            })
+          }
+        }
+        const currentQty = stock?.quantity || 0
+        if (currentQty < item.quantity) {
+          throw new Error(`Insufficient stock for ${product.name} in the selected godown`)
+        }
+        const nextQty = currentQty - item.quantity
+        await tx.godownStock.upsert({
+          where: { productId_godownId: { productId: item.productId, godownId: godown.id } },
+          create: { productId: item.productId, godownId: godown.id, quantity: nextQty },
+          update: { quantity: nextQty },
+        })
+        await tx.stockLedger.create({
+          data: {
+            productId: item.productId,
+            godownId: godown.id,
+            entryType: 'OUT',
+            quantity: -item.quantity,
+            balanceAfter: nextQty,
+            referenceType: 'PurchaseReturn',
+            notes: 'Stock returned to supplier',
+          },
+        })
+        await syncProductStockFromGodowns(item.productId, tx)
+      }
+      return tx.purchaseReturn.create({
+        data: {
+          displayId,
+          supplierId,
+          poId,
+          reason,
+          notes,
+          totalAmount,
+          items: {
+            create: items.map(i => ({
+              productId: i.productId,
+              name: i.name,
+              sku: i.sku,
+              quantity: i.quantity,
+              unitCost: i.unitCost,
+            })),
+          },
         },
-      },
+      })
     })
-  })
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Could not create purchase return' }
+  }
 
   revalidatePath('/purchases')
   revalidatePath('/inventory')

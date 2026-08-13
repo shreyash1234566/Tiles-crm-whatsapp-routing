@@ -13,15 +13,26 @@ import { moveProductToDraft } from '@/app/actions/drafts';
 import { getStockGroups, createStockGroup } from '@/app/actions/stock-groups';
 import { getBatches, createBatch, getAgingAnalysis } from '@/app/actions/batches';
 import { getGodownStock, getGodowns, getStockLedger } from '@/app/actions/godowns';
+import { getStoneLots, createStoneLot, updateSlab, pairSlabs, getSampleLoans, createSampleLoan, updateSampleLoanStatus } from '@/app/actions/stone-inventory';
+import { getScrapInventory, updateScrapInventoryStatus } from '@/app/actions/manufacturing';
 import Modal from '@/components/Modal';
 import { useAlertToast } from '@/components/AlertToastProvider';
 import { getActiveVertical } from '@/lib/brand';
+import { getMaterialLabel, getTerm } from '@/lib/terminology';
 import { FINISH_VALUES, APPLICATION_AREA_VALUES, TILES_UNIT_VALUES } from '@/lib/validations/product';
 import * as XLSX from 'xlsx';
 
 // Resolved once per module load from NEXT_PUBLIC_BUSINESS_TYPE (client) — tiles inputs
 // are shown only for the tiles vertical so furniture renders unchanged (Requirement 6.7).
 const IS_TILES = getActiveVertical() === 'tiles';
+
+const inventoryUnitLabel = (product) => {
+  if (!IS_TILES) return product?.unitOfMeasure || 'PCS';
+  if (product?.isSlabTracked) return getMaterialLabel(product.materialCategory || product.material);
+  const unit = String(product?.unitOfMeasure || '').toUpperCase();
+  if (['BOX', 'SQFT', 'SQM', 'RFT'].includes(unit)) return unit;
+  return getMaterialLabel(product?.materialCategory || product?.material);
+};
 
 const stockBadge = (stock, reorderLevel) => {
   if (stock === 0) return { text: 'Out of Stock', cls: 'bg-danger-light text-danger' };
@@ -109,7 +120,7 @@ export default function InventoryPage() {
   };
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [groupForm, setGroupForm] = useState({ name: '', parentId: '' });
-  const [batchForm, setBatchForm] = useState({ productId: '', batchNumber: '', purchaseDate: '', expiryDate: '', quantity: 1, remainingQty: 1, costPrice: 0 });
+  const [batchForm, setBatchForm] = useState({ productId: '', batchNumber: '', shadeCode: '', purchaseDate: '', expiryDate: '', quantity: 1, remainingQty: 1, costPrice: 0 });
   const [deepLoading, setDeepLoading] = useState(false);
 
   // Location view state
@@ -122,6 +133,17 @@ export default function InventoryPage() {
   // Stock Ledger state
   const [ledgerEntries, setLedgerEntries] = useState([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
+
+  // Serialized granite / marble stock: a lot contains individually measured slabs.
+  const [stoneLots, setStoneLots] = useState([]);
+  const [stoneLoading, setStoneLoading] = useState(false);
+  const [showStoneLotModal, setShowStoneLotModal] = useState(false);
+  const [stoneLotForm, setStoneLotForm] = useState({ productId: '', godownId: '', lotNumber: '', origin: '', shadeCode: '', qualityGrade: '', thicknessMm: '', costPerSqft: '', notes: '', slabsText: '01/01, 120, 72' });
+  const [stoneLotPhotos, setStoneLotPhotos] = useState([]);
+  const [sampleLoans, setSampleLoans] = useState([]);
+  const [stoneOffcuts, setStoneOffcuts] = useState([]);
+  const [showSampleLoanModal, setShowSampleLoanModal] = useState(false);
+  const [sampleLoanForm, setSampleLoanForm] = useState({ customerName: '', customerPhone: '', productId: '', slabId: '', expectedReturn: '', notes: '' });
 
   useEffect(() => {
     Promise.all([getProducts(), getCategories(), getWarehouses(), getGodowns()]).then(([pRes, cRes, wRes, gdRes]) => {
@@ -137,6 +159,15 @@ export default function InventoryPage() {
     const res = await getProducts();
     if (res.success) setProducts(res.data);
   };
+
+  const loadStoneLots = useCallback(async () => {
+    setStoneLoading(true);
+    const [result, loansResult, offcutsResult] = await Promise.all([getStoneLots(), getSampleLoans(), getScrapInventory()]);
+    if (result.success) setStoneLots(result.data);
+    if (loansResult.success) setSampleLoans(loansResult.data);
+    if (offcutsResult.success) setStoneOffcuts(offcutsResult.data.filter(entry => entry.sourceSlabId));
+    setStoneLoading(false);
+  }, []);
 
   // ─── EDIT PRODUCT HANDLERS ────────────────────────
   const openEditModal = (product, e) => {
@@ -396,7 +427,11 @@ export default function InventoryPage() {
       ledgerFetched.current = true;
       loadLedger();
     }
-  }, [tab, loadDeepInventory, loadLocationData, loadLedger]);
+    if (tab === 'stoneLots' || tab === 'offcuts') {
+      const timer = setTimeout(() => { void loadStoneLots(); }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [tab, loadDeepInventory, loadLocationData, loadLedger, loadStoneLots]);
 
   const filtered = useMemo(() => {
     const base = products.filter(p =>
@@ -457,7 +492,7 @@ export default function InventoryPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-xl md:text-2xl font-bold text-foreground">Inventory & Warehouse</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-foreground">{getTerm('inventoryUnit')} Inventory & Warehouse</h1>
           <p className="text-xs md:text-sm text-muted mt-1">
             {finishedGoods.length} finished goods · {rawMaterials.length} raw materials · {godowns.length || 1} location{godowns.length !== 1 ? 's' : ''}
           </p>
@@ -471,7 +506,17 @@ export default function InventoryPage() {
               <Upload className="w-4 h-4" /> Bulk Import
             </button>
           )}
-          {!(tab === 'products' && productType === 'rawMaterial') && (
+          {tab === 'stoneLots' ? (
+            <div className="flex gap-2">
+              <button onClick={() => setShowSampleLoanModal(true)} className="flex items-center gap-2 px-4 py-2.5 bg-surface border border-border hover:border-accent/40 text-foreground rounded-xl text-sm font-semibold transition-all"><Package className="w-4 h-4" /> Issue Sample</button>
+              <button
+                onClick={() => setShowStoneLotModal(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
+              >
+                <Plus className="w-4 h-4" /> Receive Stone Lot
+              </button>
+            </div>
+          ) : tab === 'offcuts' ? null : !(tab === 'products' && productType === 'rawMaterial') && (
             <button
               onClick={() => setShowAddModal(true)}
               className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
@@ -489,6 +534,12 @@ export default function InventoryPage() {
           <button onClick={() => setTab('products')} className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs md:text-sm font-medium transition-all flex-shrink-0 ${tab === 'products' ? 'bg-accent text-white' : 'text-muted hover:text-foreground'}`}>
             <Package className="w-3.5 h-3.5" /> Products
           </button>
+          {IS_TILES && (
+            <button onClick={() => setTab('stoneLots')} className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs md:text-sm font-medium transition-all flex-shrink-0 ${tab === 'stoneLots' ? 'bg-accent text-white' : 'text-muted hover:text-foreground'}`}>
+              <Layers className="w-3.5 h-3.5" /> Lot / Slab Explorer
+            </button>
+          )}
+          {IS_TILES && <button onClick={() => setTab('offcuts')} className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs md:text-sm font-medium transition-all flex-shrink-0 ${tab === 'offcuts' ? 'bg-accent text-white' : 'text-muted hover:text-foreground'}`}><Package className="w-3.5 h-3.5" /> Stone Offcuts</button>}
           <button onClick={() => setTab('location')} className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs md:text-sm font-medium transition-all flex-shrink-0 ${tab === 'location' ? 'bg-accent text-white' : 'text-muted hover:text-foreground'}`}>
             <MapPin className="w-3.5 h-3.5" /> Location
           </button>
@@ -655,14 +706,14 @@ export default function InventoryPage() {
 
                       <div className="flex items-center justify-between">
                         {product.isRawMaterial ? (
-                          <span className="text-base font-bold text-accent">₹{(product.costPrice || 0).toLocaleString()} <span className="text-[10px] font-normal text-muted">/ {product.unitOfMeasure || 'PCS'}</span></span>
+                          <span className="text-base font-bold text-accent">₹{(product.costPrice || 0).toLocaleString()} <span className="text-[10px] font-normal text-muted">/ {inventoryUnitLabel(product)}</span></span>
                         ) : (
                           <span className="text-base font-bold text-accent">₹{product.price.toLocaleString()}</span>
                         )}
                         <span className={`badge text-[10px] ${badge.cls}`}>{badge.text}</span>
                       </div>
                       <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
-                        <span className="text-xs text-muted">{product.stock} {product.unitOfMeasure || 'PCS'} in stock</span>
+                        <span className="text-xs text-muted">{product.stock} {inventoryUnitLabel(product)} in stock</span>
                         {product.isRawMaterial ? (
                           <span className="text-xs text-muted">Reorder @ {product.reorderLevel}</span>
                         ) : (
@@ -721,11 +772,11 @@ export default function InventoryPage() {
                         </p>
                         <div className="flex items-center justify-between gap-2 mt-1.5">
                           {product.isRawMaterial ? (
-                            <span className="text-sm font-bold text-accent">₹{(product.costPrice || 0).toLocaleString()}<span className="text-[10px] font-normal text-muted"> /{product.unitOfMeasure || 'PCS'}</span></span>
+                            <span className="text-sm font-bold text-accent">₹{(product.costPrice || 0).toLocaleString()}<span className="text-[10px] font-normal text-muted"> /{inventoryUnitLabel(product)}</span></span>
                           ) : (
                             <span className="text-sm font-bold text-accent">₹{product.price.toLocaleString()}</span>
                           )}
-                          <span className="text-[11px] text-muted">{product.stock} {product.unitOfMeasure || 'PCS'} in stock</span>
+                          <span className="text-[11px] text-muted">{product.stock} {inventoryUnitLabel(product)} in stock</span>
                         </div>
                         <div className="flex items-center gap-1.5 mt-2">
                           <button
@@ -809,7 +860,7 @@ export default function InventoryPage() {
                             <td className="font-mono text-xs text-muted">{product.sku}</td>
                             <td>{product.category}</td>
                             {product.isRawMaterial ? (
-                              <td className="text-accent font-semibold">₹{(product.costPrice || 0).toLocaleString()} <span className="text-[10px] text-muted font-normal">/{product.unitOfMeasure || 'PCS'}</span></td>
+                              <td className="text-accent font-semibold">₹{(product.costPrice || 0).toLocaleString()} <span className="text-[10px] text-muted font-normal">/{inventoryUnitLabel(product)}</span></td>
                             ) : (
                               <td className="text-accent font-semibold">₹{product.price.toLocaleString()}</td>
                             )}
@@ -823,7 +874,7 @@ export default function InventoryPage() {
                             </td>
                             <td className="text-muted">{product.reorderLevel}</td>
                             {product.isRawMaterial ? (
-                              <td className="text-muted text-xs">{product.unitOfMeasure || 'PCS'}</td>
+                              <td className="text-muted text-xs">{inventoryUnitLabel(product)}</td>
                             ) : (
                               <td>{product.sold}</td>
                             )}
@@ -853,6 +904,81 @@ export default function InventoryPage() {
             </>
           )}
         </>
+      )}
+
+      {/* ─── SERIALIZED STONE LOT / SLAB EXPLORER ─── */}
+      {tab === 'stoneLots' && (
+        <div className="space-y-4">
+          <div className="glass-card p-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-foreground">Granite & Marble Lots</h2>
+              <p className="text-xs text-muted mt-1">Every slab remains individually measured, status-controlled, and traceable to its lot.</p>
+            </div>
+            <div className="flex gap-2 text-xs">
+              <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-700">{stoneLots.reduce((sum, lot) => sum + lot.availableSlabs, 0)} available slabs</span>
+              <span className="px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-700">{stoneLots.reduce((sum, lot) => sum + lot.availableSqft, 0).toFixed(2)} sq.ft available</span>
+            </div>
+          </div>
+
+          {stoneLoading ? (
+            <div className="flex justify-center py-16"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" /></div>
+          ) : stoneLots.length === 0 ? (
+            <div className="glass-card p-12 text-center">
+              <Layers className="w-10 h-10 text-accent/35 mx-auto mb-3" />
+              <p className="font-medium text-foreground">No stone lots received yet</p>
+              <p className="text-xs text-muted mt-1">Create a slab-tracked granite or marble item, then receive its physical slabs here.</p>
+            </div>
+          ) : stoneLots.map(lot => (
+            <div key={lot.id} className="glass-card overflow-hidden">
+              <div className="p-4 border-b border-border flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-semibold text-foreground">{lot.product.name}</h3>
+                    <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-surface-hover text-muted">Lot {lot.lotNumber}</span>
+                    {lot.shadeCode && <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700">Shade {lot.shadeCode}</span>}
+                  </div>
+                  <p className="text-xs text-muted mt-1">{lot.origin || 'Origin not recorded'} · {lot.qualityGrade || 'Grade not recorded'} · Cost ₹{lot.costPerSqft}/sq.ft</p>
+                </div>
+                <div className="text-sm md:text-right"><span className="font-bold text-foreground">{lot.availableSqft.toFixed(2)} sq.ft</span><span className="text-muted"> / {lot.totalSqft.toFixed(2)} sq.ft</span><p className="text-xs text-muted">{lot.availableSlabs} available · {lot.reservedSlabs} allocated</p></div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="crm-table min-w-[800px]">
+                   <thead><tr><th>Slab</th><th>Size</th><th>Measured Area</th><th>Thickness</th><th>Location</th><th>QC</th><th>Book match</th><th>Status</th><th>Action</th></tr></thead>
+                  <tbody>{lot.slabs.map(slab => (
+                    <tr key={slab.id}>
+                      <td className="font-mono text-xs text-foreground">{slab.slabNumber}</td>
+                      <td>{slab.lengthInches}″ × {slab.widthInches}″</td>
+                      <td className="font-semibold">{slab.sqft.toFixed(2)} sq.ft</td>
+                      <td>{slab.thicknessMm || lot.avgThicknessMm || '—'} mm</td>
+                      <td>{slab.godown?.name || 'Unassigned'}</td>
+                       <td>{slab.qcGrade || 'Not graded'}</td>
+                       <td><select value={slab.bookMatchPairId || ''} onChange={async e => { const result = await pairSlabs({ slabId: slab.id, partnerId: e.target.value ? Number(e.target.value) : null }); if (result.success) { notify('Book-match pairing updated.', { variant: 'success' }); loadStoneLots(); } else notify(result.error || 'Could not pair slabs', { variant: 'danger' }); }} className="px-2 py-1.5 bg-surface border border-border rounded-lg text-xs"><option value="">None</option>{lot.slabs.filter(candidate => candidate.id !== slab.id).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.slabNumber}</option>)}</select></td>
+                      <td><span className={`badge ${slab.status === 'AVAILABLE' ? 'bg-success-light text-success' : slab.status === 'SOLD' ? 'bg-surface-hover text-muted' : slab.status === 'DAMAGED' ? 'bg-danger-light text-danger' : 'bg-warning-light text-warning'}`}>{slab.status.replace('_', ' ')}</span></td>
+                      <td><select value={slab.status} onChange={async e => {
+                        const nextStatus = e.target.value;
+                        if (nextStatus === 'SOLD') { notify('Mark slabs sold from the invoice workflow so the invoice and sale value stay linked.', { variant: 'warning' }); return; }
+                        const result = await updateSlab({ slabId: slab.id, status: nextStatus });
+                        if (result.success) loadStoneLots(); else notify(result.error || 'Could not update slab', { variant: 'danger' });
+                      }} className="px-2 py-1.5 bg-surface border border-border rounded-lg text-xs text-foreground"><option value="AVAILABLE">Available</option><option value="RESERVED">Reserved</option><option value="IN_PROCESSING">In Processing</option><option value="DAMAGED">Damaged</option><option value="SOLD">Sold via Invoice</option></select></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+
+          <div className="glass-card overflow-hidden">
+            <div className="p-4 border-b border-border flex items-center justify-between"><div><h3 className="font-semibold text-foreground">Stone Samples Out</h3><p className="text-xs text-muted mt-1">Track sample pieces and sample slabs issued for customer approval. Converted slabs remain reserved until invoiced.</p></div><span className="text-xs text-muted">{sampleLoans.filter(loan => loan.status === 'OUT').length} open</span></div>
+            {sampleLoans.length === 0 ? <p className="p-5 text-sm text-muted">No sample loans recorded.</p> : <div className="overflow-x-auto"><table className="crm-table min-w-[720px]"><thead><tr><th>Customer</th><th>Sample</th><th>Issued</th><th>Expected return</th><th>Status</th><th>Close</th></tr></thead><tbody>{sampleLoans.map(loan => <tr key={loan.id}><td><div className="font-medium">{loan.contact.name}</div><div className="text-xs text-muted">{loan.contact.phone}</div></td><td>{loan.slab ? `Lot ${loan.slab.lot.lotNumber} · Slab ${loan.slab.slabNumber}` : loan.product?.name || 'Sample item'}</td><td>{new Date(loan.checkoutDate).toLocaleDateString('en-IN')}</td><td>{loan.expectedReturn ? new Date(loan.expectedReturn).toLocaleDateString('en-IN') : '—'}</td><td><span className={`badge ${loan.status === 'OUT' ? 'bg-warning-light text-warning' : loan.status === 'RETURNED' ? 'bg-success-light text-success' : 'bg-danger-light text-danger'}`}>{loan.status.replaceAll('_', ' ')}</span></td><td>{loan.status === 'OUT' ? <select defaultValue="" onChange={async e => { if (!e.target.value) return; const result = await updateSampleLoanStatus({ id: loan.id, status: e.target.value }); if (result.success) { notify('Sample loan updated.', { variant: 'success' }); loadStoneLots(); } else notify(result.error || 'Could not update sample loan', { variant: 'danger' }); }} className="px-2 py-1.5 bg-surface border border-border rounded-lg text-xs"><option value="">Close as…</option><option value="RETURNED">Returned</option><option value="LOST">Lost / damaged</option></select> : '—'}</td></tr>)}</tbody></table></div>}
+          </div>
+        </div>
+      )}
+
+      {tab === 'offcuts' && IS_TILES && (
+        <div className="space-y-4">
+          <div className="glass-card p-4"><h2 className="font-semibold text-foreground">Reusable Stone Offcuts</h2><p className="text-xs text-muted mt-1">Remnants recorded from fabrication or sold slabs, available for thresholds, sills, jambs and small tops.</p></div>
+          {stoneOffcuts.length === 0 ? <div className="glass-card p-10 text-center"><Package className="w-10 h-10 text-accent/30 mx-auto mb-3" /><p className="font-medium text-foreground">No stone offcuts recorded</p><p className="text-xs text-muted mt-1">Record remnants from the Manufacturing → Scrap Inventory tab after fabrication.</p></div> : <div className="glass-card overflow-hidden"><div className="overflow-x-auto"><table className="crm-table min-w-[820px]"><thead><tr><th>Material</th><th>Source</th><th>Size</th><th>Area</th><th>Shade</th><th>Resale price</th><th>Status</th><th>Action</th></tr></thead><tbody>{stoneOffcuts.map(offcut => <tr key={offcut.id}><td><p className="font-medium text-foreground">{offcut.rawMaterial?.name}</p><p className="text-[10px] font-mono text-muted">{offcut.rawMaterial?.sku}</p></td><td className="text-xs text-muted">{offcut.sourceSlab ? `Lot ${offcut.sourceSlab.lot?.lotNumber} · Slab ${offcut.sourceSlab.slabNumber}` : '—'}</td><td>{offcut.lengthInches || '—'}″ × {offcut.widthInches || '—'}″</td><td className="font-semibold">{offcut.areaSqft || offcut.quantity} sq.ft</td><td>{offcut.shadeCode || '—'}</td><td className="text-accent font-semibold">{offcut.salePrice ? `₹${offcut.salePrice.toLocaleString('en-IN')}` : 'On request'}</td><td><span className={`badge ${offcut.status === 'IN_STOCK' ? 'bg-success-light text-success' : 'bg-surface-hover text-muted'}`}>{offcut.status.replaceAll('_', ' ')}</span></td><td>{offcut.status === 'IN_STOCK' && <div className="flex gap-2"><button onClick={async () => { const result = await updateScrapInventoryStatus({ id: offcut.id, status: 'USED' }); if (result.success) loadStoneLots(); else notify(result.error || 'Could not update offcut', { variant: 'danger' }); }} className="text-xs text-accent hover:underline">Mark used</button><button onClick={async () => { const result = await updateScrapInventoryStatus({ id: offcut.id, status: 'DISPOSED' }); if (result.success) loadStoneLots(); else notify(result.error || 'Could not update offcut', { variant: 'danger' }); }} className="text-xs text-red-400 hover:underline">Dispose</button></div>}</td></tr>)}</tbody></table></div></div>}
+        </div>
       )}
 
       {/* ─── LOCATION VIEW TAB ─── */}
@@ -1155,6 +1281,10 @@ export default function InventoryPage() {
                   <input value={batchForm.batchNumber} onChange={e => setBatchForm(p => ({ ...p, batchNumber: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50" />
                 </div>
                 <div>
+                  <label className="block text-xs text-muted mb-1">Shade / Dye Lot</label>
+                  <input value={batchForm.shadeCode} onChange={e => setBatchForm(p => ({ ...p, shadeCode: e.target.value }))} placeholder="e.g. SH-24A" className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50" />
+                </div>
+                <div>
                   <label className="text-sm text-muted mb-1 block">Cost Price</label>
                   <input type="number" min="0" value={batchForm.costPrice} onChange={e => setBatchForm(p => ({ ...p, costPrice: e.target.value }))} className="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50" />
                 </div>
@@ -1182,10 +1312,11 @@ export default function InventoryPage() {
               <button onClick={async () => {
                 const res = await createBatch({
                   productId: Number(batchForm.productId), batchNumber: batchForm.batchNumber,
+                  shadeCode: batchForm.shadeCode || undefined,
                   purchaseDate: batchForm.purchaseDate || undefined, expiryDate: batchForm.expiryDate || undefined,
                   quantity: Number(batchForm.quantity), remainingQty: Number(batchForm.remainingQty), costPrice: Number(batchForm.costPrice)
                 });
-                if (res.success) { setShowBatchModal(false); setBatchForm({ productId: '', batchNumber: '', purchaseDate: '', expiryDate: '', quantity: 1, remainingQty: 1, costPrice: 0 }); loadDeepInventory(); }
+                if (res.success) { setShowBatchModal(false); setBatchForm({ productId: '', batchNumber: '', shadeCode: '', purchaseDate: '', expiryDate: '', quantity: 1, remainingQty: 1, costPrice: 0 }); loadDeepInventory(); }
                 else alert(res.error);
               }} disabled={!batchForm.productId || !batchForm.batchNumber} className="w-full py-2.5 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 disabled:opacity-50">Create Batch</button>
             </div>
@@ -1327,6 +1458,66 @@ export default function InventoryPage() {
         </div>
       )}
 
+      <Modal isOpen={showStoneLotModal} onClose={() => setShowStoneLotModal(false)} title="Receive Granite / Marble Lot" size="lg">
+        <form className="space-y-4" onSubmit={async e => {
+          e.preventDefault();
+          const slabs = stoneLotForm.slabsText.split('\n').map((line, index) => {
+            const [slabNumber, length, width] = line.split(',').map(value => value.trim());
+            return { slabNumber: slabNumber || String(index + 1), lengthInches: Number(length), widthInches: Number(width) };
+          }).filter(slab => slab.slabNumber && slab.lengthInches > 0 && slab.widthInches > 0);
+           if (!stoneLotForm.productId || slabs.length === 0) { notify('Select a stone item and enter valid slab rows.', { variant: 'danger' }); return; }
+           let photos = [];
+           if (stoneLotPhotos.length > 0) {
+             const formData = new FormData();
+             formData.set('folder', 'stone-lots');
+             stoneLotPhotos.forEach(file => formData.append('files', file));
+             const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+             const uploadData = await uploadRes.json();
+             if (!uploadRes.ok || !uploadData.success) { notify(uploadData.error || 'Could not upload lot photos', { variant: 'danger' }); return; }
+             photos = uploadData.urls || [];
+           }
+           const result = await createStoneLot({
+            productId: Number(stoneLotForm.productId), godownId: stoneLotForm.godownId ? Number(stoneLotForm.godownId) : undefined,
+            lotNumber: stoneLotForm.lotNumber, origin: stoneLotForm.origin || undefined, shadeCode: stoneLotForm.shadeCode || undefined,
+            qualityGrade: stoneLotForm.qualityGrade || undefined, avgThicknessMm: stoneLotForm.thicknessMm ? Number(stoneLotForm.thicknessMm) : undefined,
+             costPerSqft: Number(stoneLotForm.costPerSqft) || 0, notes: stoneLotForm.notes || undefined, photos, slabs,
+           });
+           if (result.success) { setShowStoneLotModal(false); setStoneLotPhotos([]); setStoneLotForm({ productId: '', godownId: '', lotNumber: '', origin: '', shadeCode: '', qualityGrade: '', thicknessMm: '', costPerSqft: '', notes: '', slabsText: '01/01, 120, 72' }); await loadStoneLots(); notify('Stone lot received with individually measured slabs.', { variant: 'success' }); }
+          else notify(result.error || 'Could not receive stone lot', { variant: 'danger' });
+        }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div><label className="text-xs text-muted block mb-1">Stone item *</label><select required value={stoneLotForm.productId} onChange={e => setStoneLotForm(form => ({ ...form, productId: e.target.value }))} className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm"><option value="">Select slab-tracked item</option>{products.filter(product => product.isSlabTracked).map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></div>
+            <div><label className="text-xs text-muted block mb-1">Stone yard / godown</label><select value={stoneLotForm.godownId} onChange={e => setStoneLotForm(form => ({ ...form, godownId: e.target.value }))} className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm"><option value="">Unassigned</option>{godowns.map(godown => <option key={godown.id} value={godown.id}>{godown.name}</option>)}</select></div>
+            <div><label className="text-xs text-muted block mb-1">Lot number *</label><input required value={stoneLotForm.lotNumber} onChange={e => setStoneLotForm(form => ({ ...form, lotNumber: e.target.value }))} placeholder="e.g. TB-2608-A" className="w-full" /></div>
+            <div><label className="text-xs text-muted block mb-1">Shade / block code</label><input value={stoneLotForm.shadeCode} onChange={e => setStoneLotForm(form => ({ ...form, shadeCode: e.target.value }))} placeholder="e.g. TB-AUG-26" className="w-full" /></div>
+            <div><label className="text-xs text-muted block mb-1">Quarry / origin</label><input value={stoneLotForm.origin} onChange={e => setStoneLotForm(form => ({ ...form, origin: e.target.value }))} placeholder="e.g. Andhra Pradesh" className="w-full" /></div>
+            <div><label className="text-xs text-muted block mb-1">Grade</label><input value={stoneLotForm.qualityGrade} onChange={e => setStoneLotForm(form => ({ ...form, qualityGrade: e.target.value }))} placeholder="Premium / Grade A" className="w-full" /></div>
+            <div><label className="text-xs text-muted block mb-1">Thickness (mm)</label><input type="number" min="1" step="0.1" value={stoneLotForm.thicknessMm} onChange={e => setStoneLotForm(form => ({ ...form, thicknessMm: e.target.value }))} className="w-full" /></div>
+            <div><label className="text-xs text-muted block mb-1">Cost / sq.ft (₹)</label><input type="number" min="0" value={stoneLotForm.costPerSqft} onChange={e => setStoneLotForm(form => ({ ...form, costPerSqft: e.target.value }))} className="w-full" /></div>
+          </div>
+          <div><label className="text-xs text-muted block mb-1">Slabs *</label><textarea required rows={5} value={stoneLotForm.slabsText} onChange={e => setStoneLotForm(form => ({ ...form, slabsText: e.target.value }))} placeholder={'One per line: slab number, length in inches, width in inches\n01/01, 120, 72'} className="w-full" /><p className="text-[11px] text-muted mt-1">Area is calculated automatically as length × width ÷ 144. Do not receive slabs as product quantity.</p></div>
+          <div><label className="text-xs text-muted block mb-1">Lot / slab photos</label><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={e => setStoneLotPhotos(Array.from(e.target.files || []).slice(0, 5))} className="w-full text-xs" /><p className="text-[11px] text-muted mt-1">Upload up to five photos for vein, shade and QC reference.</p></div>
+          <div><label className="text-xs text-muted block mb-1">Notes</label><textarea rows={2} value={stoneLotForm.notes} onChange={e => setStoneLotForm(form => ({ ...form, notes: e.target.value }))} className="w-full" /></div>
+          <button className="w-full py-2.5 bg-accent text-white rounded-xl text-sm font-semibold">Receive lot and slabs</button>
+        </form>
+      </Modal>
+
+      <Modal isOpen={showSampleLoanModal} onClose={() => setShowSampleLoanModal(false)} title="Issue Stone Sample" size="md">
+        <form className="space-y-4" onSubmit={async e => {
+          e.preventDefault();
+          const result = await createSampleLoan({ customerName: sampleLoanForm.customerName, customerPhone: sampleLoanForm.customerPhone, productId: sampleLoanForm.productId ? Number(sampleLoanForm.productId) : undefined, slabId: sampleLoanForm.slabId ? Number(sampleLoanForm.slabId) : undefined, expectedReturn: sampleLoanForm.expectedReturn || undefined, notes: sampleLoanForm.notes || undefined });
+          if (result.success) { setShowSampleLoanModal(false); setSampleLoanForm({ customerName: '', customerPhone: '', productId: '', slabId: '', expectedReturn: '', notes: '' }); await loadStoneLots(); notify('Sample issued and recorded.', { variant: 'success' }); }
+          else notify(result.error || 'Could not issue sample', { variant: 'danger' });
+        }}>
+          <div className="grid grid-cols-2 gap-3"><div><label className="text-xs text-muted block mb-1">Customer name *</label><input required value={sampleLoanForm.customerName} onChange={e => setSampleLoanForm(form => ({ ...form, customerName: e.target.value }))} className="w-full" /></div><div><label className="text-xs text-muted block mb-1">Phone *</label><input required minLength="10" value={sampleLoanForm.customerPhone} onChange={e => setSampleLoanForm(form => ({ ...form, customerPhone: e.target.value }))} className="w-full" /></div></div>
+          <div><label className="text-xs text-muted block mb-1">Sample slab (optional)</label><select value={sampleLoanForm.slabId} onChange={e => setSampleLoanForm(form => ({ ...form, slabId: e.target.value, productId: e.target.value ? '' : form.productId }))} className="w-full"><option value="">Select a physical slab</option>{stoneLots.flatMap(lot => lot.slabs.filter(slab => slab.status === 'AVAILABLE').map(slab => <option key={slab.id} value={slab.id}>{lot.product.name} · Lot {lot.lotNumber} · {slab.slabNumber} ({slab.sqft.toFixed(2)} sq.ft)</option>))}</select></div>
+          <div><label className="text-xs text-muted block mb-1">Sample item (optional)</label><select value={sampleLoanForm.productId} onChange={e => setSampleLoanForm(form => ({ ...form, productId: e.target.value, slabId: e.target.value ? '' : form.slabId }))} className="w-full"><option value="">Select catalog item</option>{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select><p className="text-[11px] text-muted mt-1">Select a slab or a catalog item. A slab is reserved until it is returned or closed.</p></div>
+          <div><label className="text-xs text-muted block mb-1">Expected return</label><input type="date" value={sampleLoanForm.expectedReturn} onChange={e => setSampleLoanForm(form => ({ ...form, expectedReturn: e.target.value }))} className="w-full" /></div>
+          <div><label className="text-xs text-muted block mb-1">Notes</label><textarea rows={2} value={sampleLoanForm.notes} onChange={e => setSampleLoanForm(form => ({ ...form, notes: e.target.value }))} className="w-full" /></div>
+          <button className="w-full py-2.5 bg-accent text-white rounded-xl text-sm font-semibold">Issue sample</button>
+        </form>
+      </Modal>
+
       {/* Add Product / Raw Material Modal */}
       <Modal
         isOpen={showAddModal}
@@ -1392,6 +1583,12 @@ export default function InventoryPage() {
             applicationArea: f.applicationArea?.value || undefined,
             coveragePerBox: f.coveragePerBox?.value ? Number(f.coveragePerBox.value) : undefined,
             tilesPerBox: f.tilesPerBox?.value ? Number(f.tilesPerBox.value) : undefined,
+            materialCategory: f.materialCategory?.value || undefined,
+            isSlabTracked: f.isSlabTracked?.checked || false,
+            origin: f.origin?.value || undefined,
+            thicknessMm: f.thicknessMm?.value ? Number(f.thicknessMm.value) : undefined,
+            qualityGrade: f.qualityGrade?.value || undefined,
+            bookMatchPair: f.bookMatchPair?.checked || false,
           } : {};
           const unitOfMeasure = isRawMode
             ? (f.unitOfMeasure?.value || 'PCS')
@@ -1462,7 +1659,7 @@ export default function InventoryPage() {
                 {tab === 'products' && productType === 'rawMaterial' ? 'Material Name' : 'Product Name'} *
               </label>
               <input type="text" name="productName" required
-                placeholder={tab === 'products' && productType === 'rawMaterial' ? 'e.g., Sheesham Wood Plank' : 'e.g., Royal L-Shaped Sofa'}
+                placeholder={tab === 'products' && productType === 'rawMaterial' ? (IS_TILES ? 'e.g., Tile Adhesive / Grout' : 'e.g., Sheesham Wood Plank') : (IS_TILES ? 'e.g., Black Galaxy Granite Slab' : 'e.g., Royal L-Shaped Sofa')}
                 className="w-full" />
             </div>
             <div>
@@ -1527,13 +1724,19 @@ export default function InventoryPage() {
             </div>
           ) : null}
 
-          {/* Tiles & Sanitary attributes — shown only for the tiles vertical (Requirement 6.1, 6.3, 6.5, 6.6) */}
+          {/* TGM attributes — shown only for the combined tiles, granite & marble vertical. */}
           {IS_TILES && !(tab === 'products' && productType === 'rawMaterial') && (
             <div className="p-3 bg-accent/5 border border-accent/20 rounded-xl space-y-4">
               <p className="text-xs font-semibold text-accent flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5" /> Tiles &amp; Sanitary Details
+                <Layers className="w-3.5 h-3.5" /> Tiles, Granite &amp; Marble Details
               </p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-muted mb-1.5">Material Category</label>
+                  <select name="materialCategory" defaultValue="TILE" className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground">
+                    <option value="TILE">Tile</option><option value="GRANITE">Granite</option><option value="MARBLE">Marble</option><option value="QUARTZITE">Quartzite</option><option value="SANDSTONE">Sandstone / Kota</option><option value="ENGINEERED_QUARTZ">Engineered Quartz</option><option value="ADHESIVE_GROUT">Adhesive / Grout</option><option value="TRIM_PROFILE">Trim / Edge Profile</option><option value="OTHER">Other</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-medium text-muted mb-1.5">Unit of Measure</label>
                   <select name="unitOfMeasure" defaultValue="PCS" className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground">
@@ -1579,13 +1782,22 @@ export default function InventoryPage() {
                 <label className="block text-xs font-medium text-muted mb-1.5">Surface Type</label>
                 <input type="text" name="surfaceType" placeholder="e.g., Vitrified, Ceramic, Anti-skid" className="w-full" />
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div><label className="block text-xs font-medium text-muted mb-1.5">Quarry / Origin</label><input name="origin" placeholder="e.g., Rajasthan - Makrana" className="w-full" /></div>
+                <div><label className="block text-xs font-medium text-muted mb-1.5">Thickness (mm)</label><input type="number" min="1" step="0.1" name="thicknessMm" placeholder="e.g., 18" className="w-full" /></div>
+                <div><label className="block text-xs font-medium text-muted mb-1.5">Quality Grade</label><input name="qualityGrade" placeholder="Premium / Grade A" className="w-full" /></div>
+              </div>
+              <div className="flex flex-wrap gap-5 text-xs text-muted">
+                <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" name="isSlabTracked" className="accent-accent" /> Track as unique physical slabs <span className="text-[10px]">(granite/marble; receive through Lot Explorer)</span></label>
+                <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" name="bookMatchPair" className="accent-accent" /> Supports book matching</label>
+              </div>
             </div>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-muted mb-1.5">Stock Quantity</label>
-              <input type="number" name="stock" placeholder="0" className="w-full" />
+              <input type="number" name="stock" placeholder={IS_TILES ? '0 (keep 0 for slab-tracked stone)' : '0'} className="w-full" />
             </div>
             <div>
               <label className="block text-xs font-medium text-muted mb-1.5">Reorder Level</label>

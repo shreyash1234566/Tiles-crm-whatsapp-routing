@@ -3,7 +3,7 @@ setup_inbound_dispatch.py
 ─────────────────────────
 Creates a SIP Dispatch Rule in LiveKit so that inbound calls
 (someone calling the Vobiz/SIP number) are automatically routed
-to the 'furniture-crm-agent' AI worker.
+to the AI worker configured for the active business vertical.
 
 Run once from the VPS after setting up the inbound SIP trunk:
     python setup_inbound_dispatch.py
@@ -22,7 +22,8 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 # This is the LiveKit INBOUND trunk (ST_9bvtevghR8Fk = "inbound ai calling agent")
 # It is DIFFERENT from the outbound trunk (ST_tid7UwRXffGP)
 INBOUND_TRUNK_ID = "ST_9bvtevghR8Fk"
-AGENT_NAME       = "furniture-crm-agent"
+IS_TGM           = os.getenv("BUSINESS_TYPE", "furniture").strip().lower() == "tiles"
+AGENT_NAME       = os.getenv("LIVEKIT_AGENT_NAME", "tgm-crm-agent" if IS_TGM else "furniture-crm-agent")
 AGENT_METADATA   = '{"call_type": "inbound"}'
 
 
@@ -98,7 +99,7 @@ async def main():
         print(f"   Rule ID   : {rule.sip_dispatch_rule_id}")
         print(f"   Trunk IDs : {rule.trunk_ids}")
         print()
-        print("Inbound SIP calls will now be dispatched to 'furniture-crm-agent'.")
+        print(f"Inbound SIP calls will now be dispatched to '{AGENT_NAME}'.")
         print("Test: call your Vobiz number and watch: docker compose logs ai-agent -f")
 
     except Exception as exc:

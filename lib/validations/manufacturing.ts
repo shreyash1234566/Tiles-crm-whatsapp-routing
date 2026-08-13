@@ -1,8 +1,31 @@
 import { z } from 'zod'
+import { getActiveVertical } from '@/lib/brand'
+
+const TGM_WORK_CENTER_TYPES = [
+  'Gangsaw / Block-Cutting',
+  'CNC / Waterjet Cutting',
+  'Edge Profiling',
+  'Polishing',
+  'Resin & Epoxy Filling',
+  'Line Polishing / Calibration',
+  'Template & Site Measurement',
+  'QC / Grading',
+  'Packing & Crating',
+  'General',
+] as const
+
+const FURNITURE_WORK_CENTER_TYPES = [
+  'Carpentry', 'Polishing', 'Upholstery', 'Finishing', 'Assembly', 'QC', 'Packaging', 'General',
+] as const
+
+const workCenterTypeSchema = z.string().refine(value => {
+  const allowed = getActiveVertical() === 'tiles' ? TGM_WORK_CENTER_TYPES : FURNITURE_WORK_CENTER_TYPES
+  return (allowed as readonly string[]).includes(value)
+}, 'Select a valid work-center type for the active business vertical')
 
 export const createWorkCenterSchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  type: z.string().default('General'),
+  type: workCenterTypeSchema.default('General'),
   description: z.string().optional(),
   capacity: z.number().min(1).default(1),
   notes: z.string().optional(),
@@ -57,6 +80,15 @@ export const completeProductionSchema = z.object({
   qualityStatus: z.enum(['PASSED', 'FAILED', 'PARTIAL']).default('PASSED'),
   qualityNotes: z.string().optional(),
   notes: z.string().optional(),
+  stoneOffcuts: z.array(z.object({
+    sourceSlabId: z.number().int().positive(),
+    lengthInches: z.number().positive(),
+    widthInches: z.number().positive(),
+    shadeCode: z.string().trim().optional(),
+    photo: z.string().trim().optional(),
+    salePrice: z.number().int().min(0).optional(),
+    notes: z.string().trim().optional(),
+  })).optional(),
   consumptions: z.array(z.object({
     rawMaterialId: z.number(),
     issuedQty: z.number().min(0).default(0),  // Qty issued to production floor

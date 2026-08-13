@@ -6,7 +6,7 @@
  * The shared CRM serves two verticals selected by the `BUSINESS_TYPE`
  * environment variable:
  *   - `furniture` → the existing "Furzentic" brand (the default)
- *   - `tiles`     → the new "Homzentic" brand
+ *   - `tiles`     → the "Homzentic" tiles, granite & marble brand
  *
  * Everything brand-related (app metadata, favicon, logo/contact rendering,
  * WhatsApp templates, upload-dir naming, terminology) derives from the
@@ -95,8 +95,8 @@ const FURNITURE_BRAND: BrandIdentity = {
 }
 
 /**
- * Tiles ("Homzentic") identity — the new brand for the tiles &
- * sanitary showroom vertical.
+ * Tiles ("Homzentic") identity — the combined tiles, granite & marble
+ * showroom vertical.
  */
 const TILES_BRAND: BrandIdentity = {
     vertical: 'tiles',
@@ -104,7 +104,7 @@ const TILES_BRAND: BrandIdentity = {
     shortName: 'Homzentic',
     title: 'Homzentic — Smart Showroom Manager',
     description:
-        'AI-powered CRM for tiles & sanitary showrooms. Manage leads, appointments, catalog, quotations, and more.',
+        'AI-powered CRM for tiles, granite & marble showrooms. Manage leads, lots, slabs, fabrication jobs, quotations, and more.',
     tagline: 'Smart Showroom Manager',
     logo: '/logo.png',
     favicon: '/favicon.ico',

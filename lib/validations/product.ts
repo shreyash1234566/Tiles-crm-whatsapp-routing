@@ -1,12 +1,23 @@
 import { z } from 'zod'
 
 /**
- * Tiles & Sanitary attribute value sets (Requirement 6.5, 6.6).
+ * Tiles, granite & marble attribute value sets.
  * Exported so the product form can render the same selectable options
  * it validates against.
  */
-export const FINISH_VALUES = ['glossy', 'matte', 'rustic'] as const
-export const APPLICATION_AREA_VALUES = ['floor', 'wall', 'bathroom'] as const
+export const FINISH_VALUES = [
+  'glossy', 'matte', 'satin', 'rustic', 'anti-skid',
+  'polished', 'honed', 'leathered', 'flamed', 'river-washed',
+  'bush-hammered', 'sandblasted', 'antique',
+] as const
+export const APPLICATION_AREA_VALUES = [
+  'floor', 'wall', 'bathroom', 'kitchen_platform', 'wall_cladding',
+  'staircase', 'window_sill', 'outdoor',
+] as const
+export const MATERIAL_CATEGORY_VALUES = [
+  'TILE', 'GRANITE', 'MARBLE', 'QUARTZITE', 'SANDSTONE',
+  'ENGINEERED_QUARTZ', 'ADHESIVE_GROUT', 'TRIM_PROFILE', 'OTHER',
+] as const
 
 /**
  * Unit-of-measure options surfaced for the tiles vertical: `SQFT` and `BOX`
@@ -15,7 +26,7 @@ export const APPLICATION_AREA_VALUES = ['floor', 'wall', 'bathroom'] as const
  * raw-material units (KG, L, M, SET, ROLL, …) remain valid; the curated set
  * below drives the tiles UI only.
  */
-export const TILES_UNIT_VALUES = ['PCS', 'SQFT', 'BOX'] as const
+export const TILES_UNIT_VALUES = ['PCS', 'SQFT', 'SQM', 'BOX', 'SLAB', 'RFT'] as const
 
 /** Treat empty strings / null as "not provided" so optional tiles fields stay optional. */
 const emptyToUndefined = (v: unknown) => (v === '' || v === null ? undefined : v)
@@ -39,20 +50,26 @@ export const createProductSchema = z.object({
   unitSize: z.number().positive().default(1),
   godownId: z.number().optional(), // Which godown receives the initial stock
 
-  // ── Tiles & Sanitary attributes (nullable, additive — Requirement 6.1, 6.2) ──
+  // ── Tiles, granite & marble attributes ──
+  materialCategory: z.preprocess(emptyToUndefined, z.enum(MATERIAL_CATEGORY_VALUES).optional()),
+  isSlabTracked: z.boolean().default(false),
+  origin: z.preprocess(emptyToUndefined, z.string().optional()),
+  thicknessMm: z.preprocess(emptyToUndefined, z.number().positive().optional()),
+  qualityGrade: z.preprocess(emptyToUndefined, z.string().optional()),
+  bookMatchPair: z.boolean().default(false),
   tileSize: z.preprocess(emptyToUndefined, z.string().optional()),
   finish: z.preprocess(
     emptyToUndefined,
-    z.enum(FINISH_VALUES, { message: 'Finish must be glossy, matte, or rustic' }).optional(),
+    z.enum(FINISH_VALUES, { message: 'Enter a supported tile or stone finish' }).optional(),
   ),
   coveragePerBox: z.preprocess(emptyToUndefined, z.number().positive().optional()),
   tilesPerBox: z.preprocess(emptyToUndefined, z.number().int().positive().optional()),
   surfaceType: z.preprocess(emptyToUndefined, z.string().optional()),
   applicationArea: z.preprocess(
-    emptyToUndefined,
-    z
-      .enum(APPLICATION_AREA_VALUES, {
-        message: 'Application area must be floor, wall, or bathroom',
+      emptyToUndefined,
+      z
+        .enum(APPLICATION_AREA_VALUES, {
+        message: 'Enter a supported tile or stone application area',
       })
       .optional(),
   ),

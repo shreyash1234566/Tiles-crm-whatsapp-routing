@@ -35,6 +35,7 @@ export const createPurchaseOrderSchema = z.object({
 export const createPurchaseReturnSchema = z.object({
   supplierId: z.number(),
   poId: z.number().optional(),
+  godownId: z.number().int().positive().optional(),
   reason: z.string().min(1, 'Reason is required'),
   notes: z.string().optional(),
   items: z.array(z.object({

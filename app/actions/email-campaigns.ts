@@ -6,6 +6,7 @@ import { requireRole } from '@/lib/auth-helpers'
 import { z } from 'zod'
 import { sendBulkEmails, replaceVariables, testSmtpConnection, sendTestEmail, getSmtpConfig } from '@/lib/email'
 import type { SmtpConfig } from '@/lib/email'
+import { getBrand } from '@/lib/brand'
 
 // ─── VALIDATION SCHEMAS ─────────────────────────────
 
@@ -303,7 +304,7 @@ export async function sendEmailCampaign(campaignId: number) {
   // Prepare common template variables
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
   const commonVars: Record<string, string> = {
-    storeName: storeSettings?.storeName || 'Furniture Store',
+    storeName: storeSettings?.storeName || getBrand().name,
     storePhone: storeSettings?.phone || '',
     storeEmail: storeSettings?.email || '',
     storeAddress: storeSettings?.address || '',
@@ -430,7 +431,10 @@ export async function getCampaignAnalytics(campaignId: number) {
   })
 
   // A/B test breakdown
-  let abStats = null
+  let abStats: {
+    A: { sent: number; opened: number; clicked: number; openRate: number; clickRate: number }
+    B: { sent: number; opened: number; clicked: number; openRate: number; clickRate: number }
+  } | null = null
   if (campaign.isABTest) {
     const variantA = campaign.recipients.filter(r => r.variant === 'A')
     const variantB = campaign.recipients.filter(r => r.variant === 'B')

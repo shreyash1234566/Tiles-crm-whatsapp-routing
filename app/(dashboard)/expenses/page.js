@@ -9,7 +9,7 @@ import {
   XCircle, Clock, AlertTriangle, RefreshCw, Settings2, Repeat, Edit3,
   ArrowUpRight, ArrowDownRight, X, ChevronLeft, Check, Eye,
   TreePine, Truck, Package, Coffee, Fuel, Home, Zap, Wrench, Paperclip,
-  FileText, Megaphone, Factory, Store, HardHat, Landmark,
+  FileText, Megaphone, Factory, Store, HardHat, Landmark, Layers, Warehouse,
 } from 'lucide-react';
 import Modal from '@/components/Modal';
 import { useAlertToast } from '@/components/AlertToastProvider';
@@ -23,10 +23,13 @@ import {
   getExpenseSummary, getBudgetVsActual,
 } from '@/app/actions/expenses';
 import { moveExpenseToDraft } from '@/app/actions/drafts';
+import { getActiveVertical } from '@/lib/brand';
+
+const IS_TGM = getActiveVertical() === 'tiles';
 
 const ICON_MAP = {
   TreePine, Truck, Package, Coffee, Fuel, Home, Zap, Wrench,
-  FileText, Megaphone, Factory, Store, HardHat, Landmark, MoreHorizontal,
+  FileText, Megaphone, Factory, Store, HardHat, Landmark, Layers, Warehouse, MoreHorizontal,
 };
 
 const PAYMENT_MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Cheque', 'Credit'];
@@ -124,24 +127,30 @@ export default function ExpensesPage() {
     }
   }, [dateRange.from, dateRange.to]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadData(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadData]);
   // Initial load on mount; re-runs when the date range changes.
 
   // Load summary when tab changes to analytics/budget, with loading states
   useEffect(() => {
-    if (tab === 'analytics') {
-      setSummary(null); // clear stale data
-      setAnalyticsLoading(true);
-      getExpenseSummary(dateRange.from, dateRange.to)
-        .then(r => { if (r.success) setSummary(r.data); })
-        .finally(() => setAnalyticsLoading(false));
-    }
-    if (tab === 'budget') {
-      setBudgetLoading(true);
-      getBudgetVsActual(selectedMonth)
-        .then(r => { if (r.success) setBudgetData(r.data); })
-        .finally(() => setBudgetLoading(false));
-    }
+    const timer = window.setTimeout(() => {
+      if (tab === 'analytics') {
+        setSummary(null); // clear stale data
+        setAnalyticsLoading(true);
+        getExpenseSummary(dateRange.from, dateRange.to)
+          .then(r => { if (r.success) setSummary(r.data); })
+          .finally(() => setAnalyticsLoading(false));
+      }
+      if (tab === 'budget') {
+        setBudgetLoading(true);
+        getBudgetVsActual(selectedMonth)
+          .then(r => { if (r.success) setBudgetData(r.data); })
+          .finally(() => setBudgetLoading(false));
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [tab, dateRange, selectedMonth]);
 
   // ─── FILTERED EXPENSES ─────────────────────────
@@ -469,7 +478,7 @@ export default function ExpensesPage() {
                   onChange={e => setExpForm(f => ({ ...f, amount: e.target.value }))}
                   className="w-full pl-8 pr-3 py-2 bg-surface border border-border rounded-xl text-sm focus:outline-none focus:border-accent/50" />
               </div>
-              <input type="text" placeholder="Description (e.g. Teak wood 50kg)" value={expForm.description}
+              <input type="text" placeholder={IS_TGM ? 'Description (e.g. Black Galaxy slab loading)' : 'Description (e.g. Teak wood 50kg)'} value={expForm.description}
                 onChange={e => setExpForm(f => ({ ...f, description: e.target.value }))}
                 className="px-3 py-2 bg-surface border border-border rounded-xl text-sm w-full sm:col-span-4 focus:outline-none focus:border-accent/50" />
               <select value={expForm.paymentMode} onChange={e => setExpForm(f => ({ ...f, paymentMode: e.target.value }))}
@@ -1117,14 +1126,14 @@ export default function ExpensesPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-muted mb-1.5">Description <span className="text-red-500">*</span></label>
-            <input type="text" placeholder="e.g. Teak wood 50kg from Rajesh Timber" value={expForm.description}
+            <input type="text" placeholder={IS_TGM ? 'e.g. 20kg tile adhesive from supplier' : 'e.g. Teak wood 50kg from Rajesh Timber'} value={expForm.description}
               onChange={e => setExpForm(f => ({ ...f, description: e.target.value }))}
               className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm focus:outline-none focus:border-accent/50" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-muted mb-1.5">Vendor / Paid To</label>
-              <input type="text" placeholder="e.g. Rajesh Timber Co." value={expForm.vendor}
+            <input type="text" placeholder={IS_TGM ? 'e.g. Marble & Granite Supplier' : 'e.g. Rajesh Timber Co.'} value={expForm.vendor}
                 onChange={e => setExpForm(f => ({ ...f, vendor: e.target.value }))}
                 className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm focus:outline-none focus:border-accent/50" />
             </div>

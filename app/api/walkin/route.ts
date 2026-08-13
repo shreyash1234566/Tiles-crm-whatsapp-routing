@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { z } from 'zod'
+import { getActiveVertical } from '@/lib/brand'
 
 const walkinFormSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   phone: z.string().min(10, 'Valid phone number required'),
   requirement: z.string().min(1, 'Please tell us what you are looking for'),
+  roomType: z.string().optional(),
+  materialCategory: z.string().optional(),
+  applicationArea: z.string().optional(),
+  areaSqft: z.number().positive().optional(),
   budget: z.string().optional(),
 })
 
@@ -22,7 +27,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const { name, phone, requirement, budget } = parsed.data
+    const { name, phone, requirement, roomType, materialCategory, applicationArea, areaSqft, budget } = parsed.data
 
     // Find or create contact
     let contact = await prisma.contact.findFirst({ where: { phone } })
@@ -37,6 +42,10 @@ export async function POST(req: NextRequest) {
       data: {
         contactId: contact.id,
         requirement,
+        roomType: roomType || null,
+        materialCategory: materialCategory || null,
+        applicationArea: applicationArea || null,
+        areaSqft: areaSqft ?? null,
         budget: budget || null,
         date: now,
         time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
@@ -59,12 +68,12 @@ export async function GET() {
   try {
     const settings = await prisma.storeSettings.findFirst({ where: { id: 1 } })
     return NextResponse.json({
-      storeName: settings?.storeName || 'Furniture Store',
+      storeName: settings?.storeName || (getActiveVertical() === 'tiles' ? 'Tiles, Granite & Marble Showroom' : 'Furniture Store'),
       logo: settings?.logo || null,
     })
   } catch {
     return NextResponse.json({
-      storeName: 'Furniture Store',
+      storeName: getActiveVertical() === 'tiles' ? 'Tiles, Granite & Marble Showroom' : 'Furniture Store',
       logo: null,
     })
   }

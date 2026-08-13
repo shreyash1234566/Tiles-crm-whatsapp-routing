@@ -48,6 +48,7 @@ export async function getDashboardStats() {
     fieldVisitActivity,
     revenueMtd,
     revenuePrevMtd,
+    sqftSoldMtd,
     leadsMtd,
     leadsPrevMtd,
     wonMtd,
@@ -58,11 +59,15 @@ export async function getDashboardStats() {
     overdueInvoices,
     dueFollowUps,
     leadsByStatus,
+    availableStone,
+    stoneStatusCounts,
+    pendingFabricationJobs,
+    stoneLotAlerts,
     leadsBySource,
     wonBySource,
   ] = await Promise.all([
-    prisma.lead.count({ where: { date: { gte: today } } }),
-    prisma.appointment.count({ where: { date: { gte: today }, status: 'Scheduled' } }),
+    prisma.lead.count({ where: { date: { gte: today, lte: todayEnd } } }),
+    prisma.appointment.count({ where: { date: { gte: today, lte: todayEnd }, status: 'Scheduled' } }),
     prisma.order.count({ where: { status: { in: ['CONFIRMED', 'PROCESSING', 'SHIPPED'] } } }),
     prisma.order.aggregate({ _sum: { amount: true } }),
     prisma.lead.findMany({
@@ -71,7 +76,7 @@ export async function getDashboardStats() {
       include: { contact: true },
     }),
     prisma.appointment.findMany({
-      where: { status: 'Scheduled' },
+      where: { status: 'Scheduled', date: { gte: today } },
       take: 5,
       orderBy: { date: 'asc' },
       include: { contact: true },
@@ -82,7 +87,7 @@ export async function getDashboardStats() {
       where: { sold: { gt: 0 } },
     }),
     // Raw query to get products where stock <= reorderLevel
-    prisma.$queryRaw`SELECT id, name, "categoryId", stock, "reorderLevel", image FROM "Product" WHERE stock <= "reorderLevel" ORDER BY stock ASC LIMIT 10` as Promise<any[]>,
+    prisma.$queryRaw`SELECT id, name, "categoryId", stock, "reorderLevel", image FROM "Product" WHERE "isSlabTracked" = false AND stock <= "reorderLevel" ORDER BY stock ASC LIMIT 10` as Promise<any[]>,
     // Recent field visits — scheduled, in progress, and completed today
     prisma.fieldVisit.findMany({
       where: {
@@ -100,27 +105,35 @@ export async function getDashboardStats() {
       take: 10,
     }),
     prisma.invoice.aggregate({
-      where: { invoiceStatus: 'ACTIVE', date: { gte: monthStart, lte: todayEnd } },
+      where: { invoiceStatus: 'ACTIVE', heldAt: null, date: { gte: monthStart, lte: todayEnd } },
       _sum: { total: true },
     }),
     prisma.invoice.aggregate({
-      where: { invoiceStatus: 'ACTIVE', date: { gte: prevMonthStart, lte: prevMonthComparableEnd } },
+      where: { invoiceStatus: 'ACTIVE', heldAt: null, date: { gte: prevMonthStart, lte: prevMonthComparableEnd } },
       _sum: { total: true },
+    }),
+    prisma.invoiceItem.aggregate({
+      where: {
+        invoice: { invoiceStatus: 'ACTIVE', heldAt: null, date: { gte: monthStart, lte: todayEnd } },
+        unitOfMeasure: { in: ['SQFT', 'SQM', 'SLAB'] },
+      },
+      _sum: { areaSqft: true },
     }),
     prisma.lead.count({ where: { date: { gte: monthStart, lte: todayEnd } } }),
     prisma.lead.count({ where: { date: { gte: prevMonthStart, lte: prevMonthComparableEnd } } }),
     prisma.lead.count({ where: { status: 'WON', date: { gte: monthStart, lte: todayEnd } } }),
     prisma.lead.count({ where: { status: 'WON', date: { gte: prevMonthStart, lte: prevMonthComparableEnd } } }),
-    prisma.invoice.count({ where: { invoiceStatus: 'ACTIVE', date: { gte: monthStart, lte: todayEnd } } }),
-    prisma.invoice.count({ where: { invoiceStatus: 'ACTIVE', date: { gte: prevMonthStart, lte: prevMonthComparableEnd } } }),
+    prisma.invoice.count({ where: { invoiceStatus: 'ACTIVE', heldAt: null, date: { gte: monthStart, lte: todayEnd } } }),
+    prisma.invoice.count({ where: { invoiceStatus: 'ACTIVE', heldAt: null, date: { gte: prevMonthStart, lte: prevMonthComparableEnd } } }),
     prisma.invoice.aggregate({
-      where: { invoiceStatus: 'ACTIVE', balanceDue: { gt: 0 } },
+      where: { invoiceStatus: 'ACTIVE', heldAt: null, balanceDue: { gt: 0 } },
       _sum: { balanceDue: true },
       _count: { id: true },
     }),
     prisma.invoice.findMany({
       where: {
         invoiceStatus: 'ACTIVE',
+        heldAt: null,
         balanceDue: { gt: 0 },
         dueDate: { lt: today },
       },
@@ -147,6 +160,25 @@ export async function getDashboardStats() {
     prisma.lead.groupBy({
       by: ['status'],
       _count: true,
+    }),
+    prisma.slab.aggregate({
+      where: { status: 'AVAILABLE' },
+      _sum: { sqft: true },
+      _count: { _all: true },
+    }),
+    prisma.slab.groupBy({ by: ['status'], _count: true }),
+    prisma.customOrder.count({ where: { status: { in: ['MEASUREMENT_SCHEDULED', 'IN_PRODUCTION', 'QUALITY_CHECK'] } } }),
+    prisma.stoneLot.findMany({
+      where: {
+        totalSlabs: { gt: 0 },
+        OR: [
+          { availableSqft: { lte: 50 } },
+          { status: { in: ['ALLOCATED', 'SOLD_OUT'] } },
+        ],
+      },
+      include: { product: { select: { name: true } }, slabs: { select: { status: true, sqft: true } } },
+      orderBy: { availableSqft: 'asc' },
+      take: 10,
     }),
     prisma.lead.groupBy({
       by: ['source'],
@@ -282,6 +314,23 @@ export async function getDashboardStats() {
           customer: inv.contact.name,
           balanceDue: inv.balanceDue,
           dueDate: inv.dueDate?.toISOString().split('T')[0] || null,
+        })),
+      },
+      tgm: {
+        availableSlabs: availableStone._count._all,
+        availableSqft: Math.round((availableStone._sum.sqft || 0) * 100) / 100,
+        reservedSlabs: stoneStatusCounts.find(row => row.status === 'RESERVED')?._count || 0,
+        processingSlabs: stoneStatusCounts.find(row => row.status === 'IN_PROCESSING')?._count || 0,
+        pendingFabricationJobs,
+        sqftSoldMtd: Math.round((sqftSoldMtd._sum.areaSqft || 0) * 100) / 100,
+        lotAlerts: stoneLotAlerts.map(lot => ({
+          lotNumber: lot.lotNumber,
+          productName: lot.product.name,
+          shadeCode: lot.shadeCode,
+          availableSlabs: lot.slabs.filter(slab => slab.status === 'AVAILABLE').length,
+          availableSqft: Math.round((lot.slabs.filter(slab => slab.status === 'AVAILABLE').reduce((sum, slab) => sum + slab.sqft, 0)) * 100) / 100,
+          status: lot.status,
+          alert: lot.availableSqft <= 0 || lot.status === 'SOLD_OUT' ? 'Sold out' : 'Low stock',
         })),
       },
     },

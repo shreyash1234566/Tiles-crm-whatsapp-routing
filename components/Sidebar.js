@@ -35,6 +35,7 @@ import {
   Banknote,
   Facebook,
   Instagram,
+  Sparkles,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/components/AuthProvider';
@@ -59,6 +60,7 @@ const navItems = [
   { href: '/purchases', label: 'Purchases', icon: Truck, roles: ['ADMIN', 'MANAGER'] },
   { href: '/godowns', label: 'Godowns', icon: Warehouse, roles: ['ADMIN', 'MANAGER', 'STAFF'] },
   { href: '/custom-orders', label: 'Custom Orders', icon: Ruler },
+  { href: '/recommend', label: 'Surface Visualizer', icon: Sparkles, vertical: 'tiles' },
   { href: '/manufacturing', label: 'Manufacturing', icon: Factory, roles: ['ADMIN', 'MANAGER', 'STAFF'] },
   { href: '/drafts', label: 'Drafts', icon: Trash2, roles: ['ADMIN', 'MANAGER'] },
   { href: '/email-marketing', label: 'Email Marketing', icon: MailPlus, roles: ['ADMIN', 'MANAGER'] },
@@ -103,6 +105,7 @@ export default function Sidebar() {
 
   // Filter nav items by role
   const visibleNav = navItems.filter(item => {
+    if (item.vertical && item.vertical !== brand.vertical) return false;
     if (!item.roles) return true;
     if (item.href === '/indiamart-leads' && !indiaMartEnabled) return false;
     return item.roles.includes(userRole);
@@ -155,6 +158,11 @@ export default function Sidebar() {
           {visibleNav.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
+            const itemLabel = brand.vertical === 'tiles' && item.href === '/custom-orders'
+              ? 'Fabrication Jobs'
+              : brand.vertical === 'tiles' && item.href === '/inventory'
+                ? 'Inventory & Lots'
+                : item.label;
 
             return (
               <Link
@@ -165,10 +173,10 @@ export default function Sidebar() {
                   ? 'bg-white/15 text-white'
                   : 'text-white/50 hover:text-white/80 hover:bg-white/5'
                   }`}
-                title={collapsed && !sidebarOpen ? item.label : undefined}
+                title={collapsed && !sidebarOpen ? itemLabel : undefined}
               >
                 <Icon className={`w-[17px] h-[17px] flex-shrink-0 ${isActive ? 'text-white' : ''}`} />
-                {(!collapsed || sidebarOpen) && <span>{item.label}</span>}
+                {(!collapsed || sidebarOpen) && <span>{itemLabel}</span>}
               </Link>
             );
           })}

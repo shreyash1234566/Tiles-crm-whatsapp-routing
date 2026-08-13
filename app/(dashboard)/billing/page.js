@@ -12,7 +12,7 @@ import {
   RotateCcw, PauseCircle, PlayCircle, ChevronDown,
   ChevronsUpDown, Filter, MoreHorizontal,
   Wallet, BadgeIndianRupee, CircleDollarSign,
-  SplitSquareHorizontal, Eye, Edit3, XCircle, Truck,
+  SplitSquareHorizontal, Eye, Edit3, XCircle, Truck, Layers,
 } from 'lucide-react';
 import Modal from '@/components/Modal';
 import { useAlertToast } from '@/components/AlertToastProvider';
@@ -28,6 +28,12 @@ import { moveInvoiceToDraft } from '@/app/actions/drafts';
 import { getProducts } from '@/app/actions/products';
 import { getStaff } from '@/app/actions/staff';
 import { getStoreSettings } from '@/app/actions/settings';
+import { getStoneLots } from '@/app/actions/stone-inventory';
+import { getGodowns } from '@/app/actions/godowns';
+import { getBillableArea } from '@/lib/units';
+import { getActiveVertical } from '@/lib/brand';
+
+const DEFAULT_STORE_NAME = getActiveVertical() === 'tiles' ? 'Tiles, Granite & Marble Showroom' : 'Furniture Store';
 
 // ─── CONSTANTS ─────────────────────────────────────────
 
@@ -106,6 +112,13 @@ const formatCurrency = (val) => {
 
 const formatFullCurrency = (val) => `₹${val.toLocaleString('en-IN')}`;
 
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;');
+
 const normalizePhoneNumber = (value) => {
   const digits = String(value || '').replace(/\D/g, '');
   const trimmed = digits.replace(/^0+/, '');
@@ -129,7 +142,7 @@ const buildMailtoUrl = (email, subject, body) => {
 };
 
 const buildInvoiceShareMessage = (invoice, storeSettings) => {
-  const storeName = storeSettings?.storeName || 'Furniture Store';
+  const storeName = storeSettings?.storeName || DEFAULT_STORE_NAME;
   const contactBits = [];
   if (storeSettings?.phone) contactBits.push(`Phone: ${storeSettings.phone}`);
   if (storeSettings?.whatsappNumber) contactBits.push(`WhatsApp: ${storeSettings.whatsappNumber}`);
@@ -163,14 +176,25 @@ const normalizeHsnCode = (value) => String(value || '').replace(/\s+/g, '').toUp
  * @returns {{ amount: number, boxes?: number, area?: number }}
  */
 function computeLineAmount(item, product) {
-  const unit = String(product?.unitOfMeasure || item?.unitOfMeasure || 'PCS').toUpperCase();
+  const unit = String(item?.unitOfMeasure || product?.unitOfMeasure || 'PCS').toUpperCase();
   const quantity = Math.max(1, Number(item?.quantity) || 1);
   const rate = Math.max(0, Number(item?.rate) || 0);
-  const coveragePerBox = Math.max(0, Number(product?.coveragePerBox) || 0);
+  const coveragePerBox = Math.max(0, Number(item?.coveragePerBox ?? product?.coveragePerBox) || 0);
   const area = Math.max(0, Number(item?.area ?? item?.areaInput) || 0);
   const hasCoverage = coveragePerBox > 0;
 
+  // A serialized slab is sold by its exact measured area, not by a count of one.
+  if (unit === 'SLAB') {
+    const billedArea = area > 0 ? area : quantity;
+    return { amount: billedArea * rate, area: billedArea };
+  }
+
   // Furniture and any per-piece (PCS) product: unchanged quantity * rate math.
+  if (unit === 'SQM') {
+    const billableArea = getBillableArea(area, quantity, unit);
+    return { amount: billableArea * rate, area: area || quantity, billableArea };
+  }
+
   if (unit !== 'SQFT' && unit !== 'BOX') {
     return { amount: quantity * rate };
   }
@@ -201,6 +225,18 @@ function posLine(item) {
     { quantity: item.qty, rate: item.price, area: item.area },
     { unitOfMeasure: item.unitOfMeasure, coveragePerBox: item.coveragePerBox }
   );
+}
+
+function invoiceLineAmount(item) {
+  return computeLineAmount(
+    { quantity: item.qty, rate: item.price, area: item.areaSqft },
+    { unitOfMeasure: item.unitOfMeasure, coveragePerBox: item.coveragePerBox }
+  ).amount;
+}
+
+function invoiceQuantityLabel(item) {
+  const unit = String(item.unitOfMeasure || 'PCS').toUpperCase();
+  return `${item.qty} ${unit}${item.areaSqft ? ` · ${Number(item.areaSqft).toFixed(2)} sq.ft` : ''}`;
 }
 
 const buildInvoiceFooterHtml = (store) => {
@@ -235,6 +271,8 @@ export default function BillingPage() {
   // Data state
   const [invoices, setInvoices] = useState([]);
   const [products, setProducts] = useState([]);
+  const [stoneLots, setStoneLots] = useState([]);
+  const [godowns, setGodowns] = useState([]);
   const [staffList, setStaffList] = useState([]);
   const [storeSettings, setStoreSettings] = useState(null);
   const [stats, setStats] = useState(null);
@@ -267,6 +305,10 @@ export default function BillingPage() {
   const [posDiscount, setPosDiscount] = useState(0);
   const [posDiscountType, setPosDiscountType] = useState('flat');
   const [posTransportCost, setPosTransportCost] = useState(0);
+  const [posFreightCharge, setPosFreightCharge] = useState(0);
+  const [posLoadingCharge, setPosLoadingCharge] = useState(0);
+  const [posInstallationCharge, setPosInstallationCharge] = useState(0);
+  const [posRoadPermit, setPosRoadPermit] = useState('');
   const [posPayments, setPosPayments] = useState([{ amount: 0, method: 'Cash', reference: '' }]);
   const [posSalesperson, setPosSalesperson] = useState('');
   const [posNotes, setPosNotes] = useState('');
@@ -274,6 +316,7 @@ export default function BillingPage() {
   const [posSupplyType, setPosSupplyType] = useState('INTRASTATE');
   const [posPlaceOfSupply, setPosPlaceOfSupply] = useState('');
   const [posPlaceOfSupplyCustom, setPosPlaceOfSupplyCustom] = useState('');
+  const [posGodownId, setPosGodownId] = useState('');
   const [productSearch, setProductSearch] = useState('');
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   // Mobile-only: full-screen checkout sheet toggle (no effect on md+ layout)
@@ -293,8 +336,8 @@ export default function BillingPage() {
   // ─── DATA LOADING ──────────────────────────────────────
 
   const loadData = useCallback(async () => {
-    const [invRes, prodRes, staffRes, settingsRes, statsRes, hsnRes] = await Promise.all([
-      getInvoices(), getProducts(), getStaff(), getStoreSettings(), getInvoiceStats(), getHsnCodes(),
+    const [invRes, prodRes, staffRes, settingsRes, statsRes, hsnRes, stoneRes, godownRes] = await Promise.all([
+      getInvoices(), getProducts(), getStaff(), getStoreSettings(), getInvoiceStats(), getHsnCodes(), getStoneLots(), getGodowns(),
     ]);
     if (invRes.success) {
       setInvoices(invRes.data);
@@ -305,10 +348,15 @@ export default function BillingPage() {
     if (settingsRes.success) setStoreSettings(settingsRes.data);
     if (statsRes.success) setStats(statsRes.data);
     if (hsnRes.success) setHsnCodes(hsnRes.data);
+    if (stoneRes.success) setStoneLots(stoneRes.data);
+    if (godownRes.success) setGodowns(godownRes.data);
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    const timer = setTimeout(() => { void loadData(); }, 0);
+    return () => clearTimeout(timer);
+  }, [loadData]);
 
   // Lock background scroll while the mobile checkout sheet is open
   useEffect(() => {
@@ -402,13 +450,15 @@ export default function BillingPage() {
   // POS calculations
   const posSubtotal = posItems.reduce((s, item) => s + posLine(item).amount, 0);
   const posDiscountAmount = posDiscountType === 'percent' ? Math.round(posSubtotal * posDiscount / 100) : Math.min(posDiscount, posSubtotal);
-  let remainingPosDiscount = posDiscountAmount;
   const posDiscountSplits = posItems.map((item, index) => {
     if (posDiscountAmount <= 0 || posSubtotal <= 0) return 0;
-    if (index === posItems.length - 1) return remainingPosDiscount;
-    const share = Math.round((posLine(item).amount / posSubtotal) * posDiscountAmount);
-    remainingPosDiscount -= share;
-    return share;
+    if (index === posItems.length - 1) {
+      const allocated = posItems.slice(0, -1).reduce((sum, previousItem) => (
+        sum + Math.round((posLine(previousItem).amount / posSubtotal) * posDiscountAmount)
+      ), 0);
+      return posDiscountAmount - allocated;
+    }
+    return Math.round((posLine(item).amount / posSubtotal) * posDiscountAmount);
   });
 
   const posTaxSummary = posItems.reduce((acc, item, index) => {
@@ -433,7 +483,7 @@ export default function BillingPage() {
   const posIgst = posTaxSummary.igst;
   const posCgst = posTaxSummary.cgst;
   const posSgst = posTaxSummary.sgst;
-  const posTotal = posTaxSummary.taxable + posTotalGst + (posTransportCost || 0);
+  const posTotal = posTaxSummary.taxable + posTotalGst + (posTransportCost || 0) + (posFreightCharge || 0) + (posLoadingCharge || 0) + (posInstallationCharge || 0);
   const posTotalPayments = posPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const posAdvancePaid = Math.min(posTotalPayments, posTotal);
   const posBalanceDue = Math.max(0, posTotal - posTotalPayments);
@@ -455,6 +505,10 @@ export default function BillingPage() {
   };
 
   const addToPOS = (product) => {
+    if (product.isSlabTracked) {
+      notify('Select the exact physical slab from the slab explorer before billing.', { variant: 'info' });
+      return;
+    }
     const existing = posItems.find(i => i.id === product.id);
     if (existing) {
       if (existing.qty < product.stock) {
@@ -464,17 +518,36 @@ export default function BillingPage() {
       const normalizedHsn = normalizeHsnCode(product.hsnCode || '');
       const hsnRate = resolveHsnRate(normalizedHsn);
       setPosItems([...posItems, {
-        id: product.id, name: product.name, sku: product.sku,
+        id: product.id, productId: product.id, name: product.name, sku: product.sku,
         price: product.price, qty: 1, stock: product.stock, category: product.category,
         hsnCode: normalizedHsn,
         gstRate: Number.isFinite(hsnRate) ? hsnRate : gstRate,
-        unitOfMeasure: product.unitOfMeasure || 'PCS',
-        coveragePerBox: product.coveragePerBox ?? null,
-        area: 0,
+         unitOfMeasure: product.unitOfMeasure || 'PCS',
+         coveragePerBox: product.coveragePerBox ?? null,
+         area: 0,
+         batches: product.batches || [],
+         batchId: product.batches?.length === 1 ? product.batches[0].id : undefined,
       }]);
     }
     setProductSearch('');
     setShowProductDropdown(false);
+  };
+
+  const addSlabToPOS = (slab, lot) => {
+    const cartId = `slab-${slab.id}`;
+    if (posItems.some(item => item.id === cartId)) return;
+    const normalizedHsn = normalizeHsnCode(lot.product.hsnCode || '');
+    const hsnRate = resolveHsnRate(normalizedHsn);
+    setPosItems([...posItems, {
+      id: cartId, productId: lot.product.id, slabId: slab.id,
+      name: `${lot.product.name} — Slab ${slab.slabNumber}`,
+      sku: lot.product.sku, price: lot.product.price, qty: 1, stock: 1,
+      category: 'Stone Slab', hsnCode: normalizedHsn,
+      gstRate: Number.isFinite(hsnRate) ? hsnRate : gstRate,
+       unitOfMeasure: 'SLAB', coveragePerBox: null, area: slab.sqft,
+       batches: [], batchId: undefined,
+      slabNumber: slab.slabNumber, lotNumber: lot.lotNumber,
+    }]);
   };
 
   const updateQty = (id, qty) => {
@@ -518,6 +591,11 @@ export default function BillingPage() {
     setCustomerProfile(null);
     setPosDiscount(0);
     setPosDiscountType('flat');
+    setPosTransportCost(0);
+    setPosFreightCharge(0);
+    setPosLoadingCharge(0);
+    setPosInstallationCharge(0);
+    setPosRoadPermit('');
     setPosPayments([{ amount: 0, method: 'Cash', reference: '' }]);
     setPosSalesperson('');
     setPosNotes('');
@@ -525,6 +603,7 @@ export default function BillingPage() {
     setPosSupplyType('INTRASTATE');
     setPosPlaceOfSupply('');
     setPosPlaceOfSupplyCustom('');
+    setPosGodownId('');
   };
 
   // Split payment management
@@ -580,22 +659,32 @@ export default function BillingPage() {
         address: posCustomer.address || undefined,
         gstNumber: posCustomer.gstNumber || undefined,
         items: posItems.map(i => ({
-          productId: i.id,
+          productId: i.productId || i.id,
           name: i.name,
           sku: i.sku || '',
           quantity: i.qty,
           price: i.price,
           hsnCode: i.hsnCode || undefined,
           gstRate: i.gstRate,
+          unitOfMeasure: i.unitOfMeasure,
+          areaSqft: i.area || undefined,
+           coveragePerBox: i.coveragePerBox || undefined,
+           slabId: i.slabId || undefined,
+           batchId: i.batchId || undefined,
         })),
         discount: posDiscount,
         discountType: posDiscountType === 'flat' ? 'flat' : 'percent',
         transportCost: posTransportCost || 0,
+        freightCharge: posFreightCharge || 0,
+        loadingCharge: posLoadingCharge || 0,
+        installationCharge: posInstallationCharge || 0,
+        roadPermit: posRoadPermit || undefined,
         salespersonId: posSalesperson ? parseInt(posSalesperson) : undefined,
         notes: posNotes || undefined,
         dueDate: posDueDate || undefined,
         supplyType: posSupplyType,
         placeOfSupply: placeOfSupplyValue || undefined,
+        godownId: posGodownId ? parseInt(posGodownId) : undefined,
         isHeld,
       };
 
@@ -649,7 +738,9 @@ export default function BillingPage() {
       setPosItems(invoice.items.map(item => {
         const stock = Math.max(item.product?.stock ?? 0, item.quantity);
         return {
-          id: item.productId,
+          id: item.slabId ? `slab-${item.slabId}` : item.productId,
+          productId: item.productId,
+          slabId: item.slabId || undefined,
           name: item.name,
           sku: item.sku || '',
           price: item.price,
@@ -658,14 +749,21 @@ export default function BillingPage() {
           category: item.product?.category || '',
           hsnCode: normalizeHsnCode(item.hsnCode || item.product?.hsnCode || ''),
           gstRate: Number.isFinite(item.gstRate) ? item.gstRate : gstRate,
-          unitOfMeasure: item.product?.unitOfMeasure || 'PCS',
+          unitOfMeasure: item.unitOfMeasure || item.product?.unitOfMeasure || 'PCS',
           coveragePerBox: item.product?.coveragePerBox ?? null,
-          area: 0,
+           area: item.areaSqft || 0,
+           batches: products.find(product => product.id === item.productId)?.batches || [],
+           batchId: item.batchId || undefined,
         };
       }));
       setPosDiscount(invoice.discount || 0);
       setPosDiscountType(invoice.discountType === 'percent' ? 'percent' : 'flat');
       setPosTransportCost(invoice.transportCost || 0);
+      setPosFreightCharge(invoice.freightCharge || 0);
+      setPosLoadingCharge(invoice.loadingCharge || 0);
+      setPosInstallationCharge(invoice.installationCharge || 0);
+      setPosRoadPermit(invoice.roadPermit || '');
+      setPosGodownId(invoice.godownId ? String(invoice.godownId) : '');
       paymentAutoFillRef.current = false;
       setPosPayments([{ amount: invoice.amountPaid || 0, method: invoice.paymentMethod || 'Cash', reference: '' }]);
       setPosSalesperson(invoice.salespersonId ? String(invoice.salespersonId) : '');
@@ -890,7 +988,7 @@ export default function BillingPage() {
       </style></head><body>
       <div class="invoice-container">
       <div class="header">
-        <div><div class="store-name">${store.storeName || 'Furniture Store'}</div>
+        <div><div class="store-name">${store.storeName || DEFAULT_STORE_NAME}</div>
         <div style="font-size:12px;color:#888;margin-top:4px">${store.address || ''}</div>
         <div style="font-size:12px;color:#888">${store.phone || ''} ${store.email ? '· ' + store.email : ''}</div>
         ${store.gstNumber ? `<div style="font-size:12px;color:#888;margin-top:2px">GSTIN: ${store.gstNumber}</div>` : ''}</div>
@@ -905,7 +1003,7 @@ export default function BillingPage() {
         ${inv.dueDate ? `<div style="font-size:12px;color:#888;margin-top:2px">Due: ${inv.dueDate}</div>` : ''}</div>
       </div>
       <table><thead><tr><th>#</th><th>Item</th><th>SKU</th><th>HSN</th><th style="text-align:center">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead><tbody>
-      ${inv.items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.name}</td><td style="font-family:monospace;font-size:11px;color:#888">${item.sku || '-'}</td><td style="font-size:11px;color:#888">${item.hsnCode || '-'}</td><td style="text-align:center">${item.qty}</td><td style="text-align:right">₹${item.price.toLocaleString('en-IN')}</td><td style="text-align:right;font-weight:500">₹${(item.price * item.qty).toLocaleString('en-IN')}</td></tr>`).join('')}
+      ${inv.items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.name}</td><td style="font-family:monospace;font-size:11px;color:#888">${item.sku || '-'}</td><td style="font-size:11px;color:#888">${item.hsnCode || '-'}</td><td style="text-align:center">${invoiceQuantityLabel(item)}</td><td style="text-align:right">₹${item.price.toLocaleString('en-IN')}</td><td style="text-align:right;font-weight:500">₹${invoiceLineAmount(item).toLocaleString('en-IN')}</td></tr>`).join('')}
       </tbody></table>
       <div class="totals">
         <div class="row"><span>Subtotal</span><span>₹${inv.subtotal.toLocaleString('en-IN')}</span></div>
@@ -915,6 +1013,10 @@ export default function BillingPage() {
         : `<div class="row"><span>CGST</span><span>₹${inv.cgst.toLocaleString('en-IN')}</span></div>
              <div class="row"><span>SGST</span><span>₹${inv.sgst.toLocaleString('en-IN')}</span></div>`}
         ${inv.transportCost > 0 ? `<div class="row"><span>Transport Cost</span><span>₹${inv.transportCost.toLocaleString('en-IN')}</span></div>` : ''}
+        ${inv.freightCharge > 0 ? `<div class="row"><span>Freight</span><span>₹${inv.freightCharge.toLocaleString('en-IN')}</span></div>` : ''}
+        ${inv.loadingCharge > 0 ? `<div class="row"><span>Loading / Unloading</span><span>₹${inv.loadingCharge.toLocaleString('en-IN')}</span></div>` : ''}
+        ${inv.installationCharge > 0 ? `<div class="row"><span>Installation / Fabrication</span><span>₹${inv.installationCharge.toLocaleString('en-IN')}</span></div>` : ''}
+        ${inv.roadPermit ? `<div class="row"><span>Road Permit</span><span>${escapeHtml(inv.roadPermit)}</span></div>` : ''}
         <div class="row grand"><span>Total</span><span>₹${inv.total.toLocaleString('en-IN')}</span></div>
         <div class="row paid"><span>Amount Paid</span><span>₹${inv.amountPaid.toLocaleString('en-IN')}</span></div>
         ${inv.balanceDue > 0 ? `<div class="row due"><span>Balance Due</span><span>₹${inv.balanceDue.toLocaleString('en-IN')}</span></div>` : ''}
@@ -983,7 +1085,7 @@ export default function BillingPage() {
       </style></head><body>
       <div class="invoice-container">
         <div class="header">
-          <div><div class="store-name">${store.storeName || 'Furniture Store'}</div>
+          <div><div class="store-name">${store.storeName || DEFAULT_STORE_NAME}</div>
           <div style="font-size:12px;color:#888;margin-top:4px">${store.address || ''}</div>
           <div style="font-size:12px;color:#888">${store.phone || ''} ${store.email ? '· ' + store.email : ''}</div>
           ${store.gstNumber ? `<div style="font-size:12px;color:#888;margin-top:2px">GSTIN: ${store.gstNumber}</div>` : ''}</div>
@@ -998,7 +1100,7 @@ export default function BillingPage() {
           ${inv.dueDate ? `<div style="font-size:12px;color:#888;margin-top:2px">Due: ${inv.dueDate}</div>` : ''}</div>
         </div>
         <table><thead><tr><th>#</th><th>Item</th><th>SKU</th><th>HSN</th><th style="text-align:center">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead><tbody>
-        ${inv.items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.name}</td><td style="font-family:monospace;font-size:11px;color:#888">${item.sku || '-'}</td><td style="font-size:11px;color:#888">${item.hsnCode || '-'}</td><td style="text-align:center">${item.qty}</td><td style="text-align:right">₹${item.price.toLocaleString('en-IN')}</td><td style="text-align:right;font-weight:500">₹${(item.price * item.qty).toLocaleString('en-IN')}</td></tr>`).join('')}
+        ${inv.items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.name}</td><td style="font-family:monospace;font-size:11px;color:#888">${item.sku || '-'}</td><td style="font-size:11px;color:#888">${item.hsnCode || '-'}</td><td style="text-align:center">${invoiceQuantityLabel(item)}</td><td style="text-align:right">₹${item.price.toLocaleString('en-IN')}</td><td style="text-align:right;font-weight:500">₹${invoiceLineAmount(item).toLocaleString('en-IN')}</td></tr>`).join('')}
         </tbody></table>
         <div class="totals">
           <div class="row"><span>Subtotal</span><span>₹${inv.subtotal.toLocaleString('en-IN')}</span></div>
@@ -1008,6 +1110,10 @@ export default function BillingPage() {
         : `<div class="row"><span>CGST</span><span>₹${inv.cgst.toLocaleString('en-IN')}</span></div>
                <div class="row"><span>SGST</span><span>₹${inv.sgst.toLocaleString('en-IN')}</span></div>`}
           ${inv.transportCost > 0 ? `<div class="row"><span>Transport Cost</span><span>₹${inv.transportCost.toLocaleString('en-IN')}</span></div>` : ''}
+          ${inv.freightCharge > 0 ? `<div class="row"><span>Freight</span><span>₹${inv.freightCharge.toLocaleString('en-IN')}</span></div>` : ''}
+          ${inv.loadingCharge > 0 ? `<div class="row"><span>Loading / Unloading</span><span>₹${inv.loadingCharge.toLocaleString('en-IN')}</span></div>` : ''}
+          ${inv.installationCharge > 0 ? `<div class="row"><span>Installation / Fabrication</span><span>₹${inv.installationCharge.toLocaleString('en-IN')}</span></div>` : ''}
+          ${inv.roadPermit ? `<div class="row"><span>Road Permit</span><span>${escapeHtml(inv.roadPermit)}</span></div>` : ''}
           <div class="row grand"><span>Total</span><span>₹${inv.total.toLocaleString('en-IN')}</span></div>
           <div class="row paid"><span>Amount Paid</span><span>₹${inv.amountPaid.toLocaleString('en-IN')}</span></div>
           ${inv.balanceDue > 0 ? `<div class="row due"><span>Balance Due</span><span>₹${inv.balanceDue.toLocaleString('en-IN')}</span></div>` : ''}
@@ -1093,7 +1199,7 @@ export default function BillingPage() {
         </style></head><body>
         <div class="invoice-container">
           <div class="header">
-            <div><div class="store-name">${storeSettings?.storeName || 'Furniture Store'}</div>
+            <div><div class="store-name">${storeSettings?.storeName || DEFAULT_STORE_NAME}</div>
             <div style="font-size:12px;color:#888;margin-top:4px">${storeSettings?.address || ''}</div>
             <div style="font-size:12px;color:#888">${storeSettings?.phone || ''} ${storeSettings?.email ? '· ' + storeSettings?.email : ''}</div>
             ${storeSettings?.gstNumber ? `<div style="font-size:12px;color:#888;margin-top:2px">GSTIN: ${storeSettings.gstNumber}</div>` : ''}</div>
@@ -1108,7 +1214,7 @@ export default function BillingPage() {
             ${inv.dueDate ? `<div style="font-size:12px;color:#888;margin-top:2px">Due: ${inv.dueDate}</div>` : ''}</div>
           </div>
           <table><thead><tr><th>#</th><th>Item</th><th>SKU</th><th>HSN</th><th style="text-align:center">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead><tbody>
-          ${inv.items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.name}</td><td style="font-family:monospace;font-size:11px;color:#888">${item.sku || '-'}</td><td style="font-size:11px;color:#888">${item.hsnCode || '-'}</td><td style="text-align:center">${item.qty}</td><td style="text-align:right">₹${item.price.toLocaleString('en-IN')}</td><td style="text-align:right;font-weight:500">₹${(item.price * item.qty).toLocaleString('en-IN')}</td></tr>`).join('')}
+          ${inv.items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.name}</td><td style="font-family:monospace;font-size:11px;color:#888">${item.sku || '-'}</td><td style="font-size:11px;color:#888">${item.hsnCode || '-'}</td><td style="text-align:center">${invoiceQuantityLabel(item)}</td><td style="text-align:right">₹${item.price.toLocaleString('en-IN')}</td><td style="text-align:right;font-weight:500">₹${invoiceLineAmount(item).toLocaleString('en-IN')}</td></tr>`).join('')}
           </tbody></table>
           <div class="totals">
             <div class="row"><span>Subtotal</span><span>₹${inv.subtotal.toLocaleString('en-IN')}</span></div>
@@ -1118,6 +1224,10 @@ export default function BillingPage() {
           : `<div class="row"><span>CGST</span><span>₹${inv.cgst.toLocaleString('en-IN')}</span></div>
                  <div class="row"><span>SGST</span><span>₹${inv.sgst.toLocaleString('en-IN')}</span></div>`}
             ${inv.transportCost > 0 ? `<div class="row"><span>Transport Cost</span><span>₹${inv.transportCost.toLocaleString('en-IN')}</span></div>` : ''}
+            ${inv.freightCharge > 0 ? `<div class="row"><span>Freight</span><span>₹${inv.freightCharge.toLocaleString('en-IN')}</span></div>` : ''}
+            ${inv.loadingCharge > 0 ? `<div class="row"><span>Loading / Unloading</span><span>₹${inv.loadingCharge.toLocaleString('en-IN')}</span></div>` : ''}
+            ${inv.installationCharge > 0 ? `<div class="row"><span>Installation / Fabrication</span><span>₹${inv.installationCharge.toLocaleString('en-IN')}</span></div>` : ''}
+            ${inv.roadPermit ? `<div class="row"><span>Road Permit</span><span>${escapeHtml(inv.roadPermit)}</span></div>` : ''}
             <div class="row grand"><span>Total</span><span>₹${inv.total.toLocaleString('en-IN')}</span></div>
             <div class="row paid"><span>Amount Paid</span><span>₹${inv.amountPaid.toLocaleString('en-IN')}</span></div>
             ${inv.balanceDue > 0 ? `<div class="row due"><span>Balance Due</span><span>₹${inv.balanceDue.toLocaleString('en-IN')}</span></div>` : ''}
@@ -1173,7 +1283,7 @@ export default function BillingPage() {
       notify('Customer email is missing', { variant: 'danger' });
       return;
     }
-    const subject = `Invoice ${inv.id} from ${storeSettings?.storeName || 'Furniture Store'}`;
+    const subject = `Invoice ${inv.id} from ${storeSettings?.storeName || DEFAULT_STORE_NAME}`;
     const body = buildInvoiceShareMessage(inv, storeSettings);
     const url = buildMailtoUrl(inv.email, subject, body);
     if (!url) return;
@@ -1557,6 +1667,21 @@ export default function BillingPage() {
         <div className={`grid grid-cols-1 lg:grid-cols-5 gap-5 ${posItems.length > 0 ? 'pb-44 md:pb-0' : ''}`}>
           {/* Left: Product Search + Catalog + Cart (3 cols) */}
           <div className="lg:col-span-3 space-y-5">
+            {stoneLots.some(lot => lot.availableSlabs > 0) && (
+              <div className="glass-card p-5">
+                <h3 className="text-sm font-semibold text-foreground mb-1 flex items-center gap-2"><Layers className="w-4 h-4 text-accent" /> Granite & Marble Slabs</h3>
+                <p className="text-xs text-muted mb-3">Select the actual slab; its measured sq.ft is billed and its status becomes sold on invoice creation.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                  {stoneLots.flatMap(lot => lot.slabs.filter(slab => slab.status === 'AVAILABLE').map(slab => ({ lot, slab }))).map(({ lot, slab }) => (
+                    <button key={slab.id} onClick={() => addSlabToPOS(slab, lot)} className="p-3 rounded-xl border border-border bg-surface hover:border-accent/40 hover:bg-accent/5 text-left transition-colors">
+                      <div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-foreground truncate">{lot.product.name}</span><span className="text-[10px] font-mono text-muted">{slab.slabNumber}</span></div>
+                      <p className="text-[11px] text-muted mt-1">Lot {lot.lotNumber} · {slab.lengthInches}″ × {slab.widthInches}″ · <strong>{slab.sqft.toFixed(2)} sq.ft</strong></p>
+                      <p className="text-xs font-semibold text-accent mt-1">₹{lot.product.price}/sq.ft</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Product Search with Dropdown */}
             <div className="glass-card p-5" ref={productSearchRef}>
               <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
@@ -1692,7 +1817,7 @@ export default function BillingPage() {
                     const hsnMatch = hsnCodes.find(h => h.code === item.hsnCode);
                     const line = posLine(item);
                     const lineUnit = String(item.unitOfMeasure || 'PCS').toUpperCase();
-                    const isAreaUnit = lineUnit === 'SQFT' || lineUnit === 'BOX';
+                    const isAreaUnit = lineUnit === 'SQFT' || lineUnit === 'SQM' || lineUnit === 'BOX' || lineUnit === 'SLAB';
                     const hasConversion = line.boxes !== undefined && line.area !== undefined;
                     return (
                       <div key={item.id}>
@@ -1721,6 +1846,15 @@ export default function BillingPage() {
                               />
                               {hsnMatch?.description && (
                                 <span className="text-[10px] text-muted truncate max-w-[220px]">{hsnMatch.description}</span>
+                              )}
+                              {item.batches?.length > 0 && !item.slabId && (
+                                <>
+                                  <span className="text-[9px] uppercase tracking-wider text-muted">Batch / shade</span>
+                                  <select value={item.batchId || ''} onChange={e => setPosItems(posItems.map(row => row.id === item.id ? { ...row, batchId: e.target.value ? Number(e.target.value) : undefined } : row))} className="max-w-[190px] px-2 py-1 text-[10px] bg-transparent border border-border rounded-md focus:outline-none focus:border-accent/50">
+                                    <option value="">No batch selected</option>
+                                    {item.batches.map(batch => <option key={batch.id} value={batch.id}>{batch.batchNumber}{batch.shadeCode ? ` · ${batch.shadeCode}` : ''} · {batch.remainingQty} left</option>)}
+                                  </select>
+                                </>
                               )}
                             </div>
                             {isAreaUnit && (
@@ -2024,18 +2158,38 @@ export default function BillingPage() {
               )}
             </div>
 
-            {/* Transport Cost */}
+            {/* Site logistics */}
             <div className="glass-card p-5">
               <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-                <Truck className="w-4 h-4 text-accent" /> Transport Cost
+                <Truck className="w-4 h-4 text-accent" /> Site Logistics
                 <span className="text-[10px] text-muted font-normal">(optional)</span>
               </h3>
-              <div className="relative">
-                <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted" />
-                <input type="number" min="0" placeholder="Enter transport/freight amount"
-                  value={posTransportCost || ''}
-                  onChange={e => setPosTransportCost(Number(e.target.value) || 0)}
-                  className="w-full pl-9 pr-3 py-3 bg-surface border border-border rounded-xl text-sm placeholder:text-muted focus:outline-none focus:border-accent/50" />
+              <div className="space-y-2">
+                <select value={posGodownId} onChange={e => setPosGodownId(e.target.value)} className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm focus:outline-none focus:border-accent/50">
+                  <option value="">Default godown</option>
+                  {godowns.map(godown => <option key={godown.id} value={godown.id}>{godown.name}{godown.isDefault ? ' · Default' : ''}</option>)}
+                </select>
+                <div className="relative">
+                  <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted" />
+                  <input type="number" min="0" placeholder="Transport amount"
+                    value={posTransportCost || ''}
+                    onChange={e => setPosTransportCost(Number(e.target.value) || 0)}
+                    className="w-full pl-9 pr-3 py-3 bg-surface border border-border rounded-xl text-sm placeholder:text-muted focus:outline-none focus:border-accent/50" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" min="0" placeholder="Freight"
+                    value={posFreightCharge || ''} onChange={e => setPosFreightCharge(Number(e.target.value) || 0)}
+                    className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm placeholder:text-muted focus:outline-none focus:border-accent/50" />
+                  <input type="number" min="0" placeholder="Loading / unloading"
+                    value={posLoadingCharge || ''} onChange={e => setPosLoadingCharge(Number(e.target.value) || 0)}
+                    className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm placeholder:text-muted focus:outline-none focus:border-accent/50" />
+                </div>
+                <input type="number" min="0" placeholder="Installation / fabrication"
+                  value={posInstallationCharge || ''} onChange={e => setPosInstallationCharge(Number(e.target.value) || 0)}
+                  className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm placeholder:text-muted focus:outline-none focus:border-accent/50" />
+                <input type="text" placeholder="Road permit / e-way reference"
+                  value={posRoadPermit} onChange={e => setPosRoadPermit(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-surface border border-border rounded-xl text-sm placeholder:text-muted focus:outline-none focus:border-accent/50" />
               </div>
             </div>
 
@@ -2195,6 +2349,15 @@ export default function BillingPage() {
                     <span className="text-foreground">{formatFullCurrency(posTransportCost)}</span>
                   </div>
                 )}
+                {posFreightCharge > 0 && (
+                  <div className="flex justify-between text-xs"><span className="text-muted">Freight</span><span className="text-foreground">{formatFullCurrency(posFreightCharge)}</span></div>
+                )}
+                {posLoadingCharge > 0 && (
+                  <div className="flex justify-between text-xs"><span className="text-muted">Loading / unloading</span><span className="text-foreground">{formatFullCurrency(posLoadingCharge)}</span></div>
+                )}
+                {posInstallationCharge > 0 && (
+                  <div className="flex justify-between text-xs"><span className="text-muted">Installation / fabrication</span><span className="text-foreground">{formatFullCurrency(posInstallationCharge)}</span></div>
+                )}
                 <div className="flex justify-between text-lg font-bold pt-3 border-t border-border mt-1">
                   <span className="text-foreground">Total</span>
                   <span className="text-accent">{formatFullCurrency(posTotal)}</span>
@@ -2297,7 +2460,7 @@ export default function BillingPage() {
               {/* Header */}
               <div className="flex items-center justify-between mb-4 pb-4 border-b border-border">
                 <div>
-                  <h3 className="text-xl font-bold text-accent">{storeSettings?.storeName || 'Furniture Store'}</h3>
+                  <h3 className="text-xl font-bold text-accent">{storeSettings?.storeName || DEFAULT_STORE_NAME}</h3>
                   {storeSettings?.address && <p className="text-xs text-muted mt-0.5">{storeSettings.address}</p>}
                   {storeSettings?.gstNumber && <p className="text-xs text-muted">GSTIN: {storeSettings.gstNumber}</p>}
                 </div>
@@ -2350,9 +2513,9 @@ export default function BillingPage() {
                       <td className="py-2.5 text-foreground font-medium">{item.name}</td>
                       <td className="py-2.5 text-center text-muted font-mono text-xs">{item.sku || '—'}</td>
                       <td className="py-2.5 text-center text-muted text-xs">{item.hsnCode || '-'}</td>
-                      <td className="py-2.5 text-center text-foreground">{item.qty}</td>
+                      <td className="py-2.5 text-center text-foreground">{invoiceQuantityLabel(item)}</td>
                       <td className="py-2.5 text-right text-foreground">{formatFullCurrency(item.price)}</td>
-                      <td className="py-2.5 text-right font-semibold text-foreground">{formatFullCurrency(item.price * item.qty)}</td>
+                      <td className="py-2.5 text-right font-semibold text-foreground">{formatFullCurrency(invoiceLineAmount(item))}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2367,6 +2530,15 @@ export default function BillingPage() {
                   )}
                   {selectedInvoice.transportCost > 0 && (
                     <div className="flex justify-between"><span className="text-muted">Transport Cost</span><span className="text-foreground">{formatFullCurrency(selectedInvoice.transportCost)}</span></div>
+                  )}
+                  {selectedInvoice.freightCharge > 0 && (
+                    <div className="flex justify-between"><span className="text-muted">Freight</span><span className="text-foreground">{formatFullCurrency(selectedInvoice.freightCharge)}</span></div>
+                  )}
+                  {selectedInvoice.loadingCharge > 0 && (
+                    <div className="flex justify-between"><span className="text-muted">Loading / unloading</span><span className="text-foreground">{formatFullCurrency(selectedInvoice.loadingCharge)}</span></div>
+                  )}
+                  {selectedInvoice.installationCharge > 0 && (
+                    <div className="flex justify-between"><span className="text-muted">Installation / fabrication</span><span className="text-foreground">{formatFullCurrency(selectedInvoice.installationCharge)}</span></div>
                   )}
                   {(selectedInvoice.supplyType === 'INTERSTATE' || selectedInvoice.igst > 0) ? (
                     <div className="flex justify-between text-xs"><span className="text-muted">IGST</span><span className="text-foreground">{formatFullCurrency(selectedInvoice.igst || 0)}</span></div>

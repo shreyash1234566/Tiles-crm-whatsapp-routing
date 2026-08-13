@@ -18,9 +18,9 @@ async function main() {
   const { embedText, embedDocument } = await import('./embedder')
 
   // 1. Embed a query
-  console.log('1. Embedding query: "What is the price of sofa set?"')
+  console.log('1. Embedding query: "What is the price of granite per sq.ft?"')
   const t0 = Date.now()
-  const queryVec = await embedText('What is the price of sofa set?')
+  const queryVec = await embedText('What is the price of granite per sq.ft?')
   const loadTime = Date.now() - t0
   console.log(`   ✓ Done in ${loadTime}ms (includes model load on first call)`)
   console.log(`   Dimension: ${queryVec.length}`)
@@ -40,9 +40,9 @@ async function main() {
   console.log('   ✓ L2-normalised')
 
   // 3. Embed a document
-  console.log('\n2. Embedding document: "Our premium sofa set costs ₹45,000..."')
+  console.log('\n2. Embedding document: "Our premium granite is priced per sq.ft..."')
   const t1 = Date.now()
-  const docVec = await embedDocument('Our premium sofa set costs ₹45,000. Available in leather and fabric.')
+  const docVec = await embedDocument('Our premium granite is priced per sq.ft. Shade, lot and actual slab selection are confirmed before fabrication.')
   console.log(`   ✓ Done in ${Date.now() - t1}ms (cached pipeline)`)
   console.log(`   Dimension: ${docVec.length}`)
   if (docVec.length !== 384) {
@@ -76,7 +76,7 @@ async function main() {
 
   // 7. Test Hindi
   console.log('\n4. Hindi text test:')
-  const hindiQuery = await embedText('सोफा सेट की कीमत क्या है?')
+  const hindiQuery = await embedText('ग्रेनाइट की कीमत प्रति वर्ग फुट क्या है?')
   const hindiSim = hindiQuery.reduce((s, v, i) => s + v * docVec[i], 0)
   console.log(`   Cosine similarity (Hindi query ↔ English doc): ${hindiSim.toFixed(4)}`)
   if (hindiSim > 0.3) {

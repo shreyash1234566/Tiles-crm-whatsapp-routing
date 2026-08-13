@@ -4,6 +4,8 @@ import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { unstable_noStore } from 'next/cache'
 import { requireRole } from '@/lib/auth-helpers'
+import { z } from 'zod'
+import type { CustomOrderStatus } from '@prisma/client'
 import {
   createWorkCenterSchema,
   createBOMSchema,
@@ -564,7 +566,24 @@ export async function getProductionOrders() {
         },
       },
       finishedProduct: { select: { name: true, sku: true, price: true } },
-      customOrder: { select: { id: true, displayId: true, type: true, contact: { select: { name: true } } } },
+      customOrder: {
+        select: {
+          id: true,
+          displayId: true,
+          type: true,
+          contact: { select: { name: true } },
+          slabAllocations: {
+            select: {
+              id: true,
+              slabNumber: true,
+              sqft: true,
+              status: true,
+              photo: true,
+              lot: { select: { lotNumber: true, shadeCode: true, product: { select: { name: true } } } },
+            },
+          },
+        },
+      },
       workCenter: { select: { name: true, type: true } },
       assignedStaff: { select: { name: true } },
       consumptions: {
@@ -642,9 +661,35 @@ export async function getScrapInventory() {
     include: {
       rawMaterial: { select: { name: true, sku: true, unitOfMeasure: true } },
       productionOrder: { select: { displayId: true, finishedProduct: { select: { name: true } } } },
+      sourceSlab: { select: { slabNumber: true, sqft: true, lot: { select: { lotNumber: true, shadeCode: true } } } },
+      sourceCustomOrder: { select: { displayId: true } },
     },
   })
   return { success: true, data: entries }
+}
+
+const scrapStatusSchema = z.object({
+  id: z.number().int().positive(),
+  status: z.enum(['USED', 'DISPOSED']),
+  notes: z.string().trim().optional(),
+})
+
+export async function updateScrapInventoryStatus(data: unknown) {
+  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
+  const parsed = scrapStatusSchema.safeParse(data)
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+
+  const entry = await prisma.scrapInventory.findUnique({ where: { id: parsed.data.id }, select: { id: true, status: true, quantity: true } })
+  if (!entry) return { success: false, error: 'Offcut entry not found' }
+  if (entry.status !== 'IN_STOCK') return { success: false, error: 'Only reusable offcuts in stock can be closed' }
+  if (entry.quantity <= 0) return { success: false, error: 'This offcut has no remaining quantity' }
+
+  const updated = await prisma.scrapInventory.update({
+    where: { id: entry.id },
+    data: { status: parsed.data.status, notes: parsed.data.notes || undefined },
+  })
+  revalidatePath('/manufacturing')
+  return { success: true, data: updated }
 }
 
 export async function getCustomOrderInventory() {
@@ -676,7 +721,7 @@ export async function createProductionOrder(data: unknown) {
   if (!bom) return { success: false, error: 'BOM not found' }
   if (!bom.isActive) return { success: false, error: 'This BOM is inactive' }
 
-  let customOrder = null
+  let customOrder: { id: number; displayId: string; status: CustomOrderStatus } | null = null
   if (customOrderId) {
     customOrder = await prisma.customOrder.findUnique({
       where: { id: customOrderId },
@@ -826,22 +871,9 @@ export async function cancelProductionOrder(id: number, reason: string) {
   if (order.status === 'COMPLETED') return { success: false, error: 'Cannot cancel a completed order' }
 
   await prisma.$transaction(async (tx) => {
-    // If materials were already issued (order was IN_PROGRESS or ON_HOLD),
-    // return them back to stock — industry standard for order cancellation.
-    if ((order.status === 'IN_PROGRESS' || order.status === 'ON_HOLD') && order.consumptions.length > 0) {
-      for (const c of order.consumptions) {
-        const issued = roundQty(c.issuedQty || 0)
-        if (issued > 0) {
-          await adjustManufacturingStockWithTx(tx, c.rawMaterialId, issued, 'RETURN', {
-            referenceType: 'Production',
-            referenceId: id,
-            notes: `Material returned — order ${order.displayId} cancelled`,
-            createdBy: 'Manufacturing',
-          })
-        }
-      }
-    }
-
+    // This workflow issues and consumes material at completion time. The
+    // issuedQty field is an audit/planning value, not a prior stock movement,
+    // so cancellation must not add it back to inventory.
     await tx.productionOrder.update({
       where: { id },
       data: { status: 'CANCELLED', cancelReason: reason, cancelledDate: new Date() },
@@ -908,6 +940,7 @@ export async function completeProduction(data: unknown) {
     qualityStatus,
     qualityNotes,
     notes,
+    stoneOffcuts,
     consumptions,
     stepActuals,
   } = parsed.data
@@ -937,8 +970,9 @@ export async function completeProduction(data: unknown) {
       // Detect over-consumption: if actual + scrap > issued
       const isOverConsumed = totalConsumedAndScrap > issuedQty
       
-      // Stock deduction: always use what was actually consumed + scrapped, but if over-consumed, adjust
-      const consumedFromStock = isOverConsumed ? totalConsumedAndScrap : issuedQty
+      // Stock deduction is based on physical material consumed plus scrap.
+      // issuedQty is retained for variance reporting and is not deducted twice.
+      const consumedFromStock = totalConsumedAndScrap
       
       // Cost calculation based on actual consumption + scrap
       const cost = planned ? Math.round(totalConsumedAndScrap * planned.unitCost) : 0
@@ -980,6 +1014,51 @@ export async function completeProduction(data: unknown) {
             },
           })
         }
+      }
+    }
+
+    // Capture reusable natural-stone remnants while the fabrication job still
+    // owns its allocated slabs. The source lot, shade, slab photo and cost are
+    // copied into resale-ready inventory for full traceability.
+    if (stoneOffcuts?.length) {
+      if (!order.customOrderId) throw new Error('Stone offcuts can only be recorded for a fabrication job')
+      const sourceSlabIds = stoneOffcuts.map(offcut => offcut.sourceSlabId)
+      if (new Set(sourceSlabIds).size !== sourceSlabIds.length) throw new Error('A source slab can only be listed once per completion')
+      const sourceSlabs = await tx.slab.findMany({
+        where: { id: { in: sourceSlabIds }, reservedForCustomId: order.customOrderId },
+        include: { lot: { select: { productId: true, costPerSqft: true, shadeCode: true } } },
+      })
+      if (sourceSlabs.length !== sourceSlabIds.length) {
+        throw new Error('Every offcut must use a slab allocated to this fabrication job')
+      }
+      const sourceById = new Map(sourceSlabs.map(slab => [slab.id, slab]))
+      for (const offcut of stoneOffcuts) {
+        const source = sourceById.get(offcut.sourceSlabId)
+        if (!source) throw new Error('Offcut source slab not found')
+        const areaSqft = Math.round((offcut.lengthInches * offcut.widthInches / 144) * 100) / 100
+        if (areaSqft > source.sqft + 0.01) throw new Error(`Offcut dimensions exceed source slab ${source.slabNumber}`)
+        await tx.scrapInventory.create({
+          data: {
+            productionOrderId,
+            rawMaterialId: source.lot.productId,
+            sourceSlabId: source.id,
+            sourceCustomOrderId: order.customOrderId,
+            lengthInches: offcut.lengthInches,
+            widthInches: offcut.widthInches,
+            areaSqft,
+            shadeCode: offcut.shadeCode || source.lot.shadeCode || null,
+            photo: offcut.photo || source.photo || null,
+            salePrice: offcut.salePrice ?? null,
+            quantity: areaSqft,
+            unitOfMeasure: 'SQFT',
+            unitCost: source.lot.costPerSqft || 0,
+            estimatedValue: offcut.salePrice ?? Math.round(areaSqft * (source.lot.costPerSqft || 0)),
+            reason: 'Stone offcut from fabrication',
+            disposition: 'REUSABLE',
+            status: 'IN_STOCK',
+            notes: offcut.notes || `Recorded from ${order.displayId}`,
+          },
+        })
       }
     }
 

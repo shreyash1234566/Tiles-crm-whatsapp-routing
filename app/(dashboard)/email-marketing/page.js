@@ -16,6 +16,7 @@ import {
   getAudienceStats, getEmailConfigStatus,
 } from '@/app/actions/email-campaigns';
 import Link from 'next/link';
+import { getActiveVertical } from '@/lib/brand';
 
 // ─── Constants ──────────────────────────────────────
 
@@ -42,7 +43,7 @@ const triggerOptions = [
 
 const templateCategories = ['Promotional', 'Follow-up', 'New Collection', 'Offer', 'Nurture', 'Transactional'];
 
-const defaultTemplates = [
+const FURNITURE_DEFAULT_TEMPLATES = [
   {
     name: 'New Collection Announcement',
     subject: 'Introducing Our Latest {{collectionName}} Collection!',
@@ -117,6 +118,31 @@ const defaultTemplates = [
   },
 ];
 
+const TGM_DEFAULT_TEMPLATES = [
+  {
+    name: 'New Surface Collection', subject: 'Explore our latest {{collectionName}} surfaces', category: 'New Collection',
+    body: `<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;"><h1>Hello {{customerName}},</h1><p>Our latest <strong>{{collectionName}}</strong> collection of tiles, granite, marble and quartz is now available to view.</p><p>Visit the showroom to compare finish, shade and book-matched slabs in person.</p><p><a href="{{storeUrl}}">Explore the Collection</a></p><p>Warm regards,<br/>{{storeName}}</p></div>`,
+    variables: ['customerName', 'collectionName', 'storeUrl', 'storeName'],
+  },
+  {
+    name: 'Surface Selection Offer', subject: '{{customerName}}, an exclusive {{discountPercent}}% offer on your surface selection', category: 'Offer',
+    body: `<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;"><h1>Special offer for you, {{customerName}}</h1><p>Use code <strong>{{offerCode}}</strong> for {{discountPercent}}% off eligible tiles and stone selections until {{expiryDate}}.</p><p>Our team can help calculate area, wastage and fabrication requirements before you confirm.</p><p><a href="{{storeUrl}}">Plan Your Visit</a></p><p>{{storeName}}</p></div>`,
+    variables: ['customerName', 'discountPercent', 'offerCode', 'expiryDate', 'storeUrl', 'storeName'],
+  },
+  {
+    name: 'Follow-up After Showroom Visit', subject: 'Your tile and stone selections, {{customerName}}', category: 'Follow-up',
+    body: `<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;"><h1>Thanks for visiting, {{customerName}}</h1><p>We hope the tile, granite and marble samples helped with your selection. Reply with your approximate area or drawing and we can prepare a measured quotation.</p><p>For natural stone, final shade and vein approval is always from the actual reserved slab.</p><p><a href="{{storeUrl}}">Browse Our Catalog</a></p><p>Best regards,<br/>{{storeName}}</p></div>`,
+    variables: ['customerName', 'storeUrl', 'storeName'],
+  },
+  {
+    name: 'Fabrication Lead Follow-up', subject: '{{customerName}}, ready to plan your countertop or cladding?', category: 'Nurture',
+    body: `<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;"><h1>Hi {{customerName}},</h1><p>Our stone team can help with site measurement, slab selection, edge profile, cutouts and installation planning.</p><ul><li>Measured area and wastage guidance</li><li>Lot and shade matching</li><li>Fabrication and installation coordination</li></ul><p><a href="{{storeUrl}}">Book a Surface Consultation</a></p><p>{{storeName}}</p></div>`,
+    variables: ['customerName', 'storeUrl', 'storeName'],
+  },
+];
+
+const defaultTemplates = getActiveVertical() === 'tiles' ? TGM_DEFAULT_TEMPLATES : FURNITURE_DEFAULT_TEMPLATES;
+
 // ─── Main Page Component ────────────────────────────
 
 export default function EmailMarketingPage() {
@@ -156,7 +182,8 @@ export default function EmailMarketingPage() {
   };
 
   useEffect(() => {
-    refresh().then(() => setLoading(false));
+    const timer = setTimeout(() => { void refresh().then(() => setLoading(false)); }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   // Computed stats

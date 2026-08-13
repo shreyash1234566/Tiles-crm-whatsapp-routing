@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { requireRole } from '@/lib/auth-helpers'
 import { syncProductStockFromGodowns } from './godowns'
+import { syncStoneLotTotals } from '@/lib/stone-inventory'
 import {
   InvoiceStatus,
   LeadStatus,
@@ -110,6 +111,12 @@ export async function moveCustomOrderToDraft(orderId: number) {
     quotedPrice: order.quotedPrice,
     advancePaid: order.advancePaid,
     productionNotes: order.productionNotes,
+    installationType: order.installationType,
+    edgeProfile: order.edgeProfile,
+    cutouts: order.cutouts,
+    templateMethod: order.templateMethod,
+    areaSqft: order.areaSqft,
+    wastagePercent: order.wastagePercent,
     timeline: order.timeline.map(t => ({
       event: t.event,
       date: t.date.toISOString(),
@@ -119,8 +126,21 @@ export async function moveCustomOrderToDraft(orderId: number) {
     })),
   }
 
-  await prisma.$transaction([
-    prisma.draft.create({
+  await prisma.$transaction(async tx => {
+    // Drafting/removing a custom order releases any slab reservations so they
+    // cannot remain permanently locked after the order leaves the workflow.
+    const reservedSlabs = await tx.slab.findMany({
+      where: { reservedForCustomId: orderId, status: { in: ['RESERVED', 'IN_PROCESSING'] } },
+      select: { id: true, lotId: true },
+    })
+    await tx.slab.updateMany({
+      where: { reservedForCustomId: orderId, status: { in: ['RESERVED', 'IN_PROCESSING'] } },
+      data: { status: 'AVAILABLE', reservedForCustomId: null },
+    })
+    for (const lotId of new Set(reservedSlabs.map(slab => slab.lotId))) {
+      await syncStoneLotTotals(tx, lotId)
+    }
+    await tx.draft.create({
       data: {
         sourceType: 'CustomOrder',
         sourceId: order.displayId,
@@ -129,17 +149,17 @@ export async function moveCustomOrderToDraft(orderId: number) {
         deletedAt: now,
         expiresAt,
       },
-    }),
+    })
     // Delete timeline entries first (cascade should handle but being explicit)
-    prisma.customOrderTimeline.deleteMany({ where: { customOrderId: orderId } }),
+    await tx.customOrderTimeline.deleteMany({ where: { customOrderId: orderId } })
     // Unlink field visits from this order (don't delete visits, just unlink)
-    prisma.fieldVisit.updateMany({
+    await tx.fieldVisit.updateMany({
       where: { customOrderId: orderId },
       data: { customOrderId: null },
-    }),
+    })
     // Delete the custom order
-    prisma.customOrder.delete({ where: { id: orderId } }),
-  ])
+    await tx.customOrder.delete({ where: { id: orderId } })
+  })
 
   revalidatePath('/custom-orders')
   revalidatePath('/staff-portal')
@@ -220,6 +240,9 @@ export async function moveLeadToDraft(leadId: number) {
     address: lead.contact.address,
     status: lead.status,
     interest: lead.interest,
+    materialCategory: lead.materialCategory,
+    applicationArea: lead.applicationArea,
+    areaSqft: lead.areaSqft,
     budget: lead.budget,
     source: lead.source,
     date: lead.date.toISOString(),
@@ -274,6 +297,10 @@ export async function moveWalkinToDraft(walkinId: number) {
     email: walkin.contact.email,
     address: walkin.contact.address,
     requirement: walkin.requirement,
+    roomType: walkin.roomType,
+    materialCategory: walkin.materialCategory,
+    applicationArea: walkin.applicationArea,
+    areaSqft: walkin.areaSqft,
     assignedToId: walkin.assignedToId,
     assignedTo: walkin.assignedTo?.name || null,
     date: walkin.date.toISOString(),
@@ -482,6 +509,9 @@ export async function moveQuotationToDraft(quotationId: number) {
       sku: item.sku,
       description: item.description,
       quantity: item.quantity,
+      unitOfMeasure: item.unitOfMeasure,
+      areaSqft: item.areaSqft,
+      coveragePerBox: item.coveragePerBox,
       rate: item.rate,
       amount: item.amount,
       referenceImage: item.referenceImage,
@@ -525,6 +555,12 @@ export async function moveInvoiceToDraft(invoiceId: number) {
     },
   })
   if (!invoice) return { success: false, error: 'Invoice not found' }
+  if (invoice.invoiceStatus !== 'ACTIVE') {
+    return { success: false, error: 'Only active invoices can be moved to drafts' }
+  }
+  if (!invoice.heldAt) {
+    return { success: false, error: 'Only held invoices can be moved to drafts. Cancel or credit an issued invoice to restore its inventory.' }
+  }
 
   const now = new Date()
   const expiresAt = getDraftExpiry(now)
@@ -550,6 +586,10 @@ export async function moveInvoiceToDraft(invoiceId: number) {
     paymentStatus: invoice.paymentStatus,
     invoiceStatus: invoice.invoiceStatus,
     transportCost: invoice.transportCost,
+    freightCharge: invoice.freightCharge,
+    loadingCharge: invoice.loadingCharge,
+    roadPermit: invoice.roadPermit,
+    godownId: invoice.godownId,
     supplyType: invoice.supplyType,
     placeOfSupply: invoice.placeOfSupply,
     isRCM: invoice.isRCM,
@@ -565,7 +605,12 @@ export async function moveInvoiceToDraft(invoiceId: number) {
       name: item.name,
       sku: item.sku,
       quantity: item.quantity,
+      unitOfMeasure: item.unitOfMeasure,
+      areaSqft: item.areaSqft,
+      coveragePerBox: item.coveragePerBox,
       price: item.price,
+      slabId: item.slabId,
+      batchId: item.batchId,
       hsnCode: item.hsnCode,
       gstRate: item.gstRate,
       cgst: item.cgst,
@@ -970,6 +1015,12 @@ export async function restoreFromDraft(draftId: number) {
           quotedPrice: data.quotedPrice as number || undefined,
           advancePaid: (data.advancePaid as number) || 0,
           productionNotes: data.productionNotes as string || undefined,
+          installationType: data.installationType as string || undefined,
+          edgeProfile: data.edgeProfile as string || undefined,
+          cutouts: data.cutouts as object || undefined,
+          templateMethod: data.templateMethod as string || undefined,
+          areaSqft: typeof data.areaSqft === 'number' ? data.areaSqft : undefined,
+          wastagePercent: typeof data.wastagePercent === 'number' ? data.wastagePercent : undefined,
         },
       }),
       prisma.draft.delete({ where: { id: draftId } }),
@@ -1048,6 +1099,9 @@ export async function restoreFromDraft(draftId: number) {
         data: {
           contactId: contact.id,
           interest: data.interest as string,
+          materialCategory: (data.materialCategory as string) || null,
+          applicationArea: (data.applicationArea as string) || null,
+          areaSqft: typeof data.areaSqft === 'number' ? data.areaSqft : null,
           budget: (data.budget as string) || null,
           status: coerceEnum(data.status, leadStatusValues, LeadStatus.NEW),
           source: (data.source as string) || null,
@@ -1110,6 +1164,10 @@ export async function restoreFromDraft(draftId: number) {
         data: {
           contactId: contact.id,
           requirement: data.requirement as string,
+          roomType: (data.roomType as string) || null,
+          materialCategory: (data.materialCategory as string) || null,
+          applicationArea: (data.applicationArea as string) || null,
+          areaSqft: typeof data.areaSqft === 'number' ? data.areaSqft : null,
           assignedToId: (data.assignedToId as number) || null,
           date: data.date ? new Date(data.date as string) : new Date(),
           time: data.time as string,
@@ -1357,12 +1415,15 @@ export async function restoreFromDraft(draftId: number) {
           status: coerceEnum(data.status, quotationStatusValues, QuotationStatus.DRAFT),
           items: {
             create: items.map((item: any) => ({
-              productId: item.productId || null,
-              name: item.name,
-              sku: item.sku || null,
-              description: item.description || null,
-              quantity: item.quantity,
-              rate: item.rate,
+            productId: item.productId || null,
+            name: item.name,
+            sku: item.sku || null,
+            description: item.description || null,
+            quantity: item.quantity,
+            unitOfMeasure: item.unitOfMeasure || 'PCS',
+            areaSqft: item.areaSqft ?? null,
+            coveragePerBox: item.coveragePerBox ?? null,
+            rate: item.rate,
               amount: item.amount,
               referenceImage: item.referenceImage || null,
               sortOrder: item.sortOrder || 0,
@@ -1443,6 +1504,11 @@ export async function restoreFromDraft(draftId: number) {
           paymentStatus: coerceEnum(data.paymentStatus, paymentStatusValues, PaymentStatus.PENDING),
           invoiceStatus: coerceEnum(data.invoiceStatus, invoiceStatusValues, InvoiceStatus.ACTIVE),
           transportCost: (data.transportCost as number) || 0,
+          freightCharge: (data.freightCharge as number) || 0,
+          loadingCharge: (data.loadingCharge as number) || 0,
+          installationCharge: (data.installationCharge as number) || 0,
+          roadPermit: (data.roadPermit as string) || null,
+          godownId: (data.godownId as number) || null,
           supplyType: (data.supplyType as string) || 'INTRASTATE',
           placeOfSupply: (data.placeOfSupply as string) || null,
           isRCM: !!data.isRCM,
@@ -1458,7 +1524,12 @@ export async function restoreFromDraft(draftId: number) {
               name: item.name,
               sku: item.sku || null,
               quantity: item.quantity,
+              unitOfMeasure: item.unitOfMeasure || 'PCS',
+              areaSqft: item.areaSqft || null,
+              coveragePerBox: item.coveragePerBox || null,
               price: item.price,
+              slabId: item.slabId || null,
+              batchId: item.batchId || null,
               hsnCode: item.hsnCode || null,
               gstRate: item.gstRate || 18,
               cgst: item.cgst || 0,

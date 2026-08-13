@@ -15,8 +15,25 @@ import { getStaff } from '@/app/actions/staff';
 import { useAlertToast } from '@/components/AlertToastProvider';
 import { useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
+import { getBrand, getActiveVertical } from '@/lib/brand';
+
+const brand = getBrand();
+const IS_TGM = getActiveVertical() === 'tiles';
+const REQUIREMENT_OPTIONS = IS_TGM
+  ? [
+      'Floor Tiles', 'Wall Tiles', 'Outdoor / Anti-Skid Tiles',
+      'Granite Kitchen Platform', 'Marble Flooring', 'Wall Cladding',
+      'Vanity Top', 'Staircase', 'Engineered Quartz', 'Tile Adhesive / Grout', 'Other',
+    ]
+  : [
+      'Sofa / Sofa Set', 'Bed', 'Dining Table', 'Wardrobe', 'Office Chair',
+      'TV Unit', 'Bookshelf / Storage', 'Kids Furniture', 'Modular Kitchen',
+      'Dressing Table', 'Center Table', 'Other',
+    ];
 
 const walkinStatuses = ['All', 'Browsing', 'Interested', 'Follow-up', 'Converted', 'Left'];
+const TGM_ROOM_OPTIONS = ['Kitchen', 'Living Room', 'Bedroom', 'Bathroom', 'Staircase', 'Balcony / Outdoor', 'Commercial Space', 'Other'];
+const TGM_MATERIAL_OPTIONS = ['Tiles', 'Granite', 'Marble', 'Quartzite', 'Engineered Quartz', 'Adhesive / Grout', 'Other'];
 
 const statusConfig = {
   Browsing: { cls: 'bg-blue-500/10 text-blue-700 border-blue-500/20', icon: Eye },
@@ -57,7 +74,7 @@ export default function WalkinsPage() {
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [selectedWalkin, setSelectedWalkin] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', requirement: '', budget: '', assignedToId: '', notes: '' });
+  const [form, setForm] = useState({ name: '', phone: '', email: '', requirement: '', roomType: '', materialCategory: '', areaSqft: '', budget: '', assignedToId: '', notes: '' });
   const [showQrModal, setShowQrModal] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [qrUrl, setQrUrl] = useState('');
@@ -147,7 +164,7 @@ export default function WalkinsPage() {
         <p>Welcome! Please scan this QR code</p>
         <p>to register your visit</p>
         <img src="${qrDataUrl}" />
-        <p style="margin-top:16px;font-size:12px;color:#999;">Powered by Furzentic</p>
+        <p style="margin-top:16px;font-size:12px;color:#999;">Powered by ${brand.name}</p>
       </div></body></html>
     `);
     win.document.close();
@@ -173,6 +190,9 @@ export default function WalkinsPage() {
         phone: form.phone,
         email: form.email || undefined,
         requirement: form.requirement,
+        roomType: form.roomType || undefined,
+        materialCategory: form.materialCategory || undefined,
+        areaSqft: form.areaSqft ? Number(form.areaSqft) : undefined,
         budget: form.budget || undefined,
         assignedToId: form.assignedToId ? Number(form.assignedToId) : undefined,
         notes: form.notes || undefined,
@@ -181,7 +201,7 @@ export default function WalkinsPage() {
       if (res.success) {
         const refreshed = await getWalkins();
         if (refreshed.success) setWalkins(refreshed.data);
-        setForm({ name: '', phone: '', email: '', requirement: '', budget: '', assignedToId: '', notes: '' });
+        setForm({ name: '', phone: '', email: '', requirement: '', roomType: '', materialCategory: '', areaSqft: '', budget: '', assignedToId: '', notes: '' });
         setShowRegisterModal(false);
         alertToast.notify?.('Walk-in registered successfully', 'success');
       }
@@ -201,6 +221,9 @@ export default function WalkinsPage() {
         email: selectedWalkin.email || undefined,
         source: 'Showroom Visit',
         interest: selectedWalkin.requirement,
+        materialCategory: selectedWalkin.materialCategory || undefined,
+        applicationArea: selectedWalkin.roomType || undefined,
+        areaSqft: selectedWalkin.areaSqft || undefined,
         budget: selectedWalkin.budget || '',
         notes: `Converted from walk-in: ${selectedWalkin.notes || ''}`,
       });
@@ -402,18 +425,7 @@ export default function WalkinsPage() {
               <label className="block text-xs font-medium text-muted mb-1.5">Requirement *</label>
               <select value={form.requirement} onChange={e => setForm(f => ({ ...f, requirement: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground focus:outline-none focus:border-accent/50">
                 <option value="">What are they looking for?</option>
-                <option>Sofa / Sofa Set</option>
-                <option>Bed</option>
-                <option>Dining Table</option>
-                <option>Wardrobe</option>
-                <option>Office Chair</option>
-                <option>TV Unit</option>
-                <option>Bookshelf / Storage</option>
-                <option>Kids Furniture</option>
-                <option>Modular Kitchen</option>
-                <option>Dressing Table</option>
-                <option>Center Table</option>
-                <option>Other</option>
+                {REQUIREMENT_OPTIONS.map(option => <option key={option}>{option}</option>)}
               </select>
             </div>
           </div>
@@ -440,6 +452,26 @@ export default function WalkinsPage() {
               </select>
             </div>
           </div>
+          {IS_TGM && <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1.5">Room / Application</label>
+              <select value={form.roomType} onChange={e => setForm(f => ({ ...f, roomType: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground focus:outline-none focus:border-accent/50">
+                <option value="">Select room</option>
+                {TGM_ROOM_OPTIONS.map(option => <option key={option}>{option}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1.5">Material</label>
+              <select value={form.materialCategory} onChange={e => setForm(f => ({ ...f, materialCategory: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground focus:outline-none focus:border-accent/50">
+                <option value="">Select material</option>
+                {TGM_MATERIAL_OPTIONS.map(option => <option key={option}>{option}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1.5">Approx. Area (sq.ft)</label>
+              <input type="number" min="0" step="0.01" placeholder="e.g. 250" value={form.areaSqft} onChange={e => setForm(f => ({ ...f, areaSqft: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50" />
+            </div>
+          </div>}
           <div>
             <label className="block text-xs font-medium text-muted mb-1.5">Notes</label>
             <textarea rows={3} placeholder="Any specific preferences, color, size, etc." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50 resize-none" />
@@ -485,6 +517,10 @@ export default function WalkinsPage() {
                   <p className="text-xs text-muted mb-1">Budget</p>
                   <p className="text-sm font-medium text-accent">{selectedWalkin.budget}</p>
                 </div>
+                {IS_TGM && <>
+                  <div className="bg-surface rounded-xl p-3"><p className="text-xs text-muted mb-1">Room / Application</p><p className="text-sm font-medium text-foreground">{selectedWalkin.roomType || '—'}</p></div>
+                  <div className="bg-surface rounded-xl p-3"><p className="text-xs text-muted mb-1">Material / Area</p><p className="text-sm font-medium text-foreground">{selectedWalkin.materialCategory || '—'}{selectedWalkin.areaSqft ? ` · ${selectedWalkin.areaSqft} sq.ft` : ''}</p></div>
+                </>}
                 <div className="bg-surface rounded-xl p-3">
                   <p className="text-xs text-muted mb-1">Assigned To</p>
                   <p className="text-sm font-medium text-foreground">{selectedWalkin.assignedTo}</p>

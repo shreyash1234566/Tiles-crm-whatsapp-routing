@@ -2,12 +2,23 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { getActiveVertical } from '@/lib/brand';
 
-const REQUIREMENT_OPTIONS = [
+const FURNITURE_REQUIREMENT_OPTIONS = [
   'Sofa / Sofa Set', 'Bed & Mattress', 'Dining Table', 'Wardrobe',
   'Office Furniture', 'TV Unit', 'Bookshelf / Storage', 'Kids Furniture',
   'Modular Kitchen', 'Dressing Table', 'Center Table', 'Home Decor', 'Other',
 ];
+
+const TGM_REQUIREMENT_OPTIONS = [
+  'Floor Tiles', 'Wall Tiles', 'Outdoor / Anti-Skid Tiles', 'Granite Kitchen Platform',
+  'Marble Flooring', 'Wall Cladding', 'Vanity Top', 'Staircase', 'Window Sill',
+  'Engineered Quartz', 'Tile Adhesive / Grout', 'Other',
+];
+const TGM_ROOM_OPTIONS = ['Kitchen', 'Living Room', 'Bedroom', 'Bathroom', 'Staircase', 'Balcony / Outdoor', 'Commercial Space', 'Other'];
+const TGM_MATERIAL_OPTIONS = ['Tiles', 'Granite', 'Marble', 'Quartzite', 'Engineered Quartz', 'Adhesive / Grout', 'Other'];
+
+const REQUIREMENT_OPTIONS = getActiveVertical() === 'tiles' ? TGM_REQUIREMENT_OPTIONS : FURNITURE_REQUIREMENT_OPTIONS;
 
 const BUDGET_RANGES = [
   'Under ₹10,000', '₹10,000 – ₹25,000', '₹25,000 – ₹50,000',
@@ -17,7 +28,7 @@ const BUDGET_RANGES = [
 export default function WalkinFormPage() {
   const [storeName, setStoreName] = useState('');
   const [logo, setLogo] = useState(null);
-  const [form, setForm] = useState({ name: '', phone: '', requirement: '', budget: '' });
+  const [form, setForm] = useState({ name: '', phone: '', requirement: '', roomType: '', materialCategory: '', areaSqft: '', budget: '' });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
@@ -26,7 +37,7 @@ export default function WalkinFormPage() {
     fetch('/api/walkin')
       .then(r => r.json())
       .then(data => {
-        setStoreName(data.storeName || 'Furniture Store');
+        setStoreName(data.storeName || (getActiveVertical() === 'tiles' ? 'Tiles, Granite & Marble Showroom' : 'Furniture Store'));
         setLogo(data.logo);
       })
       .catch(() => {});
@@ -49,6 +60,9 @@ export default function WalkinFormPage() {
           name: form.name.trim(),
           phone: form.phone.replace(/\D/g, '').slice(-10),
           requirement: form.requirement,
+          roomType: form.roomType || undefined,
+          materialCategory: form.materialCategory || undefined,
+          areaSqft: form.areaSqft ? Number(form.areaSqft) : undefined,
           budget: form.budget || undefined,
         }),
       });
@@ -86,7 +100,7 @@ export default function WalkinFormPage() {
             </>}
           </div>
           <p style={S.successHint}>Feel free to explore our showroom while we connect you with the right person.</p>
-          <button onClick={() => { setSubmitted(false); setForm({ name: '', phone: '', requirement: '', budget: '' }); }} style={S.againBtn}>
+          <button onClick={() => { setSubmitted(false); setForm({ name: '', phone: '', requirement: '', roomType: '', materialCategory: '', areaSqft: '', budget: '' }); }} style={S.againBtn}>
             Register another visitor
           </button>
         </div>
@@ -103,7 +117,7 @@ export default function WalkinFormPage() {
           {logo ? (
             <div style={S.logoWrap}><img src={logo} alt={storeName} style={S.logoImg} /></div>
           ) : (
-            <div style={S.logoDef}><span style={{ fontSize: 28 }}>🪑</span></div>
+            <div style={S.logoDef}><span style={{ fontSize: 28 }}>{getActiveVertical() === 'tiles' ? '🪨' : '🪑'}</span></div>
           )}
           <h1 style={S.storeName}>{storeName}</h1>
           <p style={S.tagline}>Welcome! Please register your visit</p>
@@ -145,6 +159,31 @@ export default function WalkinFormPage() {
               {REQUIREMENT_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
+
+          {getActiveVertical() === 'tiles' && (
+            <>
+              <div style={S.field}>
+                <label style={S.label}>Room / Application</label>
+                <select value={form.roomType} onChange={e => setForm(f => ({ ...f, roomType: e.target.value }))} style={{ ...S.input, appearance: 'none' }}>
+                  <option value="">Select room or application</option>
+                  {TGM_ROOM_OPTIONS.map(option => <option key={option}>{option}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <div style={{ ...S.field, flex: 1 }}>
+                  <label style={S.label}>Material</label>
+                  <select value={form.materialCategory} onChange={e => setForm(f => ({ ...f, materialCategory: e.target.value }))} style={{ ...S.input, appearance: 'none' }}>
+                    <option value="">Select material</option>
+                    {TGM_MATERIAL_OPTIONS.map(option => <option key={option}>{option}</option>)}
+                  </select>
+                </div>
+                <div style={{ ...S.field, flex: 1 }}>
+                  <label style={S.label}>Approx. Area (sq.ft)</label>
+                  <input type="number" min="0" step="0.01" placeholder="e.g. 250" value={form.areaSqft} onChange={e => setForm(f => ({ ...f, areaSqft: e.target.value }))} style={S.input} />
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Budget */}
           <div style={S.field}>

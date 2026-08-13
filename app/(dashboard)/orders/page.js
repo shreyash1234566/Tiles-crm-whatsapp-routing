@@ -17,6 +17,9 @@ import ReturningCustomerCard from '@/components/ReturningCustomerCard';
 import { searchContacts, getCustomerProfile } from '@/app/actions/invoices';
 import { moveOrderToDraft } from '@/app/actions/drafts';
 import { useSearchParams } from 'next/navigation';
+import { getActiveVertical } from '@/lib/brand';
+
+const DEFAULT_STORE_NAME = getActiveVertical() === 'tiles' ? 'Tiles, Granite & Marble Showroom' : 'Furniture Store';
 
 const orderStatuses = ['All', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 const orderSources = ['All', 'Store', 'Shopify'];
@@ -931,7 +934,7 @@ function OrdersPageInner() {
                 <div ref={slipRef} style={{ width: 320, fontFamily: "'Courier New', monospace", fontSize: 12, color: '#000', background: '#fff', padding: 16 }}>
                   {/* Header */}
                   <div className="slip-header" style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 10 }}>
-                    <h2 style={{ fontSize: 16, fontWeight: 'bold' }}>{slipTemplate.showroomName || 'Furniture Store'}</h2>
+                    <h2 style={{ fontSize: 16, fontWeight: 'bold' }}>{slipTemplate.showroomName || DEFAULT_STORE_NAME}</h2>
                     {slipTemplate.showroomAddress && <p style={{ fontSize: 11, marginTop: 2 }}>{slipTemplate.showroomAddress}</p>}
                     {slipTemplate.showroomPhone && <p style={{ fontSize: 11 }}>Ph: {slipTemplate.showroomPhone}</p>}
                     {slipTemplate.showroomGST && <p style={{ fontSize: 10, color: '#555' }}>GSTIN: {slipTemplate.showroomGST}</p>}

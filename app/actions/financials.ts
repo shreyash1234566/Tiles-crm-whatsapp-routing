@@ -229,7 +229,7 @@ export async function getProfitAndLoss(fromDate: string, toDate: string, compare
 
   const current = await fetchPL(fromDate, toDate)
   if (!current) return { success: false, error: 'Invalid date range' }
-  let compare = null
+  let compare: Awaited<ReturnType<typeof fetchPL>> = null
   if (compareFrom && compareTo) {
     compare = await fetchPL(compareFrom, compareTo)
     if (!compare) return { success: false, error: 'Invalid comparison date range' }

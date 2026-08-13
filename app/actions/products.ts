@@ -34,7 +34,15 @@ const toRequiredNumber = (value: unknown) => {
 
 export async function getProducts() {
   const products = await prisma.product.findMany({
-    include: { category: true, warehouse: true },
+    include: {
+      category: true,
+      warehouse: true,
+      batches: {
+        where: { remainingQty: { gt: 0 } },
+        orderBy: { purchaseDate: 'asc' },
+        select: { id: true, batchNumber: true, remainingQty: true, quantity: true, shadeCode: true, purchaseDate: true },
+      },
+    },
     orderBy: { name: 'asc' },
   })
 
@@ -59,6 +67,12 @@ export async function getProducts() {
       finish: p.finish,
       surfaceType: p.surfaceType,
       applicationArea: p.applicationArea,
+      materialCategory: p.materialCategory,
+      isSlabTracked: p.isSlabTracked,
+      origin: p.origin,
+      thicknessMm: p.thicknessMm,
+      qualityGrade: p.qualityGrade,
+      bookMatchPair: p.bookMatchPair,
       stock: p.stock,
       sold: p.sold,
       reorderLevel: p.reorderLevel,
@@ -68,6 +82,14 @@ export async function getProducts() {
       description: p.description,
       warehouse: p.warehouse?.name || 'Unassigned',
       lastRestocked: p.lastRestocked?.toISOString().split('T')[0] || null,
+      batches: p.batches.map(batch => ({
+        id: batch.id,
+        batchNumber: batch.batchNumber,
+        remainingQty: batch.remainingQty,
+        quantity: batch.quantity,
+        shadeCode: batch.shadeCode,
+        purchaseDate: batch.purchaseDate.toISOString().split('T')[0],
+      })),
     })),
   }
 }
@@ -87,6 +109,12 @@ export async function createProduct(data: unknown) {
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
   const { category, warehouse, unitOfMeasure, unitSize, godownId, ...rest } = parsed.data
+
+  // Slab-tracked products must be stocked through StoneLot/Slab records so
+  // Product.stock never becomes a misleading aggregate quantity.
+  if (rest.isSlabTracked && (Number(rest.stock) || 0) > 0) {
+    return { success: false, error: 'Create the stone product with zero stock, then receive slabs into a Stone Lot.' }
+  }
 
   // Find or create category
   const cat = await prisma.category.upsert({
@@ -348,7 +376,25 @@ export async function bulkImportProducts(rows: BulkProductRow[]) {
 export async function updateProduct(id: number, data: Partial<{
   name: string; price: number; stock: number; reorderLevel: number;
   material: string; brand: string; color: string; description: string; image: string; unitSize: number; unitOfMeasure: string;
+  materialCategory: string; isSlabTracked: boolean; origin: string; thicknessMm: number;
+  qualityGrade: string; bookMatchPair: boolean; tileSize: string; finish: string;
+  coveragePerBox: number; tilesPerBox: number; surfaceType: string; applicationArea: string;
 }>) {
+  const existing = await prisma.product.findUnique({
+    where: { id },
+    select: { isSlabTracked: true, stock: true },
+  })
+  if (!existing) return { success: false, error: 'Product not found' }
+  if (existing.isSlabTracked && 'stock' in data) {
+    return { success: false, error: 'Slab-tracked stone stock must be managed through Lot / Slab Explorer' }
+  }
+  if (data.isSlabTracked === false) {
+    const slabCount = await prisma.slab.count({ where: { lot: { productId: id } } })
+    if (slabCount > 0) return { success: false, error: 'Remove or archive the product lots before disabling slab tracking' }
+  }
+  if (data.isSlabTracked === true && (existing.stock > 0 || Number(data.stock) > 0)) {
+    return { success: false, error: 'Create the stone stock through Lot / Slab Explorer before enabling slab tracking' }
+  }
   const product = await prisma.product.update({
     where: { id },
     data,
@@ -371,6 +417,9 @@ export async function updateStock(data: unknown) {
     // Route through godown sync engine
     const product = await prisma.product.findUnique({ where: { id: parsed.data.id } })
     if (!product) return { success: false, error: 'Product not found' }
+    if (product.isSlabTracked) {
+      return { success: false, error: 'Slab-tracked stone stock must be managed through Lot / Slab Explorer' }
+    }
 
     // Determine target godown: user-selected or default
     let targetGodownId = parsed.data.godownId
@@ -399,6 +448,10 @@ export async function updateStock(data: unknown) {
       data: { lastRestocked: diff > 0 ? new Date() : undefined },
     })
   } else {
+    const product = await prisma.product.findUnique({ where: { id: parsed.data.id }, select: { isSlabTracked: true } })
+    if (product?.isSlabTracked) {
+      return { success: false, error: 'Slab-tracked stone stock must be managed through Lot / Slab Explorer' }
+    }
     // No godowns — direct update (legacy behavior)
     await prisma.product.update({
       where: { id: parsed.data.id },
@@ -427,7 +480,7 @@ export async function getLowStockProducts() {
   })
 
   // Filter in JS since Prisma can't compare two columns directly
-  return products.filter(p => p.stock <= p.reorderLevel).map(p => ({
+  return products.filter(p => !p.isSlabTracked && p.stock <= p.reorderLevel).map(p => ({
     id: p.id,
     name: p.name,
     sku: p.sku,
