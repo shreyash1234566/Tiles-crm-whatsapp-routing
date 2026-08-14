@@ -22,9 +22,27 @@ const nextConfig = {
   },
   experimental: {
     serverActions: {
-      allowedOrigins: ['localhost:3000', '*.github.dev', 'crm.kosmicfurniture.com']
+      allowedOrigins: [
+        'localhost:3000',
+        'localhost:3001',
+        '*.github.dev',
+        '*.ngrok-free.app',
+        '*.ngrok-free.dev',
+        '*.ngrok.app',
+        '*.ngrok.io',
+        'crm.kosmicfurniture.com',
+      ],
     }
   },
+  // The mobile preview uses a temporary ngrok origin during local development.
+  allowedDevOrigins: [
+    'localhost',
+    '127.0.0.1',
+    '*.ngrok-free.app',
+    '*.ngrok-free.dev',
+    '*.ngrok.app',
+    '*.ngrok.io',
+  ],
   // Rewrite /uploads/* → /api/uploads/* so images stored with old paths still work
   async rewrites() {
     return [
@@ -34,13 +52,11 @@ const nextConfig = {
       },
     ];
   },
-  // Aggressive caching for static assets (_next/static)
+  // Keep upload assets cacheable, but let Next.js manage its own _next/static
+  // headers. Overriding them in development can leave phones and Turbopack
+  // with stale chunks after a code change.
   async headers() {
     return [
-      {
-        source: '/_next/static/:path*',
-        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
-      },
       {
         source: '/api/uploads/:path*',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],

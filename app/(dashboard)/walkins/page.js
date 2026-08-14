@@ -288,18 +288,18 @@ export default function WalkinsPage() {
   }
 
   return (
-    <div className="space-y-6 animate-[fade-in_0.3s_ease]">
+    <div className="space-y-5 md:space-y-6 animate-[fade-in_0.3s_ease]">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Walk-in Customers</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-foreground">Walk-in Customers</h1>
           <p className="text-sm text-muted mt-1">Reception desk — Log & track every visitor</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => generateQr()} className="flex items-center gap-2 px-4 py-2.5 border border-border text-foreground hover:bg-surface-hover rounded-xl text-sm font-medium transition-all">
+        <div className="flex w-full sm:w-auto items-center gap-2">
+          <button onClick={() => generateQr()} className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 border border-border text-foreground hover:bg-surface-hover rounded-xl text-sm font-medium transition-all">
             <QrCode className="w-4 h-4" /> QR Code
           </button>
-          <button onClick={() => setShowRegisterModal(true)} className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all">
+          <button onClick={() => setShowRegisterModal(true)} className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all">
             <UserPlus className="w-4 h-4" /> Register Walk-in
           </button>
         </div>
@@ -338,14 +338,14 @@ export default function WalkinsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 max-w-md">
+      <div className="flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative w-full md:flex-1 md:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
           <input type="search" name="walkin-search" autoComplete="off" role="searchbox" placeholder="Search by name, phone, or requirement..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-surface rounded-xl border border-border text-sm" />
         </div>
-        <div className="flex gap-1 flex-wrap">
+        <div className="flex gap-1 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1 md:flex-wrap md:overflow-visible md:pb-0 md:mx-0 md:px-0">
           {walkinStatuses.map(s => (
-            <button key={s} onClick={() => setStatusFilter(s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${statusFilter === s ? 'bg-accent text-white' : 'text-muted hover:text-foreground hover:bg-surface-hover'}`}>{s}</button>
+            <button key={s} onClick={() => setStatusFilter(s)} className={`flex-shrink-0 px-3 py-2 md:py-1.5 rounded-lg text-xs font-medium transition-all ${statusFilter === s ? 'bg-accent text-white' : 'text-muted hover:text-foreground hover:bg-surface-hover'}`}>{s}</button>
           ))}
         </div>
       </div>
@@ -406,7 +406,7 @@ export default function WalkinsPage() {
       {/* Register Walk-in Modal */}
       <Modal isOpen={showRegisterModal} onClose={() => setShowRegisterModal(false)} title="Register Walk-in Customer" size="lg">
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-muted mb-1.5">Customer Name *</label>
               <input type="text" name="customer-name" autoComplete="name" placeholder="Full name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50" />
@@ -416,7 +416,7 @@ export default function WalkinsPage() {
               <input type="tel" name="customer-phone" autoComplete="tel" placeholder="+91 XXXXX XXXXX" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-muted mb-1.5">Email (optional)</label>
               <input type="email" name="customer-email" autoComplete="email" placeholder="email@example.com" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50" />
@@ -429,7 +429,7 @@ export default function WalkinsPage() {
               </select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-muted mb-1.5">Budget Range</label>
               <select value={form.budget} onChange={e => setForm(f => ({ ...f, budget: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground focus:outline-none focus:border-accent/50">
@@ -452,7 +452,7 @@ export default function WalkinsPage() {
               </select>
             </div>
           </div>
-          {IS_TGM && <div className="grid grid-cols-3 gap-4">
+          {IS_TGM && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-muted mb-1.5">Room / Application</label>
               <select value={form.roomType} onChange={e => setForm(f => ({ ...f, roomType: e.target.value }))} className="w-full px-4 py-2.5 bg-surface border border-border rounded-xl text-sm text-foreground focus:outline-none focus:border-accent/50">
@@ -492,11 +492,11 @@ export default function WalkinsPage() {
           const StatusIcon = sc.icon;
           return (
             <div className="space-y-4">
-              <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center gap-3 sm:gap-4">
                 <div className="w-14 h-14 rounded-full bg-accent/10 flex items-center justify-center">
                   <UserCheck className="w-7 h-7 text-accent" />
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-[180px]">
                   <h3 className="text-lg font-semibold text-foreground">{selectedWalkin.name}</h3>
                   <div className="flex items-center gap-3 text-sm text-muted">
                     <span className="flex items-center gap-1"><Phone className="w-3.5 h-3.5" />{selectedWalkin.phone}</span>
@@ -508,7 +508,7 @@ export default function WalkinsPage() {
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-surface rounded-xl p-3">
                   <p className="text-xs text-muted mb-1">Requirement</p>
                   <p className="text-sm font-medium text-foreground">{selectedWalkin.requirement}</p>

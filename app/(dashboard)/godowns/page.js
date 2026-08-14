@@ -162,17 +162,17 @@ export default function GodownsPage() {
   const totalStockValue = godownSummary.reduce((s, g) => s + (g.totalValue || 0), 0)
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="space-y-5 md:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Multi-Branch & Godown</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-foreground">Multi-Branch & Godown</h1>
           <p className="text-muted text-sm mt-1">{branches.length} branches · {godowns.length} godowns · ₹{(totalStockValue / 100000).toFixed(1)}L inventory value</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          {tab === 'branches' && <button onClick={() => setShowBranchModal(true)} className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> Add Branch</button>}
-          {tab === 'godowns' && <button onClick={() => setShowGodownModal(true)} className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> Add Godown</button>}
-          {tab === 'stock' && <button onClick={() => setShowAssignModal(true)} className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> Assign Stock</button>}
-          {tab === 'transfers' && <button onClick={() => setShowTransferModal(true)} className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> New Transfer</button>}
+        <div className="flex w-full sm:w-auto gap-2 flex-wrap">
+          {tab === 'branches' && <button onClick={() => setShowBranchModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> Add Branch</button>}
+          {tab === 'godowns' && <button onClick={() => setShowGodownModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> Add Godown</button>}
+          {tab === 'stock' && <button onClick={() => setShowAssignModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> Assign Stock</button>}
+          {tab === 'transfers' && <button onClick={() => setShowTransferModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2"><Plus className="w-4 h-4" /> New Transfer</button>}
           <button onClick={handleMigrate} disabled={migrating} className="px-3 py-2 border border-border rounded-lg text-sm text-muted hover:text-foreground hover:bg-surface-hover flex items-center gap-1.5 disabled:opacity-50" title="Sync existing product stock to default godown">
             <RefreshCw className={`w-3.5 h-3.5 ${migrating ? 'animate-spin' : ''}`} /> Sync Stock
           </button>

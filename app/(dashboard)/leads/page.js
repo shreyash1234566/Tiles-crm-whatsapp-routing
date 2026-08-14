@@ -410,7 +410,7 @@ export default function LeadsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="p-3 rounded-xl bg-surface">
                 <p className="text-xs text-muted mb-1">Interest</p>
                 <p className="text-sm font-medium text-foreground">🛋️ {selectedLead.interest}</p>

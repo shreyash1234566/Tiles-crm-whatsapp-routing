@@ -20,7 +20,11 @@
     "db:migrate:tiles": "dotenv -e .env.tiles -- prisma migrate deploy",
     "db:seed:tiles": "dotenv -e .env.tiles -- tsx prisma/seed.ts",
     "setup:tiles": "prisma generate && dotenv -e .env.tiles -- prisma db push && dotenv -e .env.tiles -- tsx prisma/seed.ts",
-    "dev:tiles": "dotenv -e .env.tiles -- next dev -p 3001"
+    "tunnel": "dotenv -e .env -- ngrok http 3000",
+    "dev:mobile": "dotenv -e .env -- concurrently --kill-others --names next,ngrok --prefix-colors blue,green \"next dev\" \"ngrok http 3000\"",
+    "dev:tiles": "dotenv -e .env.tiles -- next dev -p 3001",
+    "tunnel:tiles": "dotenv -e .env.tiles -- ngrok http 3001",
+    "dev:tiles:mobile": "dotenv -e .env.tiles -- concurrently --kill-others --names next,ngrok --prefix-colors blue,green \"next dev -p 3001\" \"ngrok http 3001\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1015.0",
@@ -72,6 +76,7 @@
     "@types/node": "^25.5.0",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.14",
+    "concurrently": "^10.0.4",
     "dotenv": "^17.3.1",
     "dotenv-cli": "^8.0.0",
     "eslint": "^9",

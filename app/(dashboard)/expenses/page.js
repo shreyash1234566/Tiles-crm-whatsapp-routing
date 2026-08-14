@@ -400,20 +400,20 @@ export default function ExpensesPage() {
   return (
     <div className="space-y-6 animate-[fade-in_0.5s_ease-out]">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-foreground">Daily Expense Calculator</h1>
           <p className="text-xs md:text-sm text-muted mt-1">
             Today: {formatCurrency(todayTotal)} · This period: {formatCurrency(totalInRange)} · {filtered.length} entries
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full sm:w-auto items-center gap-2">
           <button onClick={handleExportCSV}
-            className="flex items-center gap-2 px-3 py-2 bg-surface border border-border hover:border-accent/30 text-foreground rounded-xl text-sm font-medium transition-all">
+            className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 py-2 bg-surface border border-border hover:border-accent/30 text-foreground rounded-xl text-sm font-medium transition-all">
             <Download className="w-4 h-4" /> Export
           </button>
           <button onClick={() => setShowAddExpense(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all">
+            className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all">
             <Plus className="w-4 h-4" /> Add Expense
           </button>
         </div>

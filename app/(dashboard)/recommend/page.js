@@ -43,14 +43,14 @@ export default function RecommendPage() {
   }
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="w-full max-w-5xl space-y-5 md:space-y-6">
       <div>
         <h1 className="text-xl md:text-2xl font-bold text-foreground">Surface Visualizer</h1>
         <p className="text-sm text-muted mt-1">Preview tiles, granite, marble or quartz on the actual floor, wall, countertop or staircase before approval.</p>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
-        <form onSubmit={runVisualization} className="glass-card p-5 space-y-5">
+        <form onSubmit={runVisualization} className="glass-card p-4 md:p-5 space-y-5">
           <div>
             <label className="text-sm font-semibold text-foreground">Target surface</label>
             <div className="grid grid-cols-2 gap-2 mt-2">
@@ -71,9 +71,9 @@ export default function RecommendPage() {
           <button disabled={loading} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-accent text-white font-semibold text-sm disabled:opacity-60"><Sparkles className="w-4 h-4" />{loading ? 'Creating surface preview…' : 'Generate surface preview'}</button>
         </form>
 
-        <div className="glass-card p-5 min-h-[430px]">
-          {!result && !loading && <div className="h-full min-h-[380px] flex flex-col items-center justify-center text-center text-muted"><ImagePlus className="w-12 h-12 opacity-25 mb-3" /><p className="font-medium">Your visualization will appear here</p><p className="text-xs mt-1 max-w-sm">Upload the project photo, choose a target surface, and optionally include a tile or stone reference.</p></div>}
-          {loading && <div className="h-full min-h-[380px] flex flex-col items-center justify-center text-muted"><div className="animate-spin rounded-full h-9 w-9 border-b-2 border-accent mb-3" /><p className="text-sm">Analysing the surface and its perspective…</p></div>}
+        <div className="glass-card p-4 md:p-5 min-h-[360px] md:min-h-[430px]">
+          {!result && !loading && <div className="h-full min-h-[310px] md:min-h-[380px] flex flex-col items-center justify-center text-center text-muted"><ImagePlus className="w-12 h-12 opacity-25 mb-3" /><p className="font-medium">Your visualization will appear here</p><p className="text-xs mt-1 max-w-sm">Upload the project photo, choose a target surface, and optionally include a tile or stone reference.</p></div>}
+          {loading && <div className="h-full min-h-[310px] md:min-h-[380px] flex flex-col items-center justify-center text-muted"><div className="animate-spin rounded-full h-9 w-9 border-b-2 border-accent mb-3" /><p className="text-sm text-center">Analysing the surface and its perspective…</p></div>}
           {result && <div className="space-y-4">{result.stagedImage && <img src={result.stagedImage} alt="AI surface visualization" className="w-full max-h-[360px] object-contain rounded-xl bg-surface" />}{result.isDemo && <p className="text-xs text-amber-700">Demo analysis shown because no live AI key is configured.</p>}{!result.isDemo && !result.stagedImage && <p className="text-xs text-amber-700">Material analysis completed, but no image-editing provider is configured. Add STABILITY_API_KEY, or use Gemini with a reference image, to render the edited preview.</p>}<div><h2 className="font-semibold text-foreground">{result.analysis?.overallAssessment || 'Surface recommendation'}</h2><p className="text-sm text-muted mt-1">{result.analysis?.targetSurface ? `Target: ${result.analysis.targetSurface}` : ''}</p></div>{(result.analysis?.recommendations || []).slice(0, 3).map((recommendation, index) => <div key={index} className="p-3 rounded-xl bg-surface border border-border"><p className="text-sm font-semibold text-foreground">{recommendation.category} · {recommendation.suggestedMaterial}</p><p className="text-xs text-muted mt-1">{recommendation.reason}</p></div>)}{(result.analysis?.designTips || []).length > 0 && <div className="p-3 rounded-xl bg-surface border border-border"><p className="text-xs font-semibold text-foreground">Practical checks</p><ul className="mt-1 space-y-1 text-xs text-muted list-disc list-inside">{result.analysis.designTips.slice(0, 3).map((tip, index) => <li key={index}>{tip}</li>)}</ul></div>}</div>}
         </div>
       </div>
@@ -82,5 +82,5 @@ export default function RecommendPage() {
 }
 
 function FileUpload({ label, hint, file, onChange }) {
-  return <div><label className="text-sm font-semibold text-foreground">{label}</label><label className="mt-2 min-h-24 rounded-xl border-2 border-dashed border-border hover:border-accent/50 bg-surface flex items-center gap-3 p-4 cursor-pointer transition-colors">{file ? <><div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center"><ImagePlus className="w-5 h-5 text-accent" /></div><div className="min-w-0"><p className="text-sm font-medium text-foreground truncate">{file.name}</p><p className="text-xs text-muted">Click to replace</p></div><X className="w-4 h-4 text-muted ml-auto" /></> : <><Upload className="w-5 h-5 text-muted" /><div><p className="text-sm text-foreground">Upload image</p><p className="text-xs text-muted">{hint}</p></div></>}<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={event => onChange(event.target.files?.[0] || null)} /></label></div>
+  return <div><label className="text-sm font-semibold text-foreground">{label}</label><label className="mt-2 min-h-24 rounded-xl border-2 border-dashed border-border hover:border-accent/50 bg-surface flex items-center gap-3 p-4 cursor-pointer transition-colors overflow-hidden">{file ? <><div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center flex-shrink-0"><ImagePlus className="w-5 h-5 text-accent" /></div><div className="min-w-0 flex-1"><p className="text-sm font-medium text-foreground truncate">{file.name}</p><p className="text-xs text-muted">Click to replace</p></div><X className="w-4 h-4 text-muted ml-auto flex-shrink-0" /></> : <><Upload className="w-5 h-5 text-muted flex-shrink-0" /><div className="min-w-0"><p className="text-sm text-foreground">Upload image</p><p className="text-xs text-muted line-clamp-2">{hint}</p></div></>}<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={event => onChange(event.target.files?.[0] || null)} /></label></div>
 }

@@ -1324,15 +1324,15 @@ export default function QuotationsPage() {
   }
 
   return (
-    <div className="space-y-6 animate-[fade-in_0.3s_ease]">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+    <div className="space-y-5 md:space-y-6 animate-[fade-in_0.3s_ease]">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Quotation Generator</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-foreground">Quotation Generator</h1>
           <p className="text-sm text-muted mt-1">Generate structured quotations with inventory-linked items and reference images</p>
         </div>
         <button
           onClick={openNewQuotationModal}
-          className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
+          className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
         >
           <Plus className="w-4 h-4" /> New Quotation
         </button>

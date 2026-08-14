@@ -490,28 +490,28 @@ export default function InventoryPage() {
   return (
     <div className="space-y-6 animate-[fade-in_0.5s_ease-out]">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-foreground">{getTerm('inventoryUnit')} Inventory & Warehouse</h1>
           <p className="text-xs md:text-sm text-muted mt-1">
             {finishedGoods.length} finished goods · {rawMaterials.length} raw materials · {godowns.length || 1} location{godowns.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full sm:w-auto items-center gap-2">
           {tab === 'products' && productType === 'finished' && (
             <button
               onClick={() => { setImportResult(null); setImportRows([]); setImportError(''); setShowImportModal(true); }}
-              className="flex items-center gap-2 px-4 py-2.5 bg-surface hover:bg-surface-hover border border-border text-muted hover:text-accent rounded-xl text-sm font-semibold transition-all"
+              className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 bg-surface hover:bg-surface-hover border border-border text-muted hover:text-accent rounded-xl text-sm font-semibold transition-all"
             >
               <Upload className="w-4 h-4" /> Bulk Import
             </button>
           )}
           {tab === 'stoneLots' ? (
             <div className="flex gap-2">
-              <button onClick={() => setShowSampleLoanModal(true)} className="flex items-center gap-2 px-4 py-2.5 bg-surface border border-border hover:border-accent/40 text-foreground rounded-xl text-sm font-semibold transition-all"><Package className="w-4 h-4" /> Issue Sample</button>
+              <button onClick={() => setShowSampleLoanModal(true)} className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 bg-surface border border-border hover:border-accent/40 text-foreground rounded-xl text-sm font-semibold transition-all"><Package className="w-4 h-4" /> Issue Sample</button>
               <button
                 onClick={() => setShowStoneLotModal(true)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
+                className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
               >
                 <Plus className="w-4 h-4" /> Receive Stone Lot
               </button>
@@ -519,7 +519,7 @@ export default function InventoryPage() {
           ) : tab === 'offcuts' ? null : !(tab === 'products' && productType === 'rawMaterial') && (
             <button
               onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
+              className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all"
             >
               <Plus className="w-4 h-4" />
               Add Product

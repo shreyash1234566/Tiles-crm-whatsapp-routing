@@ -73,7 +73,11 @@ devDependency, so run `npm install` first.
 | `db:migrate:tiles` | `dotenv -e .env.tiles -- prisma migrate deploy` | Applies committed Prisma migrations to the tiles database. |
 | `db:seed:tiles` | `dotenv -e .env.tiles -- tsx prisma/seed.ts` | Seeds the tiles database with tiles/sanitary defaults (because `BUSINESS_TYPE=tiles`). |
 | `setup:tiles` | `prisma generate && dotenv -e .env.tiles -- prisma db push && dotenv -e .env.tiles -- tsx prisma/seed.ts` | One-shot setup: generate the Prisma client, push the schema, and seed — all against the tiles database. |
+| `tunnel` | `dotenv -e .env -- ngrok http 3000` | Exposes an already-running default dev server on port 3000. |
+| `dev:mobile` | `dotenv -e .env -- concurrently ...` | Starts the default dev server and an ngrok tunnel together. |
 | `dev:tiles` | `dotenv -e .env.tiles -- next dev` | Runs the Next.js dev server connected to the tiles database. |
+| `tunnel:tiles` | `dotenv -e .env.tiles -- ngrok http 3001` | Exposes an already-running TGM dev server through a temporary HTTPS URL. |
+| `dev:tiles:mobile` | `dotenv -e .env.tiles -- concurrently ...` | Starts the TGM dev server and an ngrok tunnel together. |
 
 The existing furniture scripts (`db:push`, `db:migrate`, `db:seed`, `setup`, `dev`,
 etc.) are unchanged and continue to use `.env` / `DATABASE_URL`.
@@ -85,6 +89,32 @@ npm install        # ensures dotenv-cli is available
 npm run setup:tiles
 npm run dev:tiles
 ```
+
+## Testing on a mobile device
+
+The TGM app runs on port `3001`. To expose it to a phone on another network,
+create a free ngrok authtoken and add it only to your local `.env.tiles` file:
+
+```dotenv
+NGROK_AUTHTOKEN="your-local-ngrok-token"
+```
+
+Then use one of these workflows:
+
+```bash
+# Recommended: starts Next.js and ngrok together
+npm run dev:tiles:mobile
+
+# Or, if `npm run dev:tiles` is already running in another terminal
+npm run tunnel:tiles
+
+# If you started the app with the generic `npm run dev` command instead
+npm run tunnel
+```
+
+Copy the printed `Public URL` into the mobile browser. Keep the terminal open
+while testing; `Ctrl+C` closes the tunnel and stops the combined development
+server.
 
 ## Tiles seed data
 

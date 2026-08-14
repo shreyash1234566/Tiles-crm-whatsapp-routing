@@ -887,33 +887,33 @@ export default function ManufacturingPage() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Manufacturing</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-foreground">Manufacturing</h1>
           <p className="text-muted text-sm mt-0.5">BOM · Production Orders · Work Centers · MRP · Quality · Costing</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex w-full sm:w-auto gap-2 flex-wrap">
           {tab === 'bom' && (
             <>
-              <button onClick={() => setShowTemplateModal(true)} className="px-4 py-2 bg-surface border border-border text-foreground rounded-lg text-sm font-medium hover:bg-surface-hover flex items-center gap-2">
+              <button onClick={() => setShowTemplateModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-surface border border-border text-foreground rounded-lg text-sm font-medium hover:bg-surface-hover flex items-center gap-2">
                 <FileText className="w-4 h-4" /> Templates
               </button>
-              <button onClick={() => setShowBOMModal(true)} className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2">
+              <button onClick={() => setShowBOMModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2">
                 <Plus className="w-4 h-4" /> New BOM
               </button>
             </>
           )}
           {tab === 'production' && (
-            <button onClick={() => setShowProdModal(true)} className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2">
+            <button onClick={() => setShowProdModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2">
               <Plus className="w-4 h-4" /> New Production Order
             </button>
           )}
           {tab === 'workcenters' && (
-            <button onClick={() => setShowWCModal(true)} className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2">
+            <button onClick={() => setShowWCModal(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 flex items-center gap-2">
               <Plus className="w-4 h-4" /> New Work Center
             </button>
           )}
-          <button onClick={loadData} className="px-3 py-2 bg-surface border border-border rounded-lg text-sm text-muted hover:text-foreground flex items-center gap-1.5">
+          <button onClick={loadData} className="px-3 py-2 bg-surface border border-border rounded-lg text-sm text-muted hover:text-foreground flex items-center gap-1.5" aria-label="Refresh manufacturing data">
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>

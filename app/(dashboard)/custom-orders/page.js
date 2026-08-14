@@ -667,7 +667,7 @@ export default function CustomOrdersPage() {
               </div>
 
               {/* Customer & Staff */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-surface rounded-xl p-3">
                   <p className="text-xs text-muted mb-1">Customer</p>
                   <p className="text-sm font-medium text-foreground">{selectedOrder.customer}</p>
@@ -715,7 +715,7 @@ export default function CustomOrdersPage() {
               </div>
 
               {/* Materials & Reference */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-surface rounded-xl p-3">
                   <p className="text-xs text-muted mb-1">Materials</p>
                   <p className="text-sm font-medium text-foreground">{selectedOrder.materials || '—'}</p>

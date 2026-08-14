@@ -35,12 +35,18 @@ export default function TopBar() {
   const notificationsRef = useRef(null);
 
   // Light/dark theme toggle (Homzentic vertical only). Dark is the default;
-  // the choice is persisted and restored pre-paint by the script in layout.js.
+  // the saved choice is restored after hydration to keep the root layout
+  // free of inline script warnings in Next.js development.
   const isHomzentic = brand.brandAttribute === 'homzentic';
   const [theme, setTheme] = useState('dark');
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+    let current = 'dark';
+    try {
+      current = localStorage.getItem('homzentic-theme') === 'light' ? 'light' : 'dark';
+    } catch { /* ignore unavailable storage */ }
+    if (current === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    else document.documentElement.removeAttribute('data-theme');
     setTheme(current);
   }, []);
   const toggleTheme = () => {

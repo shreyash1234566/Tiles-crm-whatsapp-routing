@@ -17,24 +17,8 @@ export function generateMetadata() {
 
 export default function RootLayout({ children }) {
   const brand = getBrand();
-  // For the Homzentic vertical the UI defaults to the dark theme (NeuroBank
-  // style); "light" is opt-in via data-theme. This pre-paint script restores
-  // the user's saved choice before first paint to avoid a flash.
-  const themeInit = `
-try {
-  var el = document.documentElement;
-  if (el.getAttribute('data-brand') === 'homzentic') {
-    var t = localStorage.getItem('homzentic-theme');
-    if (t === 'light') { el.setAttribute('data-theme','light'); }
-    else { el.removeAttribute('data-theme'); }
-  }
-} catch (e) {}
-`;
   return (
     <html lang="en" data-brand={brand.brandAttribute ?? undefined} suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInit }} />
-      </head>
       <body suppressHydrationWarning className={`${robotoMono.variable} font-sans antialiased`}>
         <AuthProvider>
           <AlertToastProvider>

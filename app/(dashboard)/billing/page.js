@@ -1305,39 +1305,39 @@ export default function BillingPage() {
   // ─── RENDER ────────────────────────────────────────────
 
   return (
-    <div className="space-y-6 animate-[fade-in_0.3s_ease]">
+    <div className="space-y-5 md:space-y-6 animate-[fade-in_0.3s_ease]">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Billing & POS</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-foreground">Billing & POS</h1>
           <p className="text-sm text-muted mt-1">
             {stats ? `${stats.todayCount} invoices today · ${formatCurrency(stats.todayRevenue)} collected` : ''}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full sm:w-auto items-center gap-2 flex-wrap">
           {heldBills.length > 0 && (
             <span className="flex items-center gap-1.5 px-3 py-2 bg-amber-500/10 text-amber-700 rounded-xl text-xs font-medium border border-amber-500/20">
               <PauseCircle className="w-3.5 h-3.5" /> {heldBills.length} held
             </span>
           )}
-          <button onClick={handleExportCSV} className="flex items-center gap-2 px-3 py-2.5 bg-surface border border-border hover:border-accent/30 rounded-xl text-sm font-medium text-muted hover:text-accent transition-all">
+          <button onClick={handleExportCSV} className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 py-2.5 bg-surface border border-border hover:border-accent/30 rounded-xl text-sm font-medium text-muted hover:text-accent transition-all">
             <Download className="w-4 h-4" /> Export
           </button>
-          <button onClick={() => { setTab('pos'); clearPOS(); }} className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all">
+          <button onClick={() => { setTab('pos'); clearPOS(); }} className="flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all">
             <Plus className="w-4 h-4" /> New Invoice
           </button>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex bg-surface rounded-xl border border-border p-0.5 w-fit">
+      <div className="flex max-w-full overflow-x-auto hide-scrollbar bg-surface rounded-xl border border-border p-0.5 w-fit">
         {[
           { key: 'invoices', label: 'Invoices', icon: Receipt, count: invoices.filter(i => i.invoiceStatus === 'ACTIVE').length },
           { key: 'pos', label: 'POS', icon: Calculator },
           { key: 'held', label: 'Held Bills', icon: PauseCircle, count: heldBills.length },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-all ${tab === t.key ? 'bg-accent text-white' : 'text-muted hover:text-foreground'}`}>
+            className={`flex flex-shrink-0 items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-2 rounded-lg text-sm font-medium transition-all ${tab === t.key ? 'bg-accent text-white' : 'text-muted hover:text-foreground'}`}>
             <t.icon className="w-3.5 h-3.5" /> {t.label}
             {t.count > 0 && <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${tab === t.key ? 'bg-white/20' : 'bg-accent/10 text-accent'}`}>{t.count}</span>}
           </button>
