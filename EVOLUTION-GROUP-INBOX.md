@@ -86,3 +86,15 @@ This integration stores text and provider media URLs. Full media download/proxy 
 ## Provider choice
 
 This implementation targets the official Evolution API/Baileys REST contract because the earlier QR experiment and the current Tiles environment contract were built around it, and its ecosystem has the broader documented group, webhook, and Manager surface. Evolution Go is a separate Go/whatsmeow engine with its own API and license-activation lifecycle. It may be evaluated later as a deliberate migration, but it should not be mixed into this instance because that would introduce a second QR/session and payload contract.
+
+## Original routing decision order restored
+
+For each inbound group message, Tiles CRM now applies this order:
+
+1. An explicit WhatsApp `@` mention or employee/profile alias routes directly to that employee and department with highest priority.
+2. A department name or configured employee alias in the subject/message routes deterministically by keyword.
+3. If no deterministic keyword matches, Groq is called with a strict JSON classification prompt. A result is accepted at confidence `>= 0.70`.
+4. If Groq is absent, low-confidence, invalid, or unavailable, Claude Haiku is called when `ANTHROPIC_API_KEY` is configured.
+5. If both classifiers are unclear or unavailable, an existing open group keeps its department; a new group goes to the default Sales department so no message is silently dropped.
+
+Every processed message creates or updates one `EvolutionGroupTicket`. Each route is recorded in `EvolutionRoutingAudit`; a change from one department ID to another is recorded as `HANDOFF`. The database transaction writes the group, ticket, message, and audit together, while the webhook acknowledges quickly and performs the work asynchronously.
