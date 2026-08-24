@@ -506,6 +506,18 @@ async function seedTiles() {
     },
   })
 
+  // ─── ROUTING DEPARTMENTS ────────────────────────────
+  // These foundational records keep fresh Tiles setups ready for the
+  // department-aware employee workflow. Upserts are idempotent.
+  console.log('  → Routing departments')
+  for (const name of ['Sales', 'Accounts', 'Logistics']) {
+    await prisma.routingDepartment.upsert({
+      where: { name },
+      update: { isActive: true },
+      create: { name, isActive: true },
+    })
+  }
+
   // ─── CATEGORIES & WAREHOUSES ────────────────────────
   console.log('  → Categories & warehouses')
   const categoryNames = [
