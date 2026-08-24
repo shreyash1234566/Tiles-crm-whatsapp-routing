@@ -39,6 +39,24 @@ const staffPortalInclude: Prisma.StaffInclude = {
   _count: { select: { leads: true, invoices: true, customOrders: true } },
 }
 
+const defaultStaffStats = {
+  leadsAssigned: 0,
+  conversions: 0,
+  revenue: 0,
+  avgResponseTime: '0 min',
+  todaySales: 0,
+  todayRevenue: 0,
+  rating: 0,
+  conversionRate: 0,
+}
+const defaultStaffTarget = { monthly: 0, achieved: 0 }
+const defaultStaffCommission = { rate: 0, earned: 0, pending: 0 }
+
+function mergeStaffJson<T extends Record<string, unknown>>(value: unknown, defaults: T): T {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults
+  return { ...defaults, ...(value as Partial<T>) }
+}
+
 const mapStaffForPortal = (s: any) => ({
   id: s.id,
   name: s.name,
@@ -51,9 +69,9 @@ const mapStaffForPortal = (s: any) => ({
   status: s.status,
   joinDate: s.joinDate ? s.joinDate.toISOString().split('T')[0] : null,
   avatar: s.avatar,
-  stats: s.stats,
-  target: s.target,
-  commission: s.commission,
+  stats: mergeStaffJson(s.stats, defaultStaffStats),
+  target: mergeStaffJson(s.target, defaultStaffTarget),
+  commission: mergeStaffJson(s.commission, defaultStaffCommission),
   attendance: s.attendance.map((a: any) => ({
     date: a.date.toISOString().split('T')[0],
     clockIn: a.clockIn,

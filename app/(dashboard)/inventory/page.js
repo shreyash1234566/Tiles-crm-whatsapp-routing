@@ -28,11 +28,25 @@ const IS_TILES = getActiveVertical() === 'tiles';
 
 const inventoryUnitLabel = (product) => {
   if (!IS_TILES) return product?.unitOfMeasure || 'PCS';
-  if (product?.isSlabTracked) return getMaterialLabel(product.materialCategory || product.material);
+  if (product?.isSlabTracked) return 'SLABS';
   const unit = String(product?.unitOfMeasure || '').toUpperCase();
   if (['BOX', 'SQFT', 'SQM', 'RFT'].includes(unit)) return unit;
   return getMaterialLabel(product?.materialCategory || product?.material);
 };
+
+// Product.stock is deliberately zero for serialized granite/marble. Their
+// source of truth is the available physical slab balance returned by getProducts.
+const inventoryQuantity = (product) => product?.isSlabTracked
+  ? Number(product.availableStoneSlabs || 0)
+  : Number(product?.stock || 0);
+
+const inventoryValue = (product) => product?.isSlabTracked
+  ? Number(product.availableStoneSqft || 0) * Number(product.price || 0)
+  : (product?.isRawMaterial ? Number(product.costPrice || 0) : Number(product.price || 0)) * inventoryQuantity(product);
+
+const inventoryStockText = (product) => product?.isSlabTracked
+  ? `${inventoryQuantity(product)} slabs · ${Number(product.availableStoneSqft || 0).toFixed(2)} sq.ft`
+  : `${inventoryQuantity(product)} ${inventoryUnitLabel(product)}`;
 
 const stockBadge = (stock, reorderLevel) => {
   if (stock === 0) return { text: 'Out of Stock', cls: 'bg-danger-light text-danger' };
@@ -471,11 +485,11 @@ export default function InventoryPage() {
     return Object.values(map).sort((a, b) => b.totalQty - a.totalQty);
   }, [godownStocks, selectedLocationGodown, locationSearch]);
 
-  const totalStock = activeProducts.reduce((sum, p) => sum + p.stock, 0);
-  const lowStockItems = activeProducts.filter(p => p.stock > 0 && p.stock <= p.reorderLevel);
-  const outOfStockItems = activeProducts.filter(p => p.stock === 0);
-  const totalValue = activeProducts.reduce((sum, p) => sum + ((p.isRawMaterial ? p.costPrice : p.price) * p.stock), 0);
-  const needsReorder = [...lowStockItems, ...outOfStockItems].sort((a, b) => a.stock - b.stock);
+  const totalStock = activeProducts.reduce((sum, p) => sum + inventoryQuantity(p), 0);
+  const lowStockItems = activeProducts.filter(p => inventoryQuantity(p) > 0 && inventoryQuantity(p) <= p.reorderLevel);
+  const outOfStockItems = activeProducts.filter(p => inventoryQuantity(p) === 0);
+  const totalValue = activeProducts.reduce((sum, p) => sum + inventoryValue(p), 0);
+  const needsReorder = [...lowStockItems, ...outOfStockItems].sort((a, b) => inventoryQuantity(a) - inventoryQuantity(b));
 
   if (loading) {
     return (
@@ -652,12 +666,12 @@ export default function InventoryPage() {
           {view === 'grid' ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filtered.map(product => {
-                const badge = stockBadge(product.stock, product.reorderLevel);
+                const badge = stockBadge(inventoryQuantity(product), product.reorderLevel);
                 const isBestSeller = !product.isRawMaterial && product.sold >= 30;
                 // Get godown distribution for this product
                 const godownDist = godownStocks.filter(gs => gs.productId === product.id);
                 return (
-                  <div key={product.id} className="glass-card overflow-hidden group hover:scale-[1.02] transition-transform cursor-pointer" onClick={() => setShowStockModal(product)}>
+                    <div key={product.id} className="glass-card overflow-hidden group hover:scale-[1.02] transition-transform cursor-pointer" onClick={() => product.isSlabTracked ? setTab('stoneLots') : setShowStockModal(product)}>
                     <div className="h-32 bg-surface flex items-center justify-center relative overflow-hidden">
                       {product.image && !product.image.includes('/') ? (
                         <span className="text-5xl">{product.image}</span>
@@ -713,7 +727,7 @@ export default function InventoryPage() {
                         <span className={`badge text-[10px] ${badge.cls}`}>{badge.text}</span>
                       </div>
                       <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
-                        <span className="text-xs text-muted">{product.stock} {inventoryUnitLabel(product)} in stock</span>
+                        <span className="text-xs text-muted">{inventoryStockText(product)} in stock</span>
                         {product.isRawMaterial ? (
                           <span className="text-xs text-muted">Reorder @ {product.reorderLevel}</span>
                         ) : (
@@ -745,12 +759,12 @@ export default function InventoryPage() {
               {/* Mobile stacked card list */}
               <div className="md:hidden space-y-3">
                 {filtered.map(product => {
-                  const badge = stockBadge(product.stock, product.reorderLevel);
+                  const badge = stockBadge(inventoryQuantity(product), product.reorderLevel);
                   const godownDist = godownStocks.filter(gs => gs.productId === product.id);
                   return (
                     <div
                       key={product.id}
-                      onClick={() => setShowStockModal(product)}
+                      onClick={() => product.isSlabTracked ? setTab('stoneLots') : setShowStockModal(product)}
                       className="glass-card p-3 flex items-center gap-3 active:scale-[0.99] transition-transform"
                     >
                       <div className="w-14 h-14 rounded-xl bg-surface flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -776,14 +790,14 @@ export default function InventoryPage() {
                           ) : (
                             <span className="text-sm font-bold text-accent">₹{product.price.toLocaleString()}</span>
                           )}
-                          <span className="text-[11px] text-muted">{product.stock} {inventoryUnitLabel(product)} in stock</span>
+                          <span className="text-[11px] text-muted text-right">{inventoryStockText(product)} in stock</span>
                         </div>
                         <div className="flex items-center gap-1.5 mt-2">
                           <button
-                            onClick={(e) => { e.stopPropagation(); setShowStockModal(product); }}
+                            onClick={(e) => { e.stopPropagation(); product.isSlabTracked ? setTab('stoneLots') : setShowStockModal(product); }}
                             className="touch-target flex-1 px-2 py-1.5 rounded-lg bg-surface-hover text-xs font-medium text-muted active:text-accent transition-colors"
                           >
-                            Update Stock
+                            {product.isSlabTracked ? 'View Lots' : 'Update Stock'}
                           </button>
                           {!product.isRawMaterial && (
                             <button
@@ -836,10 +850,10 @@ export default function InventoryPage() {
                     </thead>
                     <tbody>
                       {filtered.map(product => {
-                        const badge = stockBadge(product.stock, product.reorderLevel);
+                        const badge = stockBadge(inventoryQuantity(product), product.reorderLevel);
                         const godownDist = godownStocks.filter(gs => gs.productId === product.id);
                         return (
-                          <tr key={product.id} className="cursor-pointer" onClick={() => setShowStockModal(product)}>
+                          <tr key={product.id} className="cursor-pointer" onClick={() => product.isSlabTracked ? setTab('stoneLots') : setShowStockModal(product)}>
                             <td>
                               <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-lg bg-surface flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -864,7 +878,7 @@ export default function InventoryPage() {
                             ) : (
                               <td className="text-accent font-semibold">₹{product.price.toLocaleString()}</td>
                             )}
-                            <td className={`font-medium ${product.stock <= product.reorderLevel ? 'text-danger' : 'text-foreground'}`}>{product.stock}</td>
+                            <td className={`font-medium ${inventoryQuantity(product) <= product.reorderLevel ? 'text-danger' : 'text-foreground'}`}>{product.isSlabTracked ? `${inventoryQuantity(product)} / ${Number(product.availableStoneSqft || 0).toFixed(2)} sq.ft` : inventoryQuantity(product)}</td>
                             <td>
                               <div className="flex flex-wrap gap-1">
                                 {godownDist.length > 0 ? godownDist.map(gs => (
@@ -881,8 +895,8 @@ export default function InventoryPage() {
                             <td><span className={`badge ${badge.cls}`}>{badge.text}</span></td>
                             <td>
                               <div className="flex items-center gap-2">
-                                <button onClick={(e) => { e.stopPropagation(); setShowStockModal(product); }} className="px-2 py-1 rounded-lg bg-surface-hover text-xs text-muted hover:text-accent transition-colors">
-                                  Update Stock
+                                <button onClick={(e) => { e.stopPropagation(); product.isSlabTracked ? setTab('stoneLots') : setShowStockModal(product); }} className="px-2 py-1 rounded-lg bg-surface-hover text-xs text-muted hover:text-accent transition-colors">
+                                  {product.isSlabTracked ? 'View Lots' : 'Update Stock'}
                                 </button>
                                 {!product.isRawMaterial && (
                                   <button onClick={(e) => openEditModal(product, e)} className="px-2 py-1 rounded-lg bg-blue-50 text-xs text-blue-600 hover:bg-blue-100 transition-colors flex items-center gap-1">
@@ -931,13 +945,26 @@ export default function InventoryPage() {
           ) : stoneLots.map(lot => (
             <div key={lot.id} className="glass-card overflow-hidden">
               <div className="p-4 border-b border-border flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
-                <div>
+                <div className="flex items-start gap-3 min-w-0">
+                  {lot.photos?.[0] ? (
+                    <img
+                      src={lot.photos[0]}
+                      alt={`${lot.product.name} lot ${lot.lotNumber}`}
+                      className="w-16 h-16 md:w-20 md:h-20 rounded-xl object-cover border border-border flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-xl bg-surface flex items-center justify-center flex-shrink-0">
+                      <Layers className="w-7 h-7 text-muted/40" />
+                    </div>
+                  )}
+                  <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-semibold text-foreground">{lot.product.name}</h3>
                     <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-surface-hover text-muted">Lot {lot.lotNumber}</span>
                     {lot.shadeCode && <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700">Shade {lot.shadeCode}</span>}
                   </div>
                   <p className="text-xs text-muted mt-1">{lot.origin || 'Origin not recorded'} · {lot.qualityGrade || 'Grade not recorded'} · Cost ₹{lot.costPerSqft}/sq.ft</p>
+                  </div>
                 </div>
                 <div className="text-sm md:text-right"><span className="font-bold text-foreground">{lot.availableSqft.toFixed(2)} sq.ft</span><span className="text-muted"> / {lot.totalSqft.toFixed(2)} sq.ft</span><p className="text-xs text-muted">{lot.availableSlabs} available · {lot.reservedSlabs} allocated</p></div>
               </div>
@@ -954,12 +981,11 @@ export default function InventoryPage() {
                        <td>{slab.qcGrade || 'Not graded'}</td>
                        <td><select value={slab.bookMatchPairId || ''} onChange={async e => { const result = await pairSlabs({ slabId: slab.id, partnerId: e.target.value ? Number(e.target.value) : null }); if (result.success) { notify('Book-match pairing updated.', { variant: 'success' }); loadStoneLots(); } else notify(result.error || 'Could not pair slabs', { variant: 'danger' }); }} className="px-2 py-1.5 bg-surface border border-border rounded-lg text-xs"><option value="">None</option>{lot.slabs.filter(candidate => candidate.id !== slab.id).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.slabNumber}</option>)}</select></td>
                       <td><span className={`badge ${slab.status === 'AVAILABLE' ? 'bg-success-light text-success' : slab.status === 'SOLD' ? 'bg-surface-hover text-muted' : slab.status === 'DAMAGED' ? 'bg-danger-light text-danger' : 'bg-warning-light text-warning'}`}>{slab.status.replace('_', ' ')}</span></td>
-                      <td><select value={slab.status} onChange={async e => {
+                      <td>{slab.status === 'AVAILABLE' ? <select value={slab.status} onChange={async e => {
                         const nextStatus = e.target.value;
-                        if (nextStatus === 'SOLD') { notify('Mark slabs sold from the invoice workflow so the invoice and sale value stay linked.', { variant: 'warning' }); return; }
                         const result = await updateSlab({ slabId: slab.id, status: nextStatus });
                         if (result.success) loadStoneLots(); else notify(result.error || 'Could not update slab', { variant: 'danger' });
-                      }} className="px-2 py-1.5 bg-surface border border-border rounded-lg text-xs text-foreground"><option value="AVAILABLE">Available</option><option value="RESERVED">Reserved</option><option value="IN_PROCESSING">In Processing</option><option value="DAMAGED">Damaged</option><option value="SOLD">Sold via Invoice</option></select></td>
+                      }} className="px-2 py-1.5 bg-surface border border-border rounded-lg text-xs text-foreground"><option value="AVAILABLE">Available</option><option value="DAMAGED">Damaged</option></select> : <span className="text-[11px] text-muted">Use the linked job / sample workflow</span>}</td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -1136,8 +1162,9 @@ export default function InventoryPage() {
                     </thead>
                     <tbody>
                       {needsReorder.map(product => {
-                        const shortfall = product.reorderLevel - product.stock;
-                        const isOut = product.stock === 0;
+                        const quantity = inventoryQuantity(product);
+                        const shortfall = product.reorderLevel - quantity;
+                        const isOut = quantity === 0;
                         return (
                           <tr key={product.id}>
                             <td className="whitespace-nowrap">
@@ -1158,7 +1185,7 @@ export default function InventoryPage() {
                               </div>
                             </td>
                             <td className="font-mono text-xs text-muted whitespace-nowrap">{product.sku}</td>
-                            <td className={`font-bold whitespace-nowrap ${isOut ? 'text-danger' : 'text-warning'}`}>{product.stock}</td>
+                            <td className={`font-bold whitespace-nowrap ${isOut ? 'text-danger' : 'text-warning'}`}>{product.isSlabTracked ? `${quantity} slabs` : quantity}</td>
                             <td className="text-muted whitespace-nowrap">{product.reorderLevel}</td>
                             <td className="text-danger font-medium whitespace-nowrap">
                               {shortfall > 0 ? `Need ${shortfall} more` : 'Restocked'}
@@ -1172,7 +1199,7 @@ export default function InventoryPage() {
                             </td>
                             <td className="whitespace-nowrap">
                               <button
-                                onClick={() => setShowStockModal(product)}
+                                onClick={() => product.isSlabTracked ? setTab('stoneLots') : setShowStockModal(product)}
                                 className="px-3 py-1.5 rounded-lg bg-accent/10 text-accent text-xs font-medium hover:bg-accent/20 transition-colors border border-accent/20"
                               >
                                 Restock
@@ -1389,7 +1416,7 @@ export default function InventoryPage() {
                   {(() => {
                     const now = new Date();
                     const productAging = products
-                      .filter(p => p.stock > 0)
+                      .filter(p => inventoryQuantity(p) > 0)
                       .map(p => {
                         const refDate = p.lastRestocked ? new Date(p.lastRestocked) : new Date(p.createdAt || now);
                         const ageDays = Math.floor((now - refDate) / (1000 * 60 * 60 * 24));
@@ -1398,7 +1425,7 @@ export default function InventoryPage() {
                         else if (ageDays > 90) bracket = '91-180 days';
                         else if (ageDays > 60) bracket = '61-90 days';
                         else if (ageDays > 30) bracket = '31-60 days';
-                        return { ...p, ageDays, bracket, value: p.stock * (p.costPrice || 0) };
+                        return { ...p, ageDays, bracket, value: inventoryValue(p), inventoryQuantity: inventoryQuantity(p) };
                       })
                       .sort((a, b) => b.ageDays - a.ageDays);
 
@@ -1439,7 +1466,7 @@ export default function InventoryPage() {
                                       <td className="px-4 py-3 whitespace-nowrap">
                                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${bracketBg[p.bracket]} ${bracketColors[p.bracket]}`}>{p.bracket}</span>
                                       </td>
-                                      <td className="px-4 py-3 text-foreground whitespace-nowrap">{p.stock}</td>
+                                      <td className="px-4 py-3 text-foreground whitespace-nowrap">{p.isSlabTracked ? `${p.inventoryQuantity} slabs` : p.inventoryQuantity}</td>
                                       <td className="px-4 py-3 text-foreground whitespace-nowrap">₹{p.value.toLocaleString('en-IN')}</td>
                                     </tr>
                                   ))
@@ -1458,14 +1485,18 @@ export default function InventoryPage() {
         </div>
       )}
 
-      <Modal isOpen={showStoneLotModal} onClose={() => setShowStoneLotModal(false)} title="Receive Granite / Marble Lot" size="lg">
+      <Modal isOpen={showStoneLotModal} onClose={() => setShowStoneLotModal(false)} title="Receive Granite / Marble Lot" size="lg" fullScreenMobile>
         <form className="space-y-4" onSubmit={async e => {
           e.preventDefault();
-          const slabs = stoneLotForm.slabsText.split('\n').map((line, index) => {
-            const [slabNumber, length, width] = line.split(',').map(value => value.trim());
-            return { slabNumber: slabNumber || String(index + 1), lengthInches: Number(length), widthInches: Number(width) };
-          }).filter(slab => slab.slabNumber && slab.lengthInches > 0 && slab.widthInches > 0);
-           if (!stoneLotForm.productId || slabs.length === 0) { notify('Select a stone item and enter valid slab rows.', { variant: 'danger' }); return; }
+          const lines = stoneLotForm.slabsText.split('\n').map(line => line.trim()).filter(Boolean);
+          const slabs = lines.map(line => {
+            const parts = line.split(',').map(value => value.trim());
+            return { slabNumber: parts[0] || '', lengthInches: Number(parts[1]), widthInches: Number(parts[2]), valid: parts.length === 3 && Boolean(parts[0]) && Number(parts[1]) > 0 && Number(parts[2]) > 0 };
+          });
+          if (!stoneLotForm.productId || slabs.length === 0 || slabs.some(slab => !slab.valid)) { notify('Fix every slab row. Use: slab number, length in inches, width in inches.', { variant: 'danger' }); return; }
+          const duplicateNumbers = slabs.map(slab => slab.slabNumber.toLowerCase()).filter((number, index, values) => values.indexOf(number) !== index);
+          if (duplicateNumbers.length > 0) { notify(`Duplicate slab number: ${duplicateNumbers[0]}`, { variant: 'danger' }); return; }
+          const normalizedSlabs = slabs.map(({ valid, ...slab }) => slab);
            let photos = [];
            if (stoneLotPhotos.length > 0) {
              const formData = new FormData();
@@ -1480,7 +1511,7 @@ export default function InventoryPage() {
             productId: Number(stoneLotForm.productId), godownId: stoneLotForm.godownId ? Number(stoneLotForm.godownId) : undefined,
             lotNumber: stoneLotForm.lotNumber, origin: stoneLotForm.origin || undefined, shadeCode: stoneLotForm.shadeCode || undefined,
             qualityGrade: stoneLotForm.qualityGrade || undefined, avgThicknessMm: stoneLotForm.thicknessMm ? Number(stoneLotForm.thicknessMm) : undefined,
-             costPerSqft: Number(stoneLotForm.costPerSqft) || 0, notes: stoneLotForm.notes || undefined, photos, slabs,
+             costPerSqft: Number(stoneLotForm.costPerSqft) || 0, notes: stoneLotForm.notes || undefined, photos, slabs: normalizedSlabs,
            });
            if (result.success) { setShowStoneLotModal(false); setStoneLotPhotos([]); setStoneLotForm({ productId: '', godownId: '', lotNumber: '', origin: '', shadeCode: '', qualityGrade: '', thicknessMm: '', costPerSqft: '', notes: '', slabsText: '01/01, 120, 72' }); await loadStoneLots(); notify('Stone lot received with individually measured slabs.', { variant: 'success' }); }
           else notify(result.error || 'Could not receive stone lot', { variant: 'danger' });
@@ -1502,14 +1533,14 @@ export default function InventoryPage() {
         </form>
       </Modal>
 
-      <Modal isOpen={showSampleLoanModal} onClose={() => setShowSampleLoanModal(false)} title="Issue Stone Sample" size="md">
+      <Modal isOpen={showSampleLoanModal} onClose={() => setShowSampleLoanModal(false)} title="Issue Stone Sample" size="md" fullScreenMobile>
         <form className="space-y-4" onSubmit={async e => {
           e.preventDefault();
           const result = await createSampleLoan({ customerName: sampleLoanForm.customerName, customerPhone: sampleLoanForm.customerPhone, productId: sampleLoanForm.productId ? Number(sampleLoanForm.productId) : undefined, slabId: sampleLoanForm.slabId ? Number(sampleLoanForm.slabId) : undefined, expectedReturn: sampleLoanForm.expectedReturn || undefined, notes: sampleLoanForm.notes || undefined });
           if (result.success) { setShowSampleLoanModal(false); setSampleLoanForm({ customerName: '', customerPhone: '', productId: '', slabId: '', expectedReturn: '', notes: '' }); await loadStoneLots(); notify('Sample issued and recorded.', { variant: 'success' }); }
           else notify(result.error || 'Could not issue sample', { variant: 'danger' });
         }}>
-          <div className="grid grid-cols-2 gap-3"><div><label className="text-xs text-muted block mb-1">Customer name *</label><input required value={sampleLoanForm.customerName} onChange={e => setSampleLoanForm(form => ({ ...form, customerName: e.target.value }))} className="w-full" /></div><div><label className="text-xs text-muted block mb-1">Phone *</label><input required minLength="10" value={sampleLoanForm.customerPhone} onChange={e => setSampleLoanForm(form => ({ ...form, customerPhone: e.target.value }))} className="w-full" /></div></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><div><label className="text-xs text-muted block mb-1">Customer name *</label><input required value={sampleLoanForm.customerName} onChange={e => setSampleLoanForm(form => ({ ...form, customerName: e.target.value }))} className="w-full" /></div><div><label className="text-xs text-muted block mb-1">Phone *</label><input required minLength="10" value={sampleLoanForm.customerPhone} onChange={e => setSampleLoanForm(form => ({ ...form, customerPhone: e.target.value }))} className="w-full" /></div></div>
           <div><label className="text-xs text-muted block mb-1">Sample slab (optional)</label><select value={sampleLoanForm.slabId} onChange={e => setSampleLoanForm(form => ({ ...form, slabId: e.target.value, productId: e.target.value ? '' : form.productId }))} className="w-full"><option value="">Select a physical slab</option>{stoneLots.flatMap(lot => lot.slabs.filter(slab => slab.status === 'AVAILABLE').map(slab => <option key={slab.id} value={slab.id}>{lot.product.name} · Lot {lot.lotNumber} · {slab.slabNumber} ({slab.sqft.toFixed(2)} sq.ft)</option>))}</select></div>
           <div><label className="text-xs text-muted block mb-1">Sample item (optional)</label><select value={sampleLoanForm.productId} onChange={e => setSampleLoanForm(form => ({ ...form, productId: e.target.value, slabId: e.target.value ? '' : form.slabId }))} className="w-full"><option value="">Select catalog item</option>{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select><p className="text-[11px] text-muted mt-1">Select a slab or a catalog item. A slab is reserved until it is returned or closed.</p></div>
           <div><label className="text-xs text-muted block mb-1">Expected return</label><input type="date" value={sampleLoanForm.expectedReturn} onChange={e => setSampleLoanForm(form => ({ ...form, expectedReturn: e.target.value }))} className="w-full" /></div>

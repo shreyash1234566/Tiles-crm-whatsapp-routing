@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { unstable_noStore } from 'next/cache'
 import { requireRole } from '@/lib/auth-helpers'
+import { syncStoneLotTotals } from '@/lib/stone-inventory'
 import { z } from 'zod'
 import type { CustomOrderStatus } from '@prisma/client'
 import {
@@ -176,6 +177,43 @@ async function adjustManufacturingStockWithTx(tx: any, productId: number, quanti
   await tx.product.update({
     where: { id: productId },
     data: { stock: { increment: qty } },
+  })
+}
+
+async function releaseCustomOrderSlabsWithTx(tx: any, customOrderId: number) {
+  const slabs = await tx.slab.findMany({
+    where: { reservedForCustomId: customOrderId, status: { in: ['RESERVED', 'IN_PROCESSING'] } },
+    select: { id: true, lotId: true },
+  })
+  if (slabs.length === 0) return
+
+  await tx.slab.updateMany({
+    where: { reservedForCustomId: customOrderId, status: { in: ['RESERVED', 'IN_PROCESSING'] } },
+    data: { status: 'AVAILABLE', reservedForCustomId: null },
+  })
+  for (const lotId of new Set<number>(slabs.map((slab: { lotId: number }) => slab.lotId))) {
+    await syncStoneLotTotals(tx, lotId)
+  }
+}
+
+async function resetCustomOrderAfterProductionChange(tx: any, customOrderId: number, event: string) {
+  const remainingProduction = await tx.productionOrder.count({
+    where: { customOrderId, status: { not: 'CANCELLED' } },
+  })
+  if (remainingProduction > 0) return
+
+  await tx.customOrder.update({
+    where: { id: customOrderId },
+    data: { status: 'MEASUREMENT_SCHEDULED' },
+  })
+  await tx.customOrderTimeline.create({
+    data: {
+      customOrderId,
+      date: new Date(),
+      event,
+      status: 'pending',
+      updatedBy: 'Manager',
+    },
   })
 }
 
@@ -551,7 +589,7 @@ export async function getMRPAnalysis(bomId: number, qty: number) {
 
 // ─── PRODUCTION ORDERS ───────────────────────────────
 
-const PRIORITY_SORT: Record<string, number> = { CRITICAL: 1, HIGH: 2, NORMAL: 3 }
+const PRIORITY_SORT: Record<string, number> = { URGENT: 1, HIGH: 2, MEDIUM: 3, LOW: 4 }
 
 export async function getProductionOrders() {
   unstable_noStore()
@@ -609,7 +647,7 @@ export async function getProductionOrders() {
         const labourVarianceMins = actualMins > 0 ? actualMins - standardMins : order.labourVarianceMins
         return { ...order, standardMins, actualMins, labourVarianceMins }
       })
-      // Sort: CRITICAL → HIGH → NORMAL, then by due date
+      // Sort: URGENT → HIGH → MEDIUM → LOW, then by due date
       .sort((a, b) => {
         const pa = PRIORITY_SORT[a.priority] ?? 9
         const pb = PRIORITY_SORT[b.priority] ?? 9
@@ -729,6 +767,16 @@ export async function createProductionOrder(data: unknown) {
     })
     if (!customOrder) return { success: false, error: 'Custom order not found' }
     if (customOrder.status === 'DELIVERED') return { success: false, error: 'Cannot create production for a delivered custom order' }
+    const existingProduction = await prisma.productionOrder.count({
+      where: { customOrderId, status: { not: 'CANCELLED' } },
+    })
+    if (existingProduction > 0) return { success: false, error: 'This fabrication job already has an active production order' }
+  }
+
+  if (workCenterId) {
+    const workCenter = await prisma.workCenter.findUnique({ where: { id: workCenterId }, select: { status: true } })
+    if (!workCenter) return { success: false, error: 'Selected work center was not found' }
+    if (workCenter.status !== 'Active') return { success: false, error: 'Select an active work center' }
   }
 
   let assigneeName = assignedTo?.trim() || null
@@ -742,7 +790,11 @@ export async function createProductionOrder(data: unknown) {
     assigneeName = staff.name
   }
 
-  const lastOrder = await prisma.productionOrder.findFirst({ orderBy: { id: 'desc' }, select: { displayId: true } })
+  const lastOrder = await prisma.productionOrder.findFirst({
+    where: { displayId: { startsWith: 'PRD-' } },
+    orderBy: { id: 'desc' },
+    select: { displayId: true },
+  })
   let nextNum = 1
   if (lastOrder?.displayId) {
     const m = lastOrder.displayId.match(/PRD-(\d+)/)
@@ -842,16 +894,39 @@ export async function createProductionOrder(data: unknown) {
 
 export async function startProduction(id: number) {
   try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
-  await prisma.productionOrder.update({
-    where: { id },
-    data: { status: 'IN_PROGRESS', startDate: new Date() },
+  const order = await prisma.productionOrder.findUnique({ where: { id }, select: { status: true, customOrderId: true } })
+  if (!order) return { success: false, error: 'Production order not found' }
+  if (!['PLANNED', 'ON_HOLD'].includes(order.status)) return { success: false, error: 'Only planned or held production can be started' }
+  await prisma.$transaction(async tx => {
+    await tx.productionOrder.update({
+      where: { id },
+      data: { status: 'IN_PROGRESS', startDate: new Date() },
+    })
+    if (order.customOrderId) {
+      const slabs = await tx.slab.findMany({
+        where: { reservedForCustomId: order.customOrderId, status: 'RESERVED' },
+        select: { id: true, lotId: true },
+      })
+      await tx.slab.updateMany({
+        where: { reservedForCustomId: order.customOrderId, status: 'RESERVED' },
+        data: { status: 'IN_PROCESSING' },
+      })
+      for (const lotId of new Set<number>(slabs.map((slab: { lotId: number }) => slab.lotId))) {
+        await syncStoneLotTotals(tx, lotId)
+      }
+    }
   })
   revalidatePath('/manufacturing')
+  revalidatePath('/inventory')
+  revalidatePath('/custom-orders')
   return { success: true }
 }
 
 export async function holdProduction(id: number) {
   try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
+  const order = await prisma.productionOrder.findUnique({ where: { id }, select: { status: true } })
+  if (!order) return { success: false, error: 'Production order not found' }
+  if (order.status !== 'IN_PROGRESS') return { success: false, error: 'Only in-progress production can be put on hold' }
   await prisma.productionOrder.update({ where: { id }, data: { status: 'ON_HOLD' } })
   revalidatePath('/manufacturing')
   return { success: true }
@@ -862,6 +937,7 @@ export async function cancelProductionOrder(id: number, reason: string) {
   const order = await prisma.productionOrder.findUnique({
     where: { id },
     include: {
+      customOrder: { select: { displayId: true } },
       consumptions: {
         select: { rawMaterialId: true, issuedQty: true, rawMaterial: { select: { name: true } } },
       },
@@ -869,6 +945,8 @@ export async function cancelProductionOrder(id: number, reason: string) {
   })
   if (!order) return { success: false, error: 'Order not found' }
   if (order.status === 'COMPLETED') return { success: false, error: 'Cannot cancel a completed order' }
+  if (order.status === 'CANCELLED') return { success: true }
+  if (!reason?.trim()) return { success: false, error: 'Enter a cancellation reason' }
 
   await prisma.$transaction(async (tx) => {
     // This workflow issues and consumes material at completion time. The
@@ -878,10 +956,15 @@ export async function cancelProductionOrder(id: number, reason: string) {
       where: { id },
       data: { status: 'CANCELLED', cancelReason: reason, cancelledDate: new Date() },
     })
+    if (order.customOrderId) {
+      await releaseCustomOrderSlabsWithTx(tx, order.customOrderId)
+      await resetCustomOrderAfterProductionChange(tx, order.customOrderId, `Production ${order.displayId} cancelled`)
+    }
   })
 
   revalidatePath('/manufacturing')
   revalidatePath('/inventory')
+  revalidatePath('/custom-orders')
   return { success: true }
 }
 
@@ -890,18 +973,30 @@ export async function deleteProductionOrder(id: number) {
   const order = await prisma.productionOrder.findUnique({ where: { id } })
   if (!order) return { success: false, error: 'Order not found' }
   if (order.status === 'COMPLETED') return { success: false, error: 'Cannot delete a completed production order' }
-  if (order.status === 'IN_PROGRESS') return { success: false, error: 'Cannot delete an in-progress order. Hold or cancel it first.' }
+  if (!['PLANNED', 'CANCELLED'].includes(order.status)) return { success: false, error: 'Only planned or cancelled production orders can be deleted' }
 
-  await prisma.productionOrder.delete({ where: { id } })
+  await prisma.$transaction(async tx => {
+    await tx.productionOrder.delete({ where: { id } })
+    if (order.customOrderId) {
+      await releaseCustomOrderSlabsWithTx(tx, order.customOrderId)
+      await resetCustomOrderAfterProductionChange(tx, order.customOrderId, `Production ${order.displayId} removed`)
+    }
+  })
   revalidatePath('/manufacturing')
+  revalidatePath('/inventory')
+  revalidatePath('/custom-orders')
   return { success: true }
 }
 
 export async function updateProductionStep(stepId: number, status: string, actualMins?: number, assignedWorker?: string) {
   try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
+  if (!['PENDING', 'IN_PROGRESS', 'DONE', 'SKIPPED'].includes(status)) return { success: false, error: 'Invalid production step status' }
+  if (actualMins !== undefined && (!Number.isFinite(actualMins) || actualMins < 0)) return { success: false, error: 'Actual minutes cannot be negative' }
   await prisma.$transaction(async (tx) => {
-    const current = await tx.productionStep.findUnique({ where: { id: stepId } })
+    const current = await tx.productionStep.findUnique({ where: { id: stepId }, include: { productionOrder: { select: { status: true } } } })
     if (!current) throw new Error('Step not found')
+    if (!['IN_PROGRESS', 'ON_HOLD'].includes(current.productionOrder.status)) throw new Error('Steps can only be updated while production is active or on hold')
+    if (current.status === 'DONE' && status !== 'DONE') throw new Error('A completed production step cannot be reopened')
     const completedAt = status === 'DONE' ? new Date() : undefined
     const computedActualMins = actualMins ?? (
       status === 'DONE' && current.startedAt
@@ -952,6 +1047,17 @@ export async function completeProduction(data: unknown) {
   if (!order) return { success: false, error: 'Production order not found' }
   if (order.status !== 'IN_PROGRESS' && order.status !== 'ON_HOLD') {
     return { success: false, error: 'Order must be IN_PROGRESS or ON_HOLD to complete' }
+  }
+  const expectedMaterialIds = order.consumptions.map(material => material.rawMaterialId)
+  const submittedMaterialIds = consumptions.map(material => material.rawMaterialId)
+  if (
+    expectedMaterialIds.length !== submittedMaterialIds.length ||
+    expectedMaterialIds.some(materialId => !submittedMaterialIds.includes(materialId))
+  ) {
+    return { success: false, error: 'Submit actual consumption for every planned material before completing production' }
+  }
+  if (stepActuals?.some(step => !order.productionSteps.some(existing => existing.id === step.stepId))) {
+    return { success: false, error: 'One or more production steps do not belong to this order' }
   }
 
   await prisma.$transaction(async (tx) => {
@@ -1032,11 +1138,20 @@ export async function completeProduction(data: unknown) {
         throw new Error('Every offcut must use a slab allocated to this fabrication job')
       }
       const sourceById = new Map(sourceSlabs.map(slab => [slab.id, slab]))
+      const existingOffcuts = await tx.scrapInventory.findMany({
+        where: { sourceSlabId: { in: sourceSlabIds } },
+        select: { sourceSlabId: true, areaSqft: true },
+      })
+      const existingAreaBySlab = new Map<number, number>()
+      for (const existing of existingOffcuts) {
+        if (existing.sourceSlabId) existingAreaBySlab.set(existing.sourceSlabId, (existingAreaBySlab.get(existing.sourceSlabId) || 0) + (existing.areaSqft || 0))
+      }
       for (const offcut of stoneOffcuts) {
         const source = sourceById.get(offcut.sourceSlabId)
         if (!source) throw new Error('Offcut source slab not found')
         const areaSqft = Math.round((offcut.lengthInches * offcut.widthInches / 144) * 100) / 100
-        if (areaSqft > source.sqft + 0.01) throw new Error(`Offcut dimensions exceed source slab ${source.slabNumber}`)
+        const recordedArea = existingAreaBySlab.get(source.id) || 0
+        if (recordedArea + areaSqft > source.sqft + 0.01) throw new Error(`Offcut area exceeds the remaining source slab area for ${source.slabNumber}`)
         await tx.scrapInventory.create({
           data: {
             productionOrderId,
@@ -1185,6 +1300,16 @@ export async function recordQualityCheck(data: unknown) {
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
   const { productionOrderId, qualityStatus, qualityNotes, scrapQty, scrapReason } = parsed.data
+  const order = await prisma.productionOrder.findUnique({
+    where: { id: productionOrderId },
+    select: { status: true, plannedQty: true },
+  })
+  if (!order) return { success: false, error: 'Production order not found' }
+  if (!['IN_PROGRESS', 'ON_HOLD'].includes(order.status)) {
+    return { success: false, error: 'Quality check is available only while production is in progress or on hold' }
+  }
+  if (scrapQty > order.plannedQty) return { success: false, error: 'Scrap quantity cannot exceed planned quantity' }
+  if (scrapQty > 0 && !scrapReason?.trim()) return { success: false, error: 'Add a reason when recording scrap' }
   await prisma.productionOrder.update({
     where: { id: productionOrderId },
     data: { qualityStatus, qualityNotes, scrapQty, scrapReason },

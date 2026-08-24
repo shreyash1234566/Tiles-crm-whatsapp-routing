@@ -501,18 +501,6 @@ input[type="number"] {
   }
 }
 
-/* ── Mobile bottom safe-area clearance ─────────────────────── */
-/* Reserve space for 60px BottomNav + device safe area inset   */
-.mobile-bottom-safe {
-  padding-bottom: calc(60px + 16px + env(safe-area-inset-bottom) + 24px);
-}
-
-@media (min-width: 768px) {
-  .mobile-bottom-safe {
-    padding-bottom: 24px;
-  }
-}
-
 /* ── Mobile top safe-area clearance (TopBar) ────────────────── */
 .mobile-top-safe {
   /* Robust fallback: guarantees at least 32px clearance for Android status bars */

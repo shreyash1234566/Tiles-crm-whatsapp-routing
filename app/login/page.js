@@ -66,10 +66,15 @@ function LoginContent() {
         body: JSON.stringify({ email, password, type: 'credentials' }),
       });
 
-      const result = await res.json();
+      let result = {};
+      try {
+        result = await res.json();
+      } catch {
+        // Response was not JSON
+      }
 
       if (!res.ok) {
-        setError(result.error || 'Invalid email or password');
+        setError(result.error || (res.status === 401 ? 'Invalid email or password' : 'Login failed. Please try again.'));
       } else {
         // Full page reload so AuthProvider re-mounts and fetches the fresh session.
         // Always redirect admin login to '/' (dashboard), never follow callbackUrl,
@@ -77,7 +82,7 @@ function LoginContent() {
         window.location.href = '/';
       }
     } catch {
-      setError('Something went wrong. Please try again.');
+      setError('Network error. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -106,16 +111,21 @@ function LoginContent() {
         }),
       });
 
-      const result = await res.json();
+      let result = {};
+      try {
+        result = await res.json();
+      } catch {
+        // Response was not JSON
+      }
 
       if (!res.ok) {
-        setError(result.error || 'Invalid staff credentials.');
+        setError(result.error || (res.status === 401 ? 'Invalid staff credentials.' : 'Login failed. Please try again.'));
       } else {
         // Full page reload so AuthProvider re-mounts and fetches the fresh session
         window.location.href = '/staff-portal';
       }
     } catch {
-      setError('Something went wrong. Please try again.');
+      setError('Network error. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }

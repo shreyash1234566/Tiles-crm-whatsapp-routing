@@ -36,6 +36,7 @@ import {
   Facebook,
   Instagram,
   Sparkles,
+  Handshake,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/components/AuthProvider';
@@ -51,6 +52,7 @@ const navItems = [
   { href: '/walkins', label: 'Walk-ins', icon: UserPlus },
   { href: '/leads', label: 'Leads', icon: Users },
   { href: '/indiamart-leads', label: 'IndiaMART Leads', icon: Building2, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/dealers', label: 'Dealers & Partners', icon: Handshake },
   { href: '/staff', label: 'Staff', icon: UsersRound, roles: ['ADMIN', 'MANAGER'] },
   { href: '/appointments', label: 'Appointments', icon: Calendar },
   { href: '/inventory', label: 'Inventory', icon: Package },

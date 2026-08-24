@@ -66,6 +66,18 @@ export async function getCustomOrders() {
         },
         orderBy: { createdAt: 'desc' },
       },
+      productionOrders: {
+        select: {
+          id: true,
+          displayId: true,
+          status: true,
+          qualityStatus: true,
+          plannedQty: true,
+          actualQty: true,
+          dueDate: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      },
       slabAllocations: {
         include: { lot: { include: { product: { select: { name: true, sku: true } } } } },
         orderBy: { slabNumber: 'asc' },
@@ -158,6 +170,15 @@ export async function getCustomOrders() {
         notes: i.notes,
         createdAt: i.createdAt.toISOString().split('T')[0],
       })),
+      productionOrders: o.productionOrders.map(p => ({
+        id: p.id,
+        displayId: p.displayId,
+        status: p.status,
+        qualityStatus: p.qualityStatus,
+        plannedQty: p.plannedQty,
+        actualQty: p.actualQty,
+        dueDate: p.dueDate?.toISOString().split('T')[0] || null,
+      })),
     })),
   }
 }
@@ -179,6 +200,16 @@ export async function createCustomOrder(data: unknown) {
 
   const uniqueSlabIds = [...new Set(slabIds || [])]
 
+  if (scheduleVisit && (!visitDate || !visitTime || !(visitStaffId || assignedStaffId))) {
+    return { success: false, error: 'Choose a visit date, time and staff member before scheduling the field visit' }
+  }
+
+  const requestedStaffIds = [...new Set([assignedStaffId, visitStaffId].filter((value): value is number => Number.isInteger(value)))]
+  if (requestedStaffIds.length > 0) {
+    const activeStaff = await prisma.staff.findMany({ where: { id: { in: requestedStaffIds }, status: 'Active' }, select: { id: true } })
+    if (activeStaff.length !== requestedStaffIds.length) return { success: false, error: 'The selected staff member is not active or no longer exists' }
+  }
+
   // Find or create contact
   let contact = await prisma.contact.findFirst({ where: { phone } })
   if (!contact) {
@@ -187,6 +218,7 @@ export async function createCustomOrder(data: unknown) {
 
   // Generate display ID using MAX + 1
   const lastOrder = await prisma.customOrder.findFirst({
+    where: { displayId: { startsWith: 'CUS-' } },
     orderBy: { id: 'desc' },
     select: { displayId: true },
   })
@@ -203,9 +235,22 @@ export async function createCustomOrder(data: unknown) {
   try {
     order = await prisma.$transaction(async tx => {
       if (uniqueSlabIds.length > 0) {
-        const slabs = await tx.slab.findMany({ where: { id: { in: uniqueSlabIds } }, select: { id: true, status: true } })
+        const slabs = await tx.slab.findMany({
+          where: { id: { in: uniqueSlabIds } },
+          select: { id: true, status: true, sqft: true, lot: { select: { productId: true } } },
+        })
         if (slabs.length !== uniqueSlabIds.length) throw new Error('One or more selected slabs no longer exist')
         if (slabs.some(s => s.status !== 'AVAILABLE')) throw new Error('A selected slab is no longer available for this fabrication job')
+        if (new Set(slabs.map(s => s.lot.productId)).size > 1) {
+          throw new Error('Select slabs from one stone product only. Mixing different materials in one fabrication job is unsafe.')
+        }
+        if (areaSqft) {
+          const requiredSqft = areaSqft * (1 + (wastagePercent || 0) / 100)
+          const allocatedSqft = slabs.reduce((sum, slab) => sum + slab.sqft, 0)
+          if (allocatedSqft + 0.01 < requiredSqft) {
+            throw new Error(`Selected slabs provide ${allocatedSqft.toFixed(2)} sq.ft, but this job needs ${requiredSqft.toFixed(2)} sq.ft including wastage`)
+          }
+        }
       }
 
       const createdOrder = await tx.customOrder.create({
@@ -226,7 +271,7 @@ export async function createCustomOrder(data: unknown) {
       quotedPrice,
       advancePaid,
       productionNotes,
-      installationType,
+      installationType: installationType || type,
       edgeProfile,
       cutouts: cutouts || undefined,
       templateMethod,
@@ -305,13 +350,40 @@ export async function updateCustomOrderStatus(id: number, status: string) {
   const dbStatus = statusMap[status]
   if (!dbStatus) return { success: false, error: 'Invalid status' }
 
-  const order = await prisma.customOrder.findUnique({ where: { id } })
+  const order = await prisma.customOrder.findUnique({
+    where: { id },
+    include: {
+      productionOrders: { select: { id: true, status: true, qualityStatus: true } },
+      inventoryItems: { select: { id: true, status: true } },
+    },
+  })
   if (!order) return { success: false, error: 'Order not found' }
   if (order.status === 'DELIVERED' && dbStatus !== 'DELIVERED') return { success: false, error: 'A delivered fabrication order cannot move backwards' }
   const currentIndex = statusOrder.indexOf(order.status)
   const nextIndex = statusOrder.indexOf(dbStatus)
   if (nextIndex < currentIndex) return { success: false, error: 'A fabrication job cannot move backwards in its workflow' }
+  if (nextIndex > currentIndex + 1) return { success: false, error: 'Complete the previous fabrication stage before moving the job forward' }
   if (nextIndex === currentIndex) return { success: true }
+
+  if (dbStatus === 'IN_PRODUCTION' || dbStatus === 'QUALITY_CHECK') {
+    return { success: false, error: 'Production controls move this job into this stage automatically' }
+  }
+  if (order.status !== 'QUALITY_CHECK') {
+    return { success: false, error: 'The job must pass production and quality check before delivery' }
+  }
+  if (!order.quotedPrice || order.quotedPrice <= 0) {
+    return { success: false, error: 'Enter the final quoted price before delivering this fabrication job' }
+  }
+  const activeProductionOrders = order.productionOrders.filter(p => p.status !== 'CANCELLED')
+  if (activeProductionOrders.length === 0 || activeProductionOrders.some(p => p.status !== 'COMPLETED')) {
+    return { success: false, error: 'Complete the linked production order before delivering this job' }
+  }
+  if (activeProductionOrders.some(p => !['PASSED', 'PARTIAL'].includes(p.qualityStatus))) {
+    return { success: false, error: 'Record a passed or partial quality check before delivery' }
+  }
+  if (!order.inventoryItems.some(item => ['READY', 'DELIVERED'].includes(item.status))) {
+    return { success: false, error: 'No finished item is ready for delivery' }
+  }
 
   const now = new Date()
 
@@ -324,6 +396,10 @@ export async function updateCustomOrderStatus(id: number, status: string) {
       await tx.slab.updateMany({
         where: { reservedForCustomId: id, status: { in: ['RESERVED', 'IN_PROCESSING'] } },
         data: { status: 'SOLD', reservedForCustomId: null, soldAt: now },
+      })
+      await tx.customOrderInventory.updateMany({
+        where: { customOrderId: id, status: 'READY' },
+        data: { status: 'DELIVERED' },
       })
       for (const lotId of new Set(allocatedSlabs.map(slab => slab.lotId))) {
         await syncStoneLotTotals(tx, lotId)

@@ -49,6 +49,12 @@ const stockActionColors = {
   'Low Stock Alert': 'text-amber-700 bg-amber-500/10',
 };
 
+const getTargetPercent = (target) => {
+  const monthly = Number(target?.monthly) || 0;
+  const achieved = Number(target?.achieved) || 0;
+  return monthly > 0 ? Math.min(100, Math.max(0, Math.round((achieved / monthly) * 100))) : 0;
+};
+
 export default function StaffPage() {
   const [staff, setStaff] = useState([]);
   const [storeCampaigns, setStoreCampaigns] = useState([]);
@@ -89,16 +95,16 @@ export default function StaffPage() {
     return matchesSearch && matchesRole;
   }), [search, roleFilter, staff]);
 
-  const salesStaff = staff.filter(s => s.stats.leadsAssigned > 0);
+  const salesStaff = staff.filter(s => s.stats?.leadsAssigned > 0);
   const totalRevenue = salesStaff.reduce((sum, s) => sum + s.stats.revenue, 0);
   const totalConversions = salesStaff.reduce((sum, s) => sum + s.stats.conversions, 0);
   const totalLeads = salesStaff.reduce((sum, s) => sum + s.stats.leadsAssigned, 0);
   const avgConversionRate = totalLeads > 0 ? Math.round((totalConversions / totalLeads) * 100) : 0;
   const topPerformer = [...salesStaff].sort((a, b) => b.stats.revenue - a.stats.revenue)[0];
-  const todayRevenue = staff.reduce((sum, s) => sum + s.stats.todayRevenue, 0);
-  const totalTargetAchieved = staff.reduce((sum, s) => sum + s.target.achieved, 0);
-  const totalTarget = staff.reduce((sum, s) => sum + s.target.monthly, 0);
-  const totalCommissionEarned = staff.reduce((sum, s) => sum + s.commission.earned, 0);
+  const todayRevenue = staff.reduce((sum, s) => sum + (s.stats?.todayRevenue || 0), 0);
+  const totalTargetAchieved = staff.reduce((sum, s) => sum + (s.target?.achieved || 0), 0);
+  const totalTarget = staff.reduce((sum, s) => sum + (s.target?.monthly || 0), 0);
+  const totalCommissionEarned = staff.reduce((sum, s) => sum + (s.commission?.earned || 0), 0);
   const presentToday = staff.filter(s => s.attendance[0]?.status === 'Present').length;
 
   const tabs = [
@@ -279,10 +285,10 @@ export default function StaffPage() {
                     <div className="mb-3">
                       <div className="flex items-center justify-between text-[10px] text-muted mb-1">
                         <span>Monthly Target</span>
-                        <span>{Math.round((member.target.achieved / member.target.monthly) * 100)}%</span>
+                      <span>{getTargetPercent(member.target)}%</span>
                       </div>
                       <div className="h-1.5 bg-surface rounded-full overflow-hidden">
-                        <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${Math.min(100, (member.target.achieved / member.target.monthly) * 100)}%` }} />
+                        <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${getTargetPercent(member.target)}%` }} />
                       </div>
                     </div>
                     <div className="flex items-center justify-between text-xs text-muted pt-3 border-t border-border">
@@ -939,10 +945,10 @@ export default function StaffPage() {
                     <div className="bg-surface rounded-xl p-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-xs font-semibold text-muted">Monthly Target Progress</p>
-                        <p className="text-sm font-bold text-foreground">{Math.round((selectedStaff.target.achieved / selectedStaff.target.monthly) * 100)}%</p>
+                        <p className="text-sm font-bold text-foreground">{getTargetPercent(selectedStaff.target)}%</p>
                       </div>
                       <div className="h-2.5 bg-surface-hover rounded-full overflow-hidden mb-2">
-                        <div className="h-full bg-accent rounded-full" style={{ width: `${Math.min(100, (selectedStaff.target.achieved / selectedStaff.target.monthly) * 100)}%` }} />
+                        <div className="h-full bg-accent rounded-full" style={{ width: `${getTargetPercent(selectedStaff.target)}%` }} />
                       </div>
                       <div className="flex justify-between text-xs text-muted">
                         <span>₹{(selectedStaff.target.achieved / 1000).toFixed(0)}K achieved</span>

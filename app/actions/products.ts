@@ -37,6 +37,12 @@ export async function getProducts() {
     include: {
       category: true,
       warehouse: true,
+      stoneLots: {
+        select: {
+          availableSqft: true,
+          slabs: { select: { status: true } },
+        },
+      },
       batches: {
         where: { remainingQty: { gt: 0 } },
         orderBy: { purchaseDate: 'asc' },
@@ -82,6 +88,12 @@ export async function getProducts() {
       description: p.description,
       warehouse: p.warehouse?.name || 'Unassigned',
       lastRestocked: p.lastRestocked?.toISOString().split('T')[0] || null,
+      // Serialized stone is intentionally not copied into Product.stock. Expose
+      // its live sellable balance separately so inventory screens do not show
+      // a stocked lot as "out of stock" or permit quantity adjustments.
+      availableStoneSqft: p.stoneLots.reduce((sum, lot) => sum + (lot.availableSqft || 0), 0),
+      availableStoneSlabs: p.stoneLots.reduce((sum, lot) => sum + lot.slabs.filter(slab => slab.status === 'AVAILABLE').length, 0),
+      allocatedStoneSlabs: p.stoneLots.reduce((sum, lot) => sum + lot.slabs.filter(slab => ['RESERVED', 'IN_PROCESSING'].includes(slab.status)).length, 0),
       batches: p.batches.map(batch => ({
         id: batch.id,
         batchNumber: batch.batchNumber,

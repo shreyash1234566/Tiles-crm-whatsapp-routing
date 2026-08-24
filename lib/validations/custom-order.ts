@@ -1,10 +1,10 @@
 import { z } from 'zod'
 
 export const createCustomOrderSchema = z.object({
-  customer: z.string().min(1),
-  phone: z.string().min(10),
-  address: z.string().min(1),
-  type: z.string().min(1),
+  customer: z.string().trim().min(1, 'Customer name is required'),
+  phone: z.string().trim().min(10, 'Enter a valid phone number'),
+  address: z.string().trim().min(1, 'Site address is required'),
+  type: z.string().trim().min(1, 'Select a fabrication or installation type'),
   assignedStaffId: z.number().optional(),
   estimatedDelivery: z.string().optional(),
   measurements: z.object({
@@ -19,8 +19,8 @@ export const createCustomOrderSchema = z.object({
   referenceImages: z.array(z.string()).optional(),
   materials: z.string().optional(),
   color: z.string().optional(),
-  quotedPrice: z.number().optional(),
-  advancePaid: z.number().default(0),
+  quotedPrice: z.number().int().min(0).optional(),
+  advancePaid: z.number().int().min(0).default(0),
   productionNotes: z.string().optional(),
   installationType: z.string().optional(),
   edgeProfile: z.string().optional(),
@@ -30,7 +30,7 @@ export const createCustomOrderSchema = z.object({
     position: z.string().optional(),
   })).optional(),
   templateMethod: z.enum(['Physical Template', 'Digital/Laser Template', 'Direct Measurement']).optional(),
-  areaSqft: z.number().positive().optional(),
+  areaSqft: z.number().positive('Planned area must be greater than zero').optional(),
   wastagePercent: z.number().min(0).max(100).optional(),
   slabIds: z.array(z.number().int().positive()).optional(),
   // Visit scheduling
@@ -38,6 +38,16 @@ export const createCustomOrderSchema = z.object({
   visitDate: z.string().optional(),
   visitTime: z.string().optional(),
   visitStaffId: z.number().optional(), // can differ from assignedStaffId
+}).superRefine((data, ctx) => {
+  if (data.quotedPrice !== undefined && data.advancePaid > data.quotedPrice) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['advancePaid'], message: 'Advance cannot exceed the quoted price' })
+  }
+  if (data.scheduleVisit && (!data.visitDate || !data.visitTime)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['visitDate'], message: 'Visit date and time are required when scheduling a visit' })
+  }
+  if (data.scheduleVisit && !data.visitStaffId && !data.assignedStaffId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['visitStaffId'], message: 'Assign a staff member for the scheduled visit' })
+  }
 })
 
 export const addTimelineEntrySchema = z.object({

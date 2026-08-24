@@ -59,7 +59,7 @@ export const createBOMSchema = z.object({
 export const createProductionOrderSchema = z.object({
   bomId: z.number(),
   customOrderId: z.number().int().positive().optional(),
-  plannedQty: z.number().min(1),
+  plannedQty: z.number().int().min(1),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   dueDate: z.string().optional(),
   startDate: z.string().optional(),
@@ -71,11 +71,11 @@ export const createProductionOrderSchema = z.object({
 
 export const completeProductionSchema = z.object({
   productionOrderId: z.number(),
-  actualQty: z.number().min(1),
+  actualQty: z.number().int().min(1),
   totalLabourCost: z.number().min(0).default(0),
   overheadCost: z.number().min(0).default(0),
   machineCost: z.number().min(0).default(0),
-  scrapQty: z.number().min(0).default(0),
+  scrapQty: z.number().int().min(0).default(0),
   scrapReason: z.string().optional(),
   qualityStatus: z.enum(['PASSED', 'FAILED', 'PARTIAL']).default('PASSED'),
   qualityNotes: z.string().optional(),
@@ -100,6 +100,21 @@ export const completeProductionSchema = z.object({
     stepId: z.number(),
     actualMins: z.number().min(0),
   })).optional(),
+}).superRefine((data, ctx) => {
+  if (data.scrapQty > data.actualQty) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['scrapQty'], message: 'Scrap quantity cannot exceed actual quantity produced' })
+  }
+  if (data.scrapQty > 0 && !data.scrapReason?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['scrapReason'], message: 'Add a reason when recording scrap' })
+  }
+  const consumptionIds = data.consumptions.map(item => item.rawMaterialId)
+  if (new Set(consumptionIds).size !== consumptionIds.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['consumptions'], message: 'Each consumed material can be listed only once' })
+  }
+  const stepIds = (data.stepActuals || []).map(item => item.stepId)
+  if (new Set(stepIds).size !== stepIds.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['stepActuals'], message: 'Each production step can be listed only once' })
+  }
 })
 
 export const qualityCheckSchema = z.object({

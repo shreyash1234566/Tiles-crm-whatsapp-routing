@@ -31,66 +31,80 @@ export async function syncProductStockFromGodowns(productId: number, tx?: any) {
  * Adjusts godown stock, creates a StockLedger entry, and syncs Product.stock.
  * This is the ONLY function that should modify godown stock quantities.
  */
-export async function adjustGodownStock(
+type StockAdjustmentOptions = {
+  referenceType?: string
+  referenceId?: number
+  notes?: string
+  createdBy?: string
+}
+
+async function adjustGodownStockWithTx(
+  tx: any,
   productId: number,
   godownId: number,
   quantity: number, // positive = add, negative = deduct
   entryType: string,
-  options?: {
-    referenceType?: string
-    referenceId?: number
-    notes?: string
-    createdBy?: string
-  }
+  options?: StockAdjustmentOptions
 ) {
-  return await prisma.$transaction(async (tx) => {
-    // Upsert the godown stock
-    const existing = await tx.godownStock.findUnique({
-      where: { productId_godownId: { productId, godownId } },
-    })
+  const product = await tx.product.findUnique({ where: { id: productId }, select: { id: true, isSlabTracked: true } })
+  if (!product) throw new Error('Product not found')
+  if (product.isSlabTracked) throw new Error('Serialized stone stock must be managed through Lot / Slab Explorer')
 
-    const currentQty = existing?.quantity || 0
-    const newQty = Math.max(0, currentQty + quantity) // never go below 0
-
-    await tx.godownStock.upsert({
-      where: { productId_godownId: { productId, godownId } },
-      create: { productId, godownId, quantity: newQty },
-      update: { quantity: newQty },
-    })
-
-    // Create ledger entry
-    await tx.stockLedger.create({
-      data: {
-        productId,
-        godownId,
-        entryType,
-        quantity,
-        balanceAfter: newQty,
-        referenceType: options?.referenceType,
-        referenceId: options?.referenceId,
-        notes: options?.notes,
-        createdBy: options?.createdBy,
-      },
-    })
-
-    // Sync product total stock
-    const totalStock = await syncProductStockFromGodowns(productId, tx)
-
-    // ─── Update lastRestocked whenever stock is added ─────────────────
-    const isStockIn = quantity > 0 && (
-      entryType === 'IN' ||
-      entryType === 'ADJUSTMENT' ||
-      entryType === 'TRANSFER_IN'
-    )
-    if (isStockIn) {
-      await tx.product.update({
-        where: { id: productId },
-        data: { lastRestocked: new Date() },
-      })
-    }
-
-    return { godownBalance: newQty, totalStock }
+  const existing = await tx.godownStock.findUnique({
+    where: { productId_godownId: { productId, godownId } },
   })
+
+  const currentQty = existing?.quantity || 0
+  if (quantity < 0 && currentQty + quantity < 0) {
+    throw new Error(`Insufficient stock in godown (available: ${currentQty}, requested: ${Math.abs(quantity)})`)
+  }
+  const newQty = currentQty + quantity
+
+  await tx.godownStock.upsert({
+    where: { productId_godownId: { productId, godownId } },
+    create: { productId, godownId, quantity: newQty },
+    update: { quantity: newQty },
+  })
+
+  await tx.stockLedger.create({
+    data: {
+      productId,
+      godownId,
+      entryType,
+      quantity,
+      balanceAfter: newQty,
+      referenceType: options?.referenceType,
+      referenceId: options?.referenceId,
+      notes: options?.notes,
+      createdBy: options?.createdBy,
+    },
+  })
+
+  const totalStock = await syncProductStockFromGodowns(productId, tx)
+
+  const isStockIn = quantity > 0 && (
+    entryType === 'IN' ||
+    entryType === 'ADJUSTMENT' ||
+    entryType === 'TRANSFER_IN'
+  )
+  if (isStockIn) {
+    await tx.product.update({
+      where: { id: productId },
+      data: { lastRestocked: new Date() },
+    })
+  }
+
+  return { godownBalance: newQty, totalStock }
+}
+
+export async function adjustGodownStock(
+  productId: number,
+  godownId: number,
+  quantity: number,
+  entryType: string,
+  options?: StockAdjustmentOptions
+) {
+  return prisma.$transaction(tx => adjustGodownStockWithTx(tx, productId, godownId, quantity, entryType, options))
 }
 
 /**
@@ -294,6 +308,10 @@ export async function getGodownStock(godownId?: number) {
 export async function updateGodownStock(productId: number, godownId: number, quantity: number) {
   try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
 
+  const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, isSlabTracked: true } })
+  if (!product) return { success: false, error: 'Product not found' }
+  if (product.isSlabTracked) return { success: false, error: 'Serialized stone stock must be managed through Lot / Slab Explorer' }
+
   const existing = await prisma.godownStock.findUnique({
     where: { productId_godownId: { productId, godownId } },
   })
@@ -316,6 +334,10 @@ export async function updateGodownStock(productId: number, godownId: number, qua
 export async function assignStockToGodown(productId: number, godownId: number, quantity: number, notes?: string) {
   try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
   if (quantity <= 0) return { success: false, error: 'Quantity must be positive' }
+
+  const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, isSlabTracked: true } })
+  if (!product) return { success: false, error: 'Product not found' }
+  if (product.isSlabTracked) return { success: false, error: 'Serialized stone stock must be managed through Lot / Slab Explorer' }
 
   const result = await adjustGodownStock(productId, godownId, quantity, 'IN', {
     referenceType: 'Manual',
@@ -350,6 +372,20 @@ export async function createTransfer(data: unknown) {
   const { fromGodownId, toGodownId, notes, requestedBy, items } = parsed.data
   if (fromGodownId === toGodownId) return { success: false, error: 'Source and destination godown cannot be the same' }
 
+  const transferProducts = await prisma.product.findMany({
+    where: { id: { in: items.map(item => item.productId) } },
+    select: { id: true, isSlabTracked: true },
+  })
+  if (transferProducts.length !== new Set(items.map(item => item.productId)).size) return { success: false, error: 'One or more selected products no longer exist' }
+  if (transferProducts.some(product => product.isSlabTracked)) return { success: false, error: 'Serialized stone must be moved slab-by-slab through Lot / Slab Explorer' }
+  if (new Set(items.map(item => item.productId)).size !== items.length) return { success: false, error: 'Each product can appear only once in a transfer' }
+
+  const godowns = await prisma.godown.findMany({
+    where: { id: { in: [fromGodownId, toGodownId] } },
+    select: { id: true },
+  })
+  if (godowns.length !== 2) return { success: false, error: 'Source or destination godown was not found' }
+
   // Validate source stock
   for (const item of items) {
     const sourceStock = await prisma.godownStock.findUnique({
@@ -360,8 +396,13 @@ export async function createTransfer(data: unknown) {
     }
   }
 
-  const count = await prisma.godownTransfer.count()
-  const displayId = `TRF-${String(count + 1).padStart(4, '0')}`
+  const lastTransfer = await prisma.godownTransfer.findFirst({
+    where: { displayId: { startsWith: 'TRF-' } },
+    orderBy: { id: 'desc' },
+    select: { displayId: true },
+  })
+  const lastNumber = lastTransfer?.displayId?.match(/^TRF-(\d+)$/)?.[1]
+  const displayId = `TRF-${String(lastNumber ? Number(lastNumber) + 1 : 1).padStart(4, '0')}`
 
   const transfer = await prisma.godownTransfer.create({
     data: {
@@ -387,35 +428,40 @@ export async function createTransfer(data: unknown) {
 export async function completeTransfer(id: number, approvedBy?: string) {
   try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Access denied' } }
 
-  const transfer = await prisma.godownTransfer.findUnique({
-    where: { id },
-    include: { items: true },
-  })
-  if (!transfer) return { success: false, error: 'Transfer not found' }
-  if (transfer.status === 'Completed') return { success: false, error: 'Already completed' }
+  try {
+    await prisma.$transaction(async tx => {
+      const transfer = await tx.godownTransfer.findUnique({ where: { id }, include: { items: true } })
+      if (!transfer) throw new Error('Transfer not found')
+      if (transfer.status === 'Completed') throw new Error('Already completed')
 
-  // Use the sync engine for each item
-  for (const item of transfer.items) {
-    // Deduct from source godown
-    await adjustGodownStock(item.productId, transfer.fromGodownId, -item.quantity, 'TRANSFER_OUT', {
-      referenceType: 'Transfer',
-      referenceId: transfer.id,
-      notes: `Transfer ${transfer.displayId}`,
-      createdBy: approvedBy || 'Admin',
+      const productIds = [...new Set(transfer.items.map(item => item.productId))]
+      const transferProducts = await tx.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, isSlabTracked: true },
+      })
+      if (transferProducts.length !== productIds.length) throw new Error('One or more transfer products no longer exist')
+      if (transferProducts.some(product => product.isSlabTracked)) throw new Error('Serialized stone must be moved slab-by-slab through Lot / Slab Explorer')
+
+      for (const item of transfer.items) {
+        await adjustGodownStockWithTx(tx, item.productId, transfer.fromGodownId, -item.quantity, 'TRANSFER_OUT', {
+          referenceType: 'Transfer',
+          referenceId: transfer.id,
+          notes: `Transfer ${transfer.displayId}`,
+          createdBy: approvedBy || 'Admin',
+        })
+        await adjustGodownStockWithTx(tx, item.productId, transfer.toGodownId, item.quantity, 'TRANSFER_IN', {
+          referenceType: 'Transfer',
+          referenceId: transfer.id,
+          notes: `Transfer ${transfer.displayId}`,
+          createdBy: approvedBy || 'Admin',
+        })
+      }
+
+      await tx.godownTransfer.update({ where: { id }, data: { status: 'Completed', approvedBy } })
     })
-    // Add to destination godown
-    await adjustGodownStock(item.productId, transfer.toGodownId, item.quantity, 'TRANSFER_IN', {
-      referenceType: 'Transfer',
-      referenceId: transfer.id,
-      notes: `Transfer ${transfer.displayId}`,
-      createdBy: approvedBy || 'Admin',
-    })
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Could not complete transfer' }
   }
-
-  await prisma.godownTransfer.update({
-    where: { id },
-    data: { status: 'Completed', approvedBy },
-  })
 
   revalidatePath('/godowns')
   revalidatePath('/inventory')
@@ -434,7 +480,7 @@ export async function migrateExistingStockToGodowns() {
   const defaultGodown = await getOrCreateDefaultGodown()
 
   const products = await prisma.product.findMany({
-    where: { stock: { gt: 0 } },
+    where: { stock: { gt: 0 }, isSlabTracked: false },
     select: { id: true, stock: true, name: true },
   })
 

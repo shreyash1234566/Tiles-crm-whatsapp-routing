@@ -204,6 +204,8 @@ model Product {
   customOrderInventory CustomOrderInventory[]
   stoneLots            StoneLot[]
   sampleLoans          SampleLoan[]
+  dealerOrderItems     DealerOrderItem[]
+  dealerPriceListItems DealerPriceListItem[]
 
   // Deep inventory fields
   hsnCode       String?
@@ -723,6 +725,12 @@ model Staff {
   expenses         Expense[]         @relation("StaffExpenses")
   productionOrders ProductionOrder[] @relation("ProductionOrderAssignedStaff")
   receivedPayments DailyPayment[]
+  dealersAssigned  Dealer[]          @relation("DealerAssigned")
+  dealerTasks      DealerTask[]      @relation("DealerTaskAssigned")
+  dealerVisits     DealerVisit[]     @relation("DealerVisitStaff")
+  dealerOrders     DealerOrder[]     @relation("DealerOrderSalesperson")
+  dealerClaims     DealerClaim[]     @relation("DealerClaimAssigned")
+  dealerTeamAssignments DealerStaffAssignment[] @relation("DealerTeamAssignments")
 
   @@index([email])
 }
@@ -2582,4 +2590,312 @@ model SocialMessage {
   @@index([conversation_id])
   @@index([platform_msg_id])
   @@map("social_messages")
+}
+
+// ─── MODULE 8: DEALERS & CHANNEL PARTNERS ───────────
+
+enum DealerStatus {
+  PROSPECT
+  CONTACTED
+  MEETING_SCHEDULED
+  CATALOGUE_SHARED
+  PRICE_LIST_SHARED
+  TRIAL_ORDER
+  ACTIVE
+  DORMANT
+  NOT_INTERESTED
+  LOST
+}
+
+enum DealerTaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum DealerOrderStatus {
+  ENQUIRY
+  QUOTATION_SHARED
+  ORDER_RECEIVED
+  APPROVAL_PENDING
+  APPROVED
+  ALLOCATED
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+enum DealerClaimStatus {
+  OPEN
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  RESOLVED
+}
+
+model Dealer {
+  id                       Int          @id @default(autoincrement())
+  businessName             String
+  contactPerson            String
+  phone                    String
+  alternatePhone           String?
+  whatsappNumber           String?
+  email                    String?
+  gstNumber                String?
+  address                  String?
+  city                     String?
+  state                    String?
+  pincode                  String?
+  territory                String?
+  dealerType               String       @default("Retailer") // Distributor | Retailer | Contractor | Architect | Project Partner
+  status                   DealerStatus @default(PROSPECT)
+  preferredCategories      Json?
+  estimatedMonthlyBusiness Int          @default(0)
+  monthlySalesTarget       Int          @default(0)
+  performanceTier          String       @default("UNCLASSIFIED") // A_GRADE | B_GRADE | C_GRADE | HIGH_POTENTIAL | LOW_ACTIVITY | DORMANT
+  creditLimit              Int          @default(0)
+  creditDays               Int          @default(0)
+  paymentTerms             String?
+  priceTier                String       @default("STANDARD")
+  defaultDiscountPercent   Float        @default(0)
+  assignedStaffId          Int?
+  assignedStaff            Staff?       @relation("DealerAssigned", fields: [assignedStaffId], references: [id], onDelete: SetNull)
+  source                   String?
+  lastContactAt            DateTime?
+  nextFollowUpAt           DateTime?
+  lostReason               String?
+  notes                    String?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  tasks      DealerTask[]
+  orders     DealerOrder[]
+  payments   DealerPayment[]
+  visits     DealerVisit[]
+  claims     DealerClaim[]
+  activities DealerActivity[]
+  priceLists DealerPriceList[]
+  teamAssignments DealerStaffAssignment[]
+
+  @@index([status])
+  @@index([assignedStaffId])
+  @@index([territory])
+  @@index([phone])
+}
+
+model DealerStaffAssignment {
+  id        Int      @id @default(autoincrement())
+  dealerId  Int
+  dealer    Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  staffId   Int
+  staff     Staff    @relation("DealerTeamAssignments", fields: [staffId], references: [id], onDelete: Cascade)
+  role      String   // OWNER | SALESPERSON | REGIONAL_MANAGER | COLLECTION_EXECUTIVE | SUPPORT_PERSON
+  createdAt DateTime @default(now())
+
+  @@unique([dealerId, staffId, role])
+  @@index([dealerId, role])
+  @@index([staffId, role])
+}
+
+model DealerTask {
+  id             Int              @id @default(autoincrement())
+  dealerId       Int
+  dealer         Dealer           @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  assignedStaffId Int?
+  assignedStaff   Staff?           @relation("DealerTaskAssigned", fields: [assignedStaffId], references: [id], onDelete: SetNull)
+  type           String           @default("FOLLOW_UP") // CALL | VISIT | CATALOGUE | PRICE_LIST | PAYMENT_COLLECTION | REPEAT_ORDER | COMPLAINT | OTHER
+  title          String
+  description    String?
+  dueDate        DateTime
+  reminderAt     DateTime?
+  priority       String           @default("MEDIUM") // LOW | MEDIUM | HIGH | URGENT
+  status         DealerTaskStatus @default(PENDING)
+  completedAt    DateTime?
+  notes          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([dealerId, status])
+  @@index([assignedStaffId, dueDate])
+  @@index([dueDate, status])
+}
+
+model DealerVisit {
+  id              Int      @id @default(autoincrement())
+  dealerId        Int
+  dealer          Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  staffId         Int?
+  staff           Staff?   @relation("DealerVisitStaff", fields: [staffId], references: [id], onDelete: SetNull)
+  visitDate       DateTime @default(now())
+  purpose         String
+  personMet       String?
+  outcome         String?
+  nextAction      String?
+  nextFollowUpAt  DateTime?
+  nextMeetingAt   DateTime?
+  samplesShown    String?
+  priceListShared Boolean  @default(false)
+  dealerFeedback  String?
+  photoUrls       String[] @default([])
+  documentUrls    String[] @default([])
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  @@index([dealerId, visitDate])
+  @@index([staffId, visitDate])
+}
+
+model DealerOrder {
+  id                   Int              @id @default(autoincrement())
+  displayId            String           @unique
+  dealerId             Int
+  dealer               Dealer           @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  status               DealerOrderStatus @default(ENQUIRY)
+  orderDate            DateTime         @default(now())
+  expectedDispatchDate DateTime?
+  paymentDueDate      DateTime?
+  dispatchDate         DateTime?
+  deliveryDate         DateTime?
+  subtotal             Int              @default(0)
+  discount             Int              @default(0)
+  gst                  Int              @default(0)
+  freight              Int              @default(0)
+  loading              Int              @default(0)
+  installation         Int              @default(0)
+  total                Int              @default(0)
+  amountPaid           Int              @default(0)
+  balanceDue           Int              @default(0)
+  estimatedCost        Int              @default(0)
+  marginAmount         Int              @default(0)
+  marginPercent        Float            @default(0)
+  paymentStatus        PaymentStatus    @default(PENDING)
+  salespersonId        Int?
+  salesperson          Staff?           @relation("DealerOrderSalesperson", fields: [salespersonId], references: [id], onDelete: SetNull)
+  deliveryAddress      String?
+  allocationNotes      String?
+  notes                String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  items    DealerOrderItem[]
+  payments DealerPayment[]
+  claims   DealerClaim[]
+
+  @@index([dealerId, status])
+  @@index([orderDate])
+  @@index([paymentStatus])
+  @@index([salespersonId])
+}
+
+model DealerOrderItem {
+  id            Int         @id @default(autoincrement())
+  orderId       Int
+  order         DealerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId     Int?
+  product       Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  name          String
+  sku           String?
+  quantity      Float       @default(1)
+  unitOfMeasure String      @default("PCS")
+  areaSqft      Float?
+  rate          Int         @default(0)
+  amount        Int         @default(0)
+  costRate      Int         @default(0)
+  marginAmount  Int         @default(0)
+  shadeCode     String?
+  lotNumber     String?
+  notes         String?
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model DealerPayment {
+  id            Int         @id @default(autoincrement())
+  dealerId      Int
+  dealer        Dealer      @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  dealerOrderId Int?
+  dealerOrder   DealerOrder? @relation(fields: [dealerOrderId], references: [id], onDelete: SetNull)
+  amount        Int
+  method        String      @default("Bank Transfer")
+  reference     String?
+  paymentDate   DateTime    @default(now())
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  @@index([dealerId, paymentDate])
+  @@index([dealerOrderId])
+}
+
+model DealerClaim {
+  id             Int               @id @default(autoincrement())
+  dealerId       Int
+  dealer         Dealer            @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  dealerOrderId  Int?
+  dealerOrder    DealerOrder?      @relation(fields: [dealerOrderId], references: [id], onDelete: SetNull)
+  assignedStaffId Int?
+  assignedStaff   Staff?           @relation("DealerClaimAssigned", fields: [assignedStaffId], references: [id], onDelete: SetNull)
+  type           String            @default("DAMAGE") // DAMAGE | SHORTAGE | SHADE_MISMATCH | QUALITY | DELIVERY | PAYMENT | OTHER
+  description    String
+  quantity       Float?
+  claimAmount    Int               @default(0)
+  status         DealerClaimStatus @default(OPEN)
+  resolution     String?
+  replacementStatus String   @default("NOT_REQUIRED") // NOT_REQUIRED | PENDING | APPROVED | DISPATCHED | COMPLETED
+  replacementNotes  String?
+  openedAt       DateTime          @default(now())
+  resolvedAt     DateTime?
+  notes          String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([dealerId, status])
+  @@index([assignedStaffId])
+}
+
+model DealerActivity {
+  id          Int      @id @default(autoincrement())
+  dealerId    Int
+  dealer      Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  staffId     Int?
+  type        String
+  title       String
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([dealerId, createdAt])
+}
+
+model DealerPriceList {
+  id               Int      @id @default(autoincrement())
+  name             String
+  dealerId         Int?
+  dealer           Dealer?  @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  validFrom        DateTime @default(now())
+  validUntil       DateTime?
+  isActive         Boolean  @default(true)
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  items DealerPriceListItem[]
+
+  @@index([dealerId, isActive])
+}
+
+model DealerPriceListItem {
+  id          Int             @id @default(autoincrement())
+  priceListId Int
+  priceList   DealerPriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  productId   Int
+  product     Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  rate        Int
+  discountPct Float           @default(0)
+  minQuantity Float           @default(0)
+  notes       String?
+
+  @@unique([priceListId, productId])
+  @@index([productId])
 }

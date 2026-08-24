@@ -85,9 +85,14 @@ export async function moveCustomOrderToDraft(orderId: number) {
       assignedStaff: { select: { name: true } },
       referenceProduct: { select: { id: true, name: true, sku: true, price: true } },
       timeline: true,
+      productionOrders: { select: { displayId: true, status: true } },
     },
   })
   if (!order) return { success: false, error: 'Order not found' }
+  if (order.status === 'DELIVERED') return { success: false, error: 'Delivered fabrication jobs must remain in the order history' }
+  if (order.productionOrders.length > 0) {
+    return { success: false, error: 'Remove the linked production order before moving this fabrication job to drafts' }
+  }
 
   const now = new Date()
   const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000) // +30 days

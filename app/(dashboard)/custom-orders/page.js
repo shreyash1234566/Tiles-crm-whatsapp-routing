@@ -367,6 +367,7 @@ export default function CustomOrdersPage() {
       phone: form.get('phone'),
       address: form.get('address'),
       type: form.get('type'),
+      assignedStaffId: form.get('assignedStaffId') ? parseInt(form.get('assignedStaffId')) : undefined,
       estimatedDelivery: form.get('estimatedDelivery') || undefined,
       measurements: {
         length: form.get('length') || undefined,
@@ -374,7 +375,7 @@ export default function CustomOrdersPage() {
         height: form.get('height') || undefined,
         depth: form.get('depth') || undefined,
         countertop: form.get('countertop') || undefined,
-        notes: form.get('measurementNotes') || undefined,
+        notes: form.get('measurementNotes') || form.get('countertop') || undefined,
       },
       referenceProductId: form.get('referenceProductId') ? parseInt(form.get('referenceProductId')) : undefined,
       referenceImages: (() => { try { const v = form.get('referenceImagesJson'); return v ? JSON.parse(v) : undefined; } catch { return undefined; } })(),
@@ -383,7 +384,7 @@ export default function CustomOrdersPage() {
       quotedPrice: form.get('quotedPrice') ? parseInt(form.get('quotedPrice')) : undefined,
       advancePaid: form.get('advancePaid') ? parseInt(form.get('advancePaid')) : 0,
       productionNotes: form.get('productionNotes') || undefined,
-      installationType: form.get('installationType') || undefined,
+      installationType: form.get('installationType') || form.get('type') || undefined,
       edgeProfile: form.get('edgeProfile') || undefined,
       templateMethod: form.get('templateMethod') || undefined,
       areaSqft: form.get('areaSqft') ? Number(form.get('areaSqft')) : undefined,
@@ -396,12 +397,20 @@ export default function CustomOrdersPage() {
       visitStaffId: form.get('visitStaffId') ? parseInt(form.get('visitStaffId')) : undefined,
     };
 
-    const res = await createCustomOrder(orderData);
-    if (res.success) {
-      await reload();
-      setShowNewOrderModal(false);
+    try {
+      const res = await createCustomOrder(orderData);
+      if (res.success) {
+        await reload();
+        setShowNewOrderModal(false);
+        notify(IS_TGM ? 'Fabrication job created successfully' : 'Custom order created successfully', { variant: 'success' });
+      } else {
+        notify(res.error || 'Could not create the job', { variant: 'danger' });
+      }
+    } catch (error) {
+      notify(error?.message || 'Could not create the job', { variant: 'danger' });
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   // ─── LOADING STATE ────────────────────────────────────
@@ -421,11 +430,11 @@ export default function CustomOrdersPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3 md:gap-4">
         <div className="min-w-0">
-          <h1 className="text-xl md:text-2xl font-bold text-foreground">Custom Orders</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-foreground">{IS_TGM ? 'Fabrication Jobs' : 'Custom Orders'}</h1>
           <p className="text-sm text-muted mt-1">{IS_TGM ? 'Site templates, slab allocation, cutting and installation tracking' : 'On-site measurements, custom furniture & production tracking'}</p>
         </div>
         <button onClick={() => setShowNewOrderModal(true)} className="flex items-center justify-center gap-2 w-full md:w-auto px-4 py-3 md:py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all active:scale-[0.98]">
-          <Plus className="w-4 h-4" /> New Custom Order
+          <Plus className="w-4 h-4" /> {IS_TGM ? 'New Fabrication Job' : 'New Custom Order'}
         </button>
       </div>
 
@@ -468,7 +477,7 @@ export default function CustomOrdersPage() {
       {filtered.length === 0 ? (
         <div className="glass-card p-12 text-center">
           <ClipboardList className="w-12 h-12 mx-auto mb-3 text-muted opacity-30" />
-          <p className="text-sm text-muted">No custom orders found</p>
+          <p className="text-sm text-muted">No {IS_TGM ? 'fabrication jobs' : 'custom orders'} found</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -540,7 +549,7 @@ export default function CustomOrdersPage() {
                   </p>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {order.date && <span className="text-xs text-muted flex items-center gap-1"><Calendar className="w-3 h-3" /> {order.date}</span>}
-                    <span className="text-xs text-muted">{currentStep + 1}/6 stages</span>
+                    <span className="text-xs text-muted">{currentStep + 1}/{statusSteps.length} stages</span>
                   </div>
                 </div>
               </div>
@@ -552,7 +561,7 @@ export default function CustomOrdersPage() {
       {/* ═══════════════════════════════════════════════════
           ORDER DETAIL MODAL
           ═══════════════════════════════════════════════════ */}
-      <Modal isOpen={!!selectedOrder} onClose={() => setSelectedOrder(null)} title="Custom Order Details" size="xl">
+      <Modal isOpen={!!selectedOrder} onClose={() => setSelectedOrder(null)} title={IS_TGM ? 'Fabrication Job Details' : 'Custom Order Details'} size="xl">
         {selectedOrder && (() => {
           const sc = statusConfig[selectedOrder.status] || statusConfig['Measurement Scheduled'];
           const StatusIcon = sc.icon;
@@ -597,52 +606,23 @@ export default function CustomOrdersPage() {
                   })}
                 </div>
 
-                {/* Status Update Buttons */}
-                <div className="mt-4 space-y-2">
-                  {/* Forward: next stages */}
-                  {currentStep < statusSteps.length - 1 && (
-                    <div className="flex gap-2 flex-wrap items-center">
-                      {statusSteps.map((step, idx) => {
-                        if (idx <= currentStep) return null;
-                        if (step === 'In Production' || step === 'Quality Check') return null;
-                        return (
-                          <button
-                            key={step}
-                            disabled={saving}
-                            onClick={(e) => { e.stopPropagation(); handleStatusUpdate(selectedOrder, step); }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${idx === currentStep + 1 || (currentStep === 2 && step === 'Delivered') ? 'bg-accent text-white hover:bg-accent-hover' : 'bg-surface-hover text-muted hover:text-foreground'}`}
-                          >
-                            <ArrowRight className="w-3 h-3 inline mr-1" />{step}
-                          </button>
-                        );
-                      })}
-                      {(currentStep === 0 || currentStep === 1) && (
-                        <span className="text-[10px] text-accent font-medium px-2 py-1 bg-accent/10 rounded ml-1 border border-accent/20">
-                          Automated via Manufacturing
-                        </span>
-                      )}
-                    </div>
+                {/* Status changes are evidence-based so a job cannot bypass production or QC. */}
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  {currentStep < 2 && (
+                    <span className="text-[10px] text-accent font-medium px-2.5 py-1.5 bg-accent/10 rounded-lg border border-accent/20">
+                      Production and quality check update this stage automatically
+                    </span>
                   )}
-                  {/* Backward: correct a mistake */}
-                  {currentStep > 0 && (
-                    <div className="flex gap-2 flex-wrap items-center">
-                      <span className="text-[10px] text-muted">Correct to:</span>
-                      {statusSteps.map((step, idx) => {
-                        if (idx >= currentStep) return null;
-                        if (step === 'In Production' || step === 'Quality Check') return null;
-                        return (
-                          <button
-                            key={step}
-                            disabled={saving}
-                            onClick={(e) => { e.stopPropagation(); handleStatusUpdate(selectedOrder, step); }}
-                            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-surface-hover text-muted hover:text-foreground border border-border hover:border-warning/50"
-                          >
-                            ← {step}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  {currentStep === 2 && (
+                    <button
+                      disabled={saving}
+                      onClick={(e) => { e.stopPropagation(); handleStatusUpdate(selectedOrder, 'Delivered'); }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
+                    >
+                      <ArrowRight className="w-3 h-3 inline mr-1" />Mark Delivered
+                    </button>
                   )}
+                  {currentStep === 3 && <span className="text-[10px] text-emerald-700 font-medium">Delivery recorded and allocated slabs closed</span>}
                 </div>
               </div>
 
@@ -725,6 +705,35 @@ export default function CustomOrdersPage() {
                   <p className="text-sm font-medium text-foreground">{selectedOrder.color || '—'}</p>
                 </div>
               </div>
+
+              {IS_TGM && (
+                <div className="bg-accent/5 border border-accent/20 rounded-xl p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-foreground">Fabrication brief</h4>
+                      <p className="text-[11px] text-muted mt-0.5">The information the cutting and installation team should verify before work starts.</p>
+                    </div>
+                    {selectedOrder.productionOrders?.length > 0 && <span className="text-[10px] px-2 py-1 rounded-full bg-blue-500/10 text-blue-700">Production linked</span>}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      ['Planned area', selectedOrder.areaSqft ? `${selectedOrder.areaSqft.toFixed(2)} sq.ft` : 'Not entered'],
+                      ['Wastage', selectedOrder.wastagePercent != null ? `${selectedOrder.wastagePercent}%` : 'Not entered'],
+                      ['Edge profile', selectedOrder.edgeProfile || 'Not selected'],
+                      ['Template', selectedOrder.templateMethod || 'Not selected'],
+                    ].map(([label, value]) => <div key={label}><p className="text-[10px] text-muted">{label}</p><p className="text-xs font-medium text-foreground mt-0.5 break-words">{value}</p></div>)}
+                  </div>
+                  <div className="pt-2 border-t border-accent/15">
+                    <div className="flex items-center justify-between gap-2 mb-2"><p className="text-[10px] text-muted uppercase tracking-wide">Allocated slabs ({selectedOrder.slabAllocations?.length || 0})</p><span className="text-xs font-semibold text-accent">{(selectedOrder.slabAllocations || []).reduce((sum, slab) => sum + (slab.sqft || 0), 0).toFixed(2)} sq.ft</span></div>
+                    {selectedOrder.slabAllocations?.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                        {selectedOrder.slabAllocations.map(slab => <div key={slab.id} className="flex items-center justify-between gap-2 rounded-lg bg-surface px-2.5 py-2 text-[11px]"><span className="truncate text-foreground">{slab.productName} · {slab.slabNumber} <span className="text-muted">· Lot {slab.lotNumber}</span></span><span className={`flex-shrink-0 ${slab.status === 'SOLD' ? 'text-emerald-700' : slab.status === 'IN_PROCESSING' ? 'text-amber-700' : 'text-muted'}`}>{slab.status.replace('_', ' ')}</span></div>)}
+                      </div>
+                    ) : <p className="text-xs text-muted">No physical slabs reserved yet. Confirm the material and shade before cutting.</p>}
+                  </div>
+                  {selectedOrder.productionOrders?.length > 0 && <div className="pt-2 border-t border-accent/15"><p className="text-[10px] text-muted uppercase tracking-wide mb-2">Production status</p><div className="flex flex-wrap gap-1.5">{selectedOrder.productionOrders.map(production => <span key={production.id} className="text-[11px] px-2 py-1 rounded-lg bg-surface text-foreground">{production.displayId} · {production.status.replace('_', ' ')} · QC {production.qualityStatus}</span>)}</div></div>}
+                </div>
+              )}
 
               {/* Reference Product */}
               {selectedOrder.referenceProduct && (
@@ -1210,6 +1219,10 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
   const [newOrderProfile, setNewOrderProfile] = useState(null);
   const [newOrderProfileLoading, setNewOrderProfileLoading] = useState(false);
   const [availableStoneLots, setAvailableStoneLots] = useState([]);
+  const [selectedSlabIds, setSelectedSlabIds] = useState([]);
+  const [areaSqftInput, setAreaSqftInput] = useState('');
+  const [wastagePercentInput, setWastagePercentInput] = useState('');
+  const [slabSelectionError, setSlabSelectionError] = useState('');
 
   useEffect(() => {
     if (!IS_TGM) return;
@@ -1219,6 +1232,19 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
     });
     return () => { active = false; };
   }, []);
+
+  const availableSlabs = useMemo(() => availableStoneLots.flatMap(lot => (
+    lot.slabs
+      .filter(slab => slab.status === 'AVAILABLE')
+      .map(slab => ({ ...slab, lotNumber: lot.lotNumber, productId: lot.product.id, productName: lot.product.name, shadeCode: lot.shadeCode }))
+  )), [availableStoneLots]);
+
+  const selectedSlabArea = useMemo(() => availableSlabs
+    .filter(slab => selectedSlabIds.includes(slab.id))
+    .reduce((sum, slab) => sum + slab.sqft, 0), [availableSlabs, selectedSlabIds]);
+  const requiredSlabArea = areaSqftInput
+    ? Number(areaSqftInput) * (1 + (Number(wastagePercentInput) || 0) / 100)
+    : 0;
 
   const handleRefImageAdd = (e) => {
     const files = Array.from(e.target.files || []);
@@ -1236,6 +1262,16 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
 
   const handleFormSubmit = async (e) => {
     e.preventDefault();
+    const selectedProductIds = new Set(availableSlabs.filter(slab => selectedSlabIds.includes(slab.id)).map(slab => slab.productId));
+    if (IS_TGM && selectedProductIds.size > 1) {
+      setSlabSelectionError('Select slabs from one stone product only. Different materials cannot be cut into one fabrication job.');
+      return;
+    }
+    if (IS_TGM && requiredSlabArea > 0 && selectedSlabIds.length > 0 && selectedSlabArea + 0.01 < requiredSlabArea) {
+      setSlabSelectionError(`Select at least ${requiredSlabArea.toFixed(2)} sq.ft of slabs. Current selection is ${selectedSlabArea.toFixed(2)} sq.ft.`);
+      return;
+    }
+    setSlabSelectionError('');
     if (refImages.length > 0) {
       setUploadingImages(true);
       try {
@@ -1343,7 +1379,7 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
 
       {/* Job Type */}
       <div>
-        <label className="block text-xs font-medium text-muted mb-1.5">{IS_TGM ? 'Fabrication / Installation Type' : 'Furniture Type'} *</label>
+        <label className="block text-xs font-medium text-muted mb-1.5">{IS_TGM ? 'Application / Fabrication Type' : 'Furniture Type'} *</label>
         <select name="type" required className="w-full px-4 py-2.5 rounded-xl text-sm">
           <option value="">Select type</option>
           {IS_TGM ? <>
@@ -1354,6 +1390,22 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
           <option>Other</option>
         </select>
       </div>
+
+      {IS_TGM && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-muted mb-1.5">Job Owner / Coordinator</label>
+            <select name="assignedStaffId" className="w-full px-4 py-2.5 rounded-xl text-sm">
+              <option value="">Unassigned</option>
+              {staff.map(s => <option key={s.id} value={s.id}>{s.name} — {s.role}</option>)}
+            </select>
+            <p className="text-[10px] text-muted mt-1">This person owns customer follow-up and site coordination.</p>
+          </div>
+          <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2.5 text-xs text-muted flex items-center">
+            Create the job first, then schedule measurement and link production only after the site details are confirmed.
+          </div>
+        </div>
+      )}
 
       {/* Reference Product */}
       <div>
@@ -1434,8 +1486,8 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
           <div><label className="block text-xs text-muted mb-1">Depth</label><input type="text" name="depth" placeholder="e.g., 2 ft" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
         </div>
         <div className="mt-3">
-          <label className="block text-xs text-muted mb-1">Countertop / Notes</label>
-          <input type="text" name="countertop" placeholder="e.g., Granite 4x2 ft" className="w-full px-3 py-2 rounded-xl text-sm" />
+          <label className="block text-xs text-muted mb-1">{IS_TGM ? 'Measurement / site notes' : 'Countertop / Notes'}</label>
+          <input type="text" name={IS_TGM ? 'measurementNotes' : 'countertop'} placeholder={IS_TGM ? 'e.g., wall has an existing backsplash; confirm sink center on template' : 'e.g., Granite 4x2 ft'} className="w-full px-3 py-2 rounded-xl text-sm" />
         </div>
       </div>
 
@@ -1448,20 +1500,52 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
         <div className="border border-accent/20 bg-accent/5 rounded-xl p-3 space-y-3">
           <p className="text-xs font-semibold text-accent">Stone Fabrication Details</p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div><label className="block text-xs text-muted mb-1">Measured Area (sq.ft)</label><input type="number" name="areaSqft" min="0" step="0.01" placeholder="e.g., 48.5" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
+            <div><label className="block text-xs text-muted mb-1">Planned / measured area (sq.ft)</label><input type="number" name="areaSqft" min="0" step="0.01" value={areaSqftInput} onChange={e => { setAreaSqftInput(e.target.value); setSlabSelectionError(''); }} placeholder="e.g., 48.5" className="w-full px-3 py-2 rounded-xl text-sm" /><p className="text-[10px] text-muted mt-1">Use the measured area when available; otherwise enter the estimate.</p></div>
             <div><label className="block text-xs text-muted mb-1">Edge Profile</label><select name="edgeProfile" className="w-full px-3 py-2 rounded-xl text-sm"><option value="">Select profile</option><option>Bullnose</option><option>Bevel</option><option>Ogee</option><option>Waterfall</option><option>Eased</option><option>Demi-Bullnose</option><option>Dupont</option><option>Bird&apos;s Beak</option></select></div>
             <div><label className="block text-xs text-muted mb-1">Template Method</label><select name="templateMethod" className="w-full px-3 py-2 rounded-xl text-sm"><option value="">Select method</option><option>Physical Template</option><option>Digital/Laser Template</option><option>Direct Measurement</option></select></div>
-            <div><label className="block text-xs text-muted mb-1">Expected Wastage (%)</label><input type="number" name="wastagePercent" min="0" max="100" step="0.1" placeholder="e.g., 12" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
+            <div><label className="block text-xs text-muted mb-1">Expected Wastage (%)</label><input type="number" name="wastagePercent" min="0" max="100" step="0.1" value={wastagePercentInput} onChange={e => { setWastagePercentInput(e.target.value); setSlabSelectionError(''); }} placeholder="e.g., 12" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
             <div className="sm:col-span-2"><label className="block text-xs text-muted mb-1">Cutouts / fabrication notes</label><input name="cutoutNotes" placeholder="e.g., 1 undermount sink, 1 hob cutout; confirm on template" className="w-full px-3 py-2 rounded-xl text-sm" /></div>
           </div>
           <div>
-            <label className="block text-xs text-muted mb-1">Reserve physical slabs for this job</label>
-            <select name="slabIds" multiple size="4" className="w-full px-3 py-2 rounded-xl text-sm bg-surface border border-border">
-              {availableStoneLots.flatMap(lot => lot.slabs.filter(slab => slab.status === 'AVAILABLE').map(slab => (
-                <option key={slab.id} value={slab.id}>{lot.product.name} · Lot {lot.lotNumber} · Slab {slab.slabNumber} · {slab.sqft.toFixed(2)} sq.ft</option>
-              )))}
-            </select>
-            <p className="text-[11px] text-muted mt-1">Use Ctrl/Cmd to select multiple slabs. They are reserved immediately when the fabrication job is created.</p>
+            <div className="flex items-start justify-between gap-3 mb-1">
+              <div>
+                <label className="block text-xs text-muted">Reserve physical slabs for this job</label>
+                <p className="text-[10px] text-muted mt-0.5">Choose only after the customer approves the material and shade.</p>
+              </div>
+              <span className="text-[11px] font-semibold text-accent whitespace-nowrap">{selectedSlabIds.length} selected · {selectedSlabArea.toFixed(2)} sq.ft</span>
+            </div>
+            {availableSlabs.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted">No available slabs right now. You can create the job and reserve slabs after approval.</div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto rounded-xl border border-border bg-surface p-2">
+                {availableSlabs.map(slab => {
+                  const checked = selectedSlabIds.includes(slab.id);
+                  return (
+                    <label key={slab.id} className={`flex items-start gap-2.5 rounded-lg border px-2.5 py-2 cursor-pointer transition-colors ${checked ? 'border-accent bg-accent/10' : 'border-border hover:bg-surface-hover'}`}>
+                      <input
+                        type="checkbox"
+                        name="slabIds"
+                        value={slab.id}
+                        checked={checked}
+                        onChange={() => { setSelectedSlabIds(current => checked ? current.filter(id => id !== slab.id) : [...current, slab.id]); setSlabSelectionError(''); }}
+                        className="mt-0.5 h-4 w-4 rounded border-border text-accent focus:ring-accent"
+                      />
+                      <span className="min-w-0 text-[11px] leading-4">
+                        <span className="block font-medium text-foreground truncate">{slab.productName} · {slab.slabNumber}</span>
+                        <span className="block text-muted">Lot {slab.lotNumber} · {slab.sqft.toFixed(2)} sq.ft{slab.shadeCode ? ` · ${slab.shadeCode}` : ''}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            {requiredSlabArea > 0 && (
+              <p className={`text-[11px] mt-1.5 ${selectedSlabArea + 0.01 >= requiredSlabArea || selectedSlabIds.length === 0 ? 'text-muted' : 'text-red-600'}`}>
+                Required with wastage: {requiredSlabArea.toFixed(2)} sq.ft{selectedSlabIds.length === 0 ? ' · slab reservation can be added after approval' : ''}
+              </p>
+            )}
+            {slabSelectionError && <p className="text-[11px] text-red-600 mt-1">{slabSelectionError}</p>}
+            <p className="text-[11px] text-muted mt-1">Selected slabs are reserved atomically with this job, so another salesperson cannot promise the same physical slabs.</p>
           </div>
         </div>
       )}
@@ -1502,11 +1586,12 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
             <div>
               <label className="block text-xs text-muted mb-1">Visit Staff</label>
               <select name="visitStaffId" className="w-full px-3 py-2 rounded-xl text-sm">
-                <option value="">Same as assigned</option>
+                <option value="">Same as job owner</option>
                 {staff.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
+              <p className="text-[10px] text-muted mt-1">If the job is unassigned, choose a visit staff member.</p>
             </div>
           </div>
         )}
@@ -1515,7 +1600,7 @@ function NewOrderForm({ staff, products, saving, onSubmit, onCancel }) {
       <div className="flex justify-end gap-3 pt-3 -mx-5 px-5 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] bg-surface border-t border-border sticky bottom-0 md:static md:mx-0 md:px-0 md:pt-2 md:pb-0 md:bg-transparent md:border-0">
         <button type="button" onClick={onCancel} className="px-4 py-2.5 rounded-xl text-sm text-muted hover:text-foreground hover:bg-surface-hover transition-colors">Cancel</button>
         <button type="submit" disabled={saving || uploadingImages} className="px-6 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm font-semibold transition-all disabled:opacity-50">
-          {uploadingImages ? 'Uploading...' : saving ? 'Creating...' : 'Create Order'}
+          {uploadingImages ? 'Uploading...' : saving ? 'Creating...' : IS_TGM ? 'Create Fabrication Job' : 'Create Order'}
         </button>
       </div>
     </form>
