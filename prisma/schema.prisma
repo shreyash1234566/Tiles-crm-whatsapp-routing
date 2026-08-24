@@ -2595,3 +2595,60 @@ model SocialMessage {
   @@index([platform_msg_id])
   @@map("social_messages")
 }
+
+
+// ============================================================
+// Evolution API group routing
+// ============================================================
+
+model EvolutionGroup {
+  id                 String   @id @default(cuid())
+  userId             Int
+  groupJid           String
+  subject            String
+  departmentId       Int?
+  departmentName     String?
+  routingReason      String?
+  mentionPriority    Boolean  @default(false)
+  lastMentionAt      DateTime?
+  lastMessageText    String?
+  lastMessageAt      DateTime?
+  lastInboundAt      DateTime?
+  unreadCount        Int      @default(0)
+  claimedByUserId    Int?
+  claimedAt          DateTime?
+  status             String   @default("open")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  messages           EvolutionGroupMessage[]
+
+  @@unique([userId, groupJid])
+  @@index([userId, departmentId, status])
+  @@index([userId, mentionPriority, lastMessageAt])
+  @@index([groupJid])
+  @@map("evolution_groups")
+}
+
+model EvolutionGroupMessage {
+  id              String   @id @default(cuid())
+  groupId         String
+  messageId       String
+  senderJid       String
+  senderName      String?
+  text            String?
+  messageType     String   @default("text")
+  mediaUrl        String?
+  quotedMessageId String?
+  mentionedJids   String[] @default([])
+  fromMe          Boolean  @default(false)
+  status          String   @default("received")
+  createdAt       DateTime @default(now())
+
+  group           EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, messageId])
+  @@index([groupId, createdAt])
+  @@index([messageId])
+  @@map("evolution_group_messages")
+}

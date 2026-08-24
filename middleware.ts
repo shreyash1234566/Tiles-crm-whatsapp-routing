@@ -32,7 +32,7 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
   // Allow public paths
-  if (publicPaths.some(path => pathname.startsWith(path))) {
+  if (publicPaths.some(path => pathname.startsWith(path)) || pathname === '/api/evolution/webhook') {
     return NextResponse.next()
   }
 
