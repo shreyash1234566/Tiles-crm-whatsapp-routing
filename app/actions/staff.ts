@@ -3,9 +3,10 @@
 import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { createStaffSchema, updateStaffSchema } from '@/lib/validations/staff'
-import { requireAuth, requireRole } from '@/lib/auth-helpers'
+import { requireAuth, requireRole, requireStaffIdentity } from '@/lib/auth-helpers'
 import bcrypt from 'bcryptjs'
 import type { Prisma, UserRole } from '@prisma/client'
+import { employeeEmailSchema, normalizeEmployeeEmail, normalizeRoutingPhone } from '@/lib/employee-accounts'
 
 // ─── IST helpers ─────────────────────────────────────────────────────────────
 // All attendance dates/times must be in IST (Asia/Kolkata, UTC+5:30)
@@ -35,26 +36,8 @@ const staffPortalInclude: Prisma.StaffInclude = {
   activities: { orderBy: { date: 'desc' }, take: 10 },
   fieldVisits: { orderBy: { date: 'desc' }, take: 5 },
   stockUpdates: { orderBy: { date: 'desc' }, take: 5 },
-  user: { select: { email: true, isActive: true } },
+  user: { select: { id: true, email: true, isActive: true, role: true, routingPhone: true, routingAliases: true, routingDepartmentId: true, routingDepartment: { select: { id: true, name: true } } } },
   _count: { select: { leads: true, invoices: true, customOrders: true } },
-}
-
-const defaultStaffStats = {
-  leadsAssigned: 0,
-  conversions: 0,
-  revenue: 0,
-  avgResponseTime: '0 min',
-  todaySales: 0,
-  todayRevenue: 0,
-  rating: 0,
-  conversionRate: 0,
-}
-const defaultStaffTarget = { monthly: 0, achieved: 0 }
-const defaultStaffCommission = { rate: 0, earned: 0, pending: 0 }
-
-function mergeStaffJson<T extends Record<string, unknown>>(value: unknown, defaults: T): T {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults
-  return { ...defaults, ...(value as Partial<T>) }
 }
 
 const mapStaffForPortal = (s: any) => ({
@@ -63,15 +46,21 @@ const mapStaffForPortal = (s: any) => ({
   role: s.role,
   phone: s.phone,
   email: s.email,
+  loginEmail: s.user?.email || null,
   loginUsername: s.user?.email || null,
+  permissionRole: s.user?.role || 'STAFF',
   hasLogin: !!s.user,
   loginActive: s.user?.isActive ?? false,
+  routingDepartmentId: s.user?.routingDepartmentId ?? null,
+  routingDepartmentName: s.user?.routingDepartment?.name || null,
+  routingPhone: s.user?.routingPhone || null,
+  routingAliases: s.user?.routingAliases || [],
   status: s.status,
   joinDate: s.joinDate ? s.joinDate.toISOString().split('T')[0] : null,
   avatar: s.avatar,
-  stats: mergeStaffJson(s.stats, defaultStaffStats),
-  target: mergeStaffJson(s.target, defaultStaffTarget),
-  commission: mergeStaffJson(s.commission, defaultStaffCommission),
+  stats: s.stats,
+  target: s.target,
+  commission: s.commission,
   attendance: s.attendance.map((a: any) => ({
     date: a.date.toISOString().split('T')[0],
     clockIn: a.clockIn,
@@ -111,6 +100,7 @@ const mapStaffForPortal = (s: any) => ({
 })
 
 export async function getStaff() {
+  try { await requireAuth() } catch { return { success: false, error: 'Unauthorized', data: [] } }
   const staff = await prisma.staff.findMany({
     include: staffPortalInclude,
     orderBy: { name: 'asc' },
@@ -123,12 +113,7 @@ export async function getStaff() {
 }
 
 export async function getStaffPortalProfile(staffId: number) {
-  let session
-  try { session = await requireAuth() } catch { return { success: false, error: 'Unauthorized' } }
-
-  if (session.user.role !== 'ADMIN' && session.user.role !== 'MANAGER' && session.user.staffId !== staffId) {
-    return { success: false, error: 'Forbidden' }
-  }
+  try { await requireStaffIdentity(staffId) } catch { return { success: false, error: 'Forbidden' } }
 
   const staff = await prisma.staff.findUnique({
     where: { id: staffId },
@@ -155,46 +140,84 @@ export async function getStaffMember(id: number) {
 }
 
 export async function createStaff(data: unknown) {
-  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
+  let session
+  try { session = await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
   const parsed = createStaffSchema.safeParse(data)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
-
-  const loginUsername = parsed.data.loginUsername?.trim() || undefined
-  const loginPassword = parsed.data.loginPassword?.trim() || undefined
-
-  if ((loginUsername && !loginPassword) || (!loginUsername && loginPassword)) {
-    return { success: false, error: 'Provide both login username and password, or leave both empty' }
+  const permissionRole = parsed.data.permissionRole ?? 'STAFF'
+  if (permissionRole !== 'STAFF' && session.user.role !== 'ADMIN') {
+    return { success: false, error: 'Only an admin can assign Manager or Admin permissions' }
   }
 
-  if (loginUsername) {
-    const existingUser = await prisma.user.findUnique({ where: { email: loginUsername } })
-    if (existingUser) return { success: false, error: 'Login username is already in use' }
+  const loginEmail = parsed.data.loginEmail?.trim().toLowerCase() || parsed.data.loginUsername?.trim().toLowerCase() || undefined
+  const loginPassword = parsed.data.loginPassword || ''
+  if ((loginEmail && !loginPassword) || (!loginEmail && loginPassword)) {
+    return { success: false, error: 'Provide both employee email and password, or leave both empty' }
+  }
+  if (permissionRole !== 'STAFF' && !loginEmail) {
+    return { success: false, error: 'Manager and Admin profiles require an employee login account' }
+  }
+  if (loginEmail && !employeeEmailSchema.safeParse(loginEmail).success) {
+    return { success: false, error: 'New employee login must use a valid email address' }
   }
 
+  const routingDepartmentId = parsed.data.routingDepartmentId ?? null
+  const routingPhone = normalizeRoutingPhone(parsed.data.routingPhone)
+  const routingAliases = parsed.data.routingAliases || []
+  if (parsed.data.routingPhone && !routingPhone) {
+    return { success: false, error: 'Routing phone must contain 8 to 15 digits' }
+  }
+  if (routingDepartmentId !== null && !loginEmail) {
+    return { success: false, error: 'A routing department requires an employee login account' }
+  }
+  if (routingDepartmentId !== null && !routingPhone) {
+    return { success: false, error: 'A routing department requires an authorized routing phone' }
+  }
+  if (routingDepartmentId === null && (routingPhone || routingAliases.length > 0)) {
+    return { success: false, error: 'Choose a routing department before configuring a routing recipient' }
+  }
+  const [existingStaff, existingUser, existingRoutingUser] = await Promise.all([
+    prisma.staff.findUnique({ where: { email: normalizeEmployeeEmail(parsed.data.email) }, select: { id: true } }),
+    loginEmail ? prisma.user.findUnique({ where: { email: loginEmail }, select: { id: true } }) : null,
+    routingPhone ? prisma.user.findUnique({ where: { routingPhone }, select: { id: true } }) : null,
+  ])
+  if (existingStaff) return { success: false, error: 'Staff email is already in use' }
+  if (existingUser) return { success: false, error: 'Employee login email is already in use' }
+  if (existingRoutingUser) return { success: false, error: 'Routing phone is already assigned to another user' }
+
+  const normalizedStaffEmail = normalizeEmployeeEmail(parsed.data.email)
   const staff = await prisma.$transaction(async tx => {
+    const department = routingDepartmentId === null
+      ? null
+      : await tx.routingDepartment.findUnique({ where: { id: routingDepartmentId }, select: { id: true, isActive: true } })
+    if (routingDepartmentId !== null && !department?.isActive) throw new Error('Routing department not found or inactive')
+
     const createdStaff = await tx.staff.create({
       data: {
         name: parsed.data.name,
         role: parsed.data.role,
         phone: parsed.data.phone,
-        email: parsed.data.email,
+        email: normalizedStaffEmail,
         joinDate: new Date(parsed.data.joinDate),
         avatar: parsed.data.name.split(' ').map(n => n[0]).join('').toUpperCase(),
         stats: { leadsAssigned: 0, conversions: 0, revenue: 0, avgResponseTime: '0 min', todaySales: 0, todayRevenue: 0, rating: 0, conversionRate: 0 },
         target: { monthly: 0, achieved: 0 },
-        commission: { rate: 0, earned: 0, pending: 0 },
+        commission: { rate: 0, earned: 0 },
       },
     })
 
-    if (loginUsername && loginPassword) {
+    if (loginEmail && loginPassword) {
       const hashedPassword = await bcrypt.hash(loginPassword, 12)
       await tx.user.create({
         data: {
-          email: loginUsername,
+          email: loginEmail,
           name: parsed.data.name,
           hashedPassword,
-          role: 'STAFF' as UserRole,
+          role: permissionRole as UserRole,
           staffId: createdStaff.id,
+          routingDepartmentId,
+          routingPhone: routingDepartmentId ? routingPhone : null,
+          routingAliases: routingDepartmentId ? routingAliases : [],
         },
       })
     }
@@ -204,17 +227,18 @@ export async function createStaff(data: unknown) {
 
   revalidatePath('/staff')
   revalidatePath('/settings')
+  revalidatePath('/routing-crm')
   return { success: true, data: staff }
 }
 
-export async function assignStaffLogin(staffId: number, loginUsername: string, loginPassword: string) {
-  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
+export async function assignStaffLogin(staffId: number, loginEmail: string, loginPassword: string) {
+  let session
+  try { session = await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
 
-  const username = loginUsername.trim()
-  const password = loginPassword.trim()
-
-  if (!username) return { success: false, error: 'Login username is required' }
-  if (!password || password.length < 4) return { success: false, error: 'Password/PIN must be at least 4 characters' }
+  const email = loginEmail.trim().toLowerCase()
+  const password = loginPassword
+  if (!employeeEmailSchema.safeParse(email).success) return { success: false, error: 'Employee login must use a valid email address' }
+  if (!password || password.length < 8) return { success: false, error: 'Password must be at least 8 characters' }
 
   const staff = await prisma.staff.findUnique({
     where: { id: staffId },
@@ -223,14 +247,13 @@ export async function assignStaffLogin(staffId: number, loginUsername: string, l
   if (!staff) return { success: false, error: 'Staff not found' }
   if (staff.user) return { success: false, error: 'This team member already has login credentials' }
 
-  const existingUser = await prisma.user.findUnique({ where: { email: username } })
-  if (existingUser) return { success: false, error: 'Login username is already in use' }
+  const existingUser = await prisma.user.findUnique({ where: { email } })
+  if (existingUser) return { success: false, error: 'Employee email is already in use' }
 
   const hashedPassword = await bcrypt.hash(password, 12)
-
   await prisma.user.create({
     data: {
-      email: username,
+      email,
       name: staff.name,
       hashedPassword,
       role: 'STAFF' as UserRole,
@@ -240,94 +263,112 @@ export async function assignStaffLogin(staffId: number, loginUsername: string, l
 
   revalidatePath('/staff')
   revalidatePath('/settings')
-
-  return { success: true }
-}
-
-export async function verifyStaffPortalPassword(staffId: number, password: string) {
-  try { await requireAuth() } catch { return { success: false, error: 'Unauthorized' } }
-
-  const pass = password.trim()
-  if (!pass) return { success: false, error: 'Password is required' }
-
-  const staff = await prisma.staff.findUnique({
-    where: { id: staffId },
-    include: { user: { select: { hashedPassword: true, isActive: true } } },
-  })
-
-  if (!staff || staff.status !== 'Active') return { success: false, error: 'Staff not active' }
-  if (!staff.user || !staff.user.isActive) return { success: false, error: 'Login is not assigned for this staff member' }
-
-  const valid = await bcrypt.compare(pass, staff.user.hashedPassword)
-  if (!valid) return { success: false, error: 'Invalid password' }
-
-  return { success: true }
+  return { success: true, managerRole: session.user.role }
 }
 
 export async function updateStaffMember(data: unknown) {
-  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
+  let session
+  try { session = await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
 
   const parsed = updateStaffSchema.safeParse(data)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
   const existing = await prisma.staff.findUnique({
     where: { id: parsed.data.id },
-    include: { user: { select: { id: true, email: true } } },
+    include: { user: { select: { id: true, email: true, role: true, routingDepartmentId: true, routingPhone: true, routingAliases: true } } },
   })
   if (!existing) return { success: false, error: 'Staff not found' }
 
-  const loginUsername = parsed.data.loginUsername?.trim() || undefined
-  const loginPassword = parsed.data.loginPassword?.trim() || undefined
-
-  if (!existing.user && loginPassword && !loginUsername) {
-    return { success: false, error: 'Provide login username to create credentials' }
+  const suppliedLoginEmail = parsed.data.loginEmail?.trim().toLowerCase() || parsed.data.loginUsername?.trim().toLowerCase() || undefined
+  const loginEmail = suppliedLoginEmail || existing.user?.email || undefined
+  const loginPassword = parsed.data.loginPassword || ''
+  const routingDepartmentId = parsed.data.routingDepartmentId === undefined ? (existing.user?.routingDepartmentId ?? null) : parsed.data.routingDepartmentId
+  const routingPhoneInput = parsed.data.routingPhone === undefined ? existing.user?.routingPhone : parsed.data.routingPhone
+  const routingPhone = normalizeRoutingPhone(routingPhoneInput)
+  const routingAliases = parsed.data.routingAliases === undefined ? (existing.user?.routingAliases || []) : parsed.data.routingAliases
+  if (routingPhoneInput && !routingPhone) {
+    return { success: false, error: 'Routing phone must contain 8 to 15 digits' }
   }
+  const permissionRole = parsed.data.permissionRole ?? existing.user?.role ?? 'STAFF'
 
-  if (existing.user && !loginUsername && loginPassword) {
-    return { success: false, error: 'Provide login username when updating password' }
+  if (!existing.user && loginPassword && !loginEmail) {
+    return { success: false, error: 'Provide employee email to create credentials' }
   }
-
-  if (!existing.user && ((loginUsername && !loginPassword) || (!loginUsername && loginPassword))) {
-    return { success: false, error: 'Provide both login username and password to create login' }
+  if (!existing.user && ((loginEmail && !loginPassword) || (!loginEmail && loginPassword))) {
+    return { success: false, error: 'Provide both employee email and password to create login' }
   }
-
-  if (loginUsername) {
-    const used = await prisma.user.findUnique({ where: { email: loginUsername } })
-    if (used && used.id !== existing.user?.id) {
-      return { success: false, error: 'Login username is already in use' }
-    }
+  if (existing.user && loginPassword && !loginEmail) {
+    return { success: false, error: 'Employee email is required when updating password' }
+  }
+  if (permissionRole !== 'STAFF' && session.user.role !== 'ADMIN') {
+    return { success: false, error: 'Only an admin can assign Manager or Admin permissions' }
+  }
+  if (routingDepartmentId !== null && !loginEmail) {
+    return { success: false, error: 'A routing department requires an employee login account' }
+  }
+  if (routingDepartmentId !== null && !routingPhone) {
+    return { success: false, error: 'A routing department requires an authorized routing phone' }
+  }
+  if (routingDepartmentId === null && (routingPhone || routingAliases.length > 0)) {
+    return { success: false, error: 'Choose a routing department before configuring a routing recipient' }
+  }
+  if (suppliedLoginEmail && suppliedLoginEmail !== existing.user?.email && !employeeEmailSchema.safeParse(suppliedLoginEmail).success) {
+    return { success: false, error: 'Employee login must use a valid email address' }
+  }
+  if (!existing.user && permissionRole !== 'STAFF') {
+    return { success: false, error: 'Create the employee login before assigning a Manager or Admin permission role' }
+  }
+  const usedStaffEmail = await prisma.staff.findUnique({ where: { email: normalizeEmployeeEmail(parsed.data.email) }, select: { id: true } })
+  if (usedStaffEmail && usedStaffEmail.id !== existing.id) return { success: false, error: 'Staff email is already in use' }
+  if (suppliedLoginEmail && suppliedLoginEmail !== existing.user?.email) {
+    const usedUser = await prisma.user.findUnique({ where: { email: suppliedLoginEmail }, select: { id: true } })
+    if (usedUser && usedUser.id !== existing.user?.id) return { success: false, error: 'Employee login email is already in use' }
+  }
+  if (routingPhone && routingPhone !== existing.user?.routingPhone) {
+    const usedRoutingUser = await prisma.user.findUnique({ where: { routingPhone }, select: { id: true } })
+    if (usedRoutingUser && usedRoutingUser.id !== existing.user?.id) return { success: false, error: 'Routing phone is already assigned to another user' }
   }
 
   await prisma.$transaction(async tx => {
+    const department = routingDepartmentId === null
+      ? null
+      : await tx.routingDepartment.findUnique({ where: { id: routingDepartmentId }, select: { id: true, isActive: true } })
+    if (routingDepartmentId !== null && !department?.isActive) throw new Error('Routing department not found or inactive')
+
     await tx.staff.update({
       where: { id: parsed.data.id },
       data: {
         name: parsed.data.name,
         role: parsed.data.role,
         phone: parsed.data.phone,
-        email: parsed.data.email,
+        email: normalizeEmployeeEmail(parsed.data.email),
         status: parsed.data.status,
         joinDate: new Date(parsed.data.joinDate),
       },
     })
 
     if (existing.user) {
-      const userData: { name: string; email?: string; hashedPassword?: string } = {
+      const userData: { name: string; email?: string; hashedPassword?: string; role: UserRole; routingDepartmentId: number | null; routingPhone: string | null; routingAliases: string[] } = {
         name: parsed.data.name,
+        role: permissionRole as UserRole,
+        routingDepartmentId,
+        routingPhone: routingDepartmentId ? routingPhone : null,
+        routingAliases: routingDepartmentId ? routingAliases : [],
       }
-
-      if (loginUsername) userData.email = loginUsername
+      if (loginEmail) userData.email = loginEmail
       if (loginPassword) userData.hashedPassword = await bcrypt.hash(loginPassword, 12)
-
       await tx.user.update({ where: { id: existing.user.id }, data: userData })
-    } else if (loginUsername && loginPassword) {
+    } else if (loginEmail && loginPassword) {
       await tx.user.create({
         data: {
-          email: loginUsername,
+          email: loginEmail,
           name: parsed.data.name,
           hashedPassword: await bcrypt.hash(loginPassword, 12),
-          role: 'STAFF' as UserRole,
+          role: permissionRole as UserRole,
           staffId: parsed.data.id,
+          routingDepartmentId,
+          routingPhone: routingDepartmentId ? routingPhone : null,
+          routingAliases: routingDepartmentId ? routingAliases : [],
         },
       })
     }
@@ -336,6 +377,7 @@ export async function updateStaffMember(data: unknown) {
   revalidatePath('/staff')
   revalidatePath('/settings')
   revalidatePath('/staff-portal')
+  revalidatePath('/routing-crm')
 
   return { success: true }
 }
@@ -374,6 +416,7 @@ function getDistance(lat1: number, lng1: number, lat2: number, lng2: number): nu
 }
 
 export async function clockIn(staffId: number, gps?: { lat: number; lng: number }) {
+  try { await requireStaffIdentity(staffId) } catch { return { success: false, error: 'Forbidden' } }
   const { today, time } = getISTDate()
 
   // 1. Check if already clocked in
@@ -428,6 +471,7 @@ export async function clockIn(staffId: number, gps?: { lat: number; lng: number 
 }
 
 export async function clockOut(staffId: number, gps?: { lat: number; lng: number }) {
+  try { await requireStaffIdentity(staffId) } catch { return { success: false, error: 'Forbidden' } }
   const { today, time } = getISTDate()
 
   const existing = await prisma.attendance.findUnique({
@@ -485,6 +529,7 @@ export async function clockOut(staffId: number, gps?: { lat: number; lng: number
 }
 
 export async function getMonthAttendance(staffId: number, year: number, month: number) {
+  try { await requireStaffIdentity(staffId) } catch { return { success: false, error: 'Forbidden', data: [] } }
   // month is 1-based (1 = January)
   const startDate = new Date(year, month - 1, 1)
   const endDate = new Date(year, month, 0, 23, 59, 59) // last day of month
@@ -510,6 +555,7 @@ export async function getMonthAttendance(staffId: number, year: number, month: n
 }
 
 export async function getAttendance(staffId: number, days: number = 30) {
+  try { await requireStaffIdentity(staffId) } catch { return { success: false, error: 'Forbidden', data: [] } }
   const since = new Date()
   since.setDate(since.getDate() - days)
 
@@ -522,6 +568,7 @@ export async function getAttendance(staffId: number, days: number = 30) {
 }
 
 export async function getDailyAttendanceReport() {
+  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
   const { today } = getISTDate()
 
   const allStaff = await prisma.staff.findMany({
@@ -567,6 +614,7 @@ export async function staffStockUpdate(data: {
   quantity: number
 }) {
   const { staffId, productId, action, quantity } = data
+  try { await requireStaffIdentity(staffId) } catch { return { success: false, error: 'Forbidden' } }
 
   const product = await prisma.product.findUnique({
     where: { id: productId },

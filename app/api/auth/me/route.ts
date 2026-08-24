@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getSession } from '@/lib/session'
+import { getSession } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/db'
 
 export async function GET() {
@@ -10,8 +10,8 @@ export async function GET() {
       return NextResponse.json(null)
     }
 
-    const userId = Number(session.id)
-    const user = Number.isFinite(userId)
+    const userId = session.user.numericId
+    const user = Number.isInteger(userId)
       ? await prisma.user.findUnique({
           where: { id: userId },
           select: {
@@ -21,9 +21,16 @@ export async function GET() {
             role: true,
             staffId: true,
             createdAt: true,
+            staff: { select: { id: true, name: true, role: true, status: true } },
+            routingDepartmentId: true,
+            routingDepartment: { select: { id: true, name: true } },
           },
         })
       : null
+
+    if (!user) {
+      return NextResponse.json(null)
+    }
 
     // Sync profile to WhatsApp CRM profiles table (non-critical, never crash auth)
     if (user) {
@@ -49,12 +56,16 @@ export async function GET() {
 
     return NextResponse.json({
       user: {
-        id: user ? String(user.id) : session.id,
-        email: user?.email ?? session.email,
-        name: user?.name ?? session.name,
-        role: user?.role ?? session.role,
-        staffId: user?.staffId ?? session.staffId,
-        created_at: user?.createdAt?.toISOString() ?? null,
+        id: String(user.id),
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        staffId: user.staffId,
+        jobTitle: user.staff?.role ?? null,
+        staffStatus: user.staff?.status ?? null,
+        routingDepartmentId: user.routingDepartmentId ?? null,
+        routingDepartment: user.routingDepartment ?? null,
+        created_at: user.createdAt?.toISOString() ?? null,
       }
     })
   } catch (error) {

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { employeeEmailSchema, routingPhoneSchema } from '@/lib/employee-accounts'
 
 const emailSchema = z.string().email()
 const loginUsernameSchema = z.union([
@@ -15,26 +16,40 @@ const loginUsernameSchema = z.union([
     }, 'Login username must be a valid email or username'),
 ])
 
+const permissionRoleSchema = z.enum(['STAFF', 'MANAGER', 'ADMIN'])
+const departmentIdSchema = z.union([z.number().int().positive(), z.null()]).optional()
+const routingAliasesSchema = z.array(z.string().trim().min(1).max(80)).max(20)
+
 export const createStaffSchema = z.object({
-  name: z.string().min(1),
-  role: z.string().min(1),
-  phone: z.string().min(10),
-  email: z.string().email(),
-  joinDate: z.string(),
+  name: z.string().trim().min(1).max(120),
+  role: z.string().trim().min(1).max(120),
+  phone: z.string().trim().min(5).max(30),
+  email: z.string().trim().email(),
+  joinDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Join date must be YYYY-MM-DD'),
+  loginEmail: employeeEmailSchema.optional(),
   loginUsername: loginUsernameSchema.optional(),
-  loginPassword: z.union([z.literal(''), z.string().min(4)]).optional(),
+  loginPassword: z.union([z.literal(''), z.string().min(8, 'Password must be at least 8 characters')]).optional(),
+  permissionRole: permissionRoleSchema.optional(),
+  routingDepartmentId: departmentIdSchema,
+  routingPhone: z.union([routingPhoneSchema, z.literal(''), z.null()]).optional(),
+  routingAliases: routingAliasesSchema.default([]),
 })
 
 export const updateStaffSchema = z.object({
   id: z.number().int().positive(),
-  name: z.string().min(1),
-  role: z.string().min(1),
-  phone: z.string().min(10),
-  email: z.string().email(),
-  status: z.string().min(1),
-  joinDate: z.string(),
+  name: z.string().trim().min(1).max(120),
+  role: z.string().trim().min(1).max(120),
+  phone: z.string().trim().min(5).max(30),
+  email: z.string().trim().email(),
+  status: z.enum(['Active', 'Off Duty', 'Inactive']),
+  joinDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Join date must be YYYY-MM-DD'),
+  loginEmail: employeeEmailSchema.optional(),
   loginUsername: loginUsernameSchema.optional(),
-  loginPassword: z.union([z.literal(''), z.string().min(4)]).optional(),
+  loginPassword: z.union([z.literal(''), z.string().min(8, 'Password must be at least 8 characters')]).optional(),
+  permissionRole: permissionRoleSchema.optional(),
+  routingDepartmentId: departmentIdSchema,
+  routingPhone: z.union([routingPhoneSchema, z.literal(''), z.null()]).optional(),
+  routingAliases: routingAliasesSchema.optional(),
 })
 
 export const clockInSchema = z.object({

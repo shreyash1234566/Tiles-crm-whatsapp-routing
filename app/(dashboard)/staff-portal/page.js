@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @next/next/no-img-element */
 'use client';
 
@@ -9,14 +10,14 @@ import {
   UserCheck, Activity, Percent, IndianRupee,
   Megaphone, AlertTriangle, Search,
   Warehouse, Timer, Home,
-  Lock, User, Trash2,
+  Trash2,
   ChevronLeft, ChevronRight, Fingerprint,
   ClipboardList, Boxes, Info, MessageSquare, ChevronDown, ChevronUp, Flame,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/components/AuthProvider';
 import Modal from '@/components/Modal';
-import { getStaff, getStaffPortalProfile, clockIn as serverClockIn, clockOut as serverClockOut, staffStockUpdate, getMonthAttendance, verifyStaffPortalPassword } from '@/app/actions/staff';
+import { getStaffPortalProfile, clockIn as serverClockIn, clockOut as serverClockOut, staffStockUpdate, getMonthAttendance } from '@/app/actions/staff';
 import { getStaffVisits, updateFieldVisit, logSelfVisit, getSelfVisits, updateSelfVisitPhotos } from '@/app/actions/custom-orders';
 import { moveSelfVisitToDraft } from '@/app/actions/drafts';
 import { getProducts } from '@/app/actions/products';
@@ -45,15 +46,10 @@ export default function StaffPortalPage() {
   const router = useRouter();
   const { data: session } = useSession();
   const userRole = session?.user?.role || 'STAFF';
-  const [staff, setStaff] = useState([]);
   const [products, setProducts] = useState([]);
   const [staffLoading, setStaffLoading] = useState(true);
   const [autoLoginLoading, setAutoLoginLoading] = useState(false);
   const [loggedInStaff, setLoggedInStaff] = useState(null);
-  const [selectedStaffId, setSelectedStaffId] = useState('');
-  const [accessKey, setAccessKey] = useState('');
-  const [loginSubmitting, setLoginSubmitting] = useState(false);
-  const [loginError, setLoginError] = useState('');
   const [tab, setTab] = useState('dashboard');
   const [isClockedIn, setIsClockedIn] = useState(true);
   const [clockInTime, setClockInTime] = useState(null);
@@ -70,9 +66,26 @@ export default function StaffPortalPage() {
   const [monthAttendance, setMonthAttendance] = useState([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
 
+  // Assigned visits from custom orders
+  const [assignedVisits, setAssignedVisits] = useState([]);
+  const [showUpdateVisit, setShowUpdateVisit] = useState(false);
+  const [editingVisit, setEditingVisit] = useState(null);
+  const [visitSaving, setVisitSaving] = useState(false);
+
+  // Self visits from DB
+  const [selfVisits, setSelfVisits] = useState([]);
+  const [deletingVisitId, setDeletingVisitId] = useState(null);
+
+  // Production orders
+  const [productionOrders, setProductionOrders] = useState([]);
+  const [productionLoading, setProductionLoading] = useState(false);
+  const [stepUpdating, setStepUpdating] = useState(null);
+  const [expandedOrderId, setExpandedOrderId] = useState(null); // for materials panel
+  const [stepNotes, setStepNotes] = useState({}); // { [stepId]: string } draft notes per step
+  const [savingNoteId, setSavingNoteId] = useState(null);
+
   useEffect(() => {
-    Promise.all([getStaff(), getProducts()]).then(([staffRes, productsRes]) => {
-      if (staffRes.success) setStaff(staffRes.data);
+    getProducts().then(productsRes => {
       if (productsRes.success) setProducts(productsRes.data);
       setStaffLoading(false);
     });
@@ -80,7 +93,6 @@ export default function StaffPortalPage() {
 
   const applyStaffLogin = (found) => {
     setLoggedInStaff(found);
-    setLoginError('');
     const todayStr = new Date().toISOString().split('T')[0];
     const today = found.attendance.find(a => a.date === todayStr);
     if (today?.clockIn) {
@@ -177,58 +189,6 @@ export default function StaffPortalPage() {
   // Photo upload for existing visits
   const [uploadingVisitId, setUploadingVisitId] = useState(null);
 
-  // Assigned visits from custom orders
-  const [assignedVisits, setAssignedVisits] = useState([]);
-  const [showUpdateVisit, setShowUpdateVisit] = useState(false);
-  const [editingVisit, setEditingVisit] = useState(null);
-  const [visitSaving, setVisitSaving] = useState(false);
-
-  // Self visits from DB
-  const [selfVisits, setSelfVisits] = useState([]);
-  const [deletingVisitId, setDeletingVisitId] = useState(null);
-
-  // Production orders
-  const [productionOrders, setProductionOrders] = useState([]);
-  const [productionLoading, setProductionLoading] = useState(false);
-  const [stepUpdating, setStepUpdating] = useState(null);
-  const [expandedOrderId, setExpandedOrderId] = useState(null); // for materials panel
-  const [stepNotes, setStepNotes] = useState({}); // { [stepId]: string } draft notes per step
-  const [savingNoteId, setSavingNoteId] = useState(null);
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    const found = staff.find(s => String(s.id) === selectedStaffId);
-    if (!found) {
-      setLoginError('Please select a staff member');
-      return;
-    }
-
-    const entered = accessKey.trim();
-    if (!entered) {
-      setLoginError('Please enter your password');
-      return;
-    }
-
-    setLoginSubmitting(true);
-    try {
-      // Require assigned login credentials
-      if (!found.hasLogin) {
-        setLoginError('No login credentials assigned. Please contact your admin.');
-        return;
-      }
-
-      const res = await verifyStaffPortalPassword(found.id, entered);
-      if (!res.success) {
-        setLoginError(res.error || 'Invalid password');
-        return;
-      }
-
-      applyStaffLogin(found);
-    } finally {
-      setLoginSubmitting(false);
-    }
-  };
-
   const getGps = () => new Promise((resolve, reject) => {
     if (!navigator.geolocation) { reject(new Error('Geolocation not supported')); return; }
     navigator.geolocation.getCurrentPosition(
@@ -323,11 +283,8 @@ export default function StaffPortalPage() {
     });
     if (res.success) {
       // Refresh staff data to show updated stock log
-      const staffRes = await getStaff();
-      if (staffRes.success) {
-        const updated = staffRes.data.find(s => s.id === loggedInStaff.id);
-        if (updated) setLoggedInStaff({ ...loggedInStaff, stockUpdates: updated.stockUpdates });
-      }
+      const staffRes = await getStaffPortalProfile(loggedInStaff.id);
+      if (staffRes.success) setLoggedInStaff(staffRes.data);
       setStockProduct(null);
       setStockProductSearch('');
       setStockQty('');
@@ -514,68 +471,13 @@ export default function StaffPortalPage() {
     );
   }
 
-  // ========== LOGIN SCREEN ==========
+  // ========== PROFILE LINK GUARD ==========
   if (!loggedInStaff) {
     return (
-      <div className="min-h-[80vh] flex items-center justify-center animate-[fade-in_0.5s_ease-out]">
-        <div className="w-full max-w-md">
-          <div className="glass-card p-8">
-            {/* Header */}
-            <div className="text-center mb-8">
-              <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
-                <User className="w-8 h-8 text-accent" />
-              </div>
-              <h1 className="text-2xl font-bold text-foreground">Staff Portal</h1>
-              <p className="text-sm text-muted mt-1">Login to access your dashboard</p>
-            </div>
-
-            <form onSubmit={handleLogin} className="space-y-4">
-              {/* Staff Selection */}
-              <div>
-                <label className="block text-xs font-medium text-muted mb-1.5">Select Your Name</label>
-                <select
-                  value={selectedStaffId}
-                  onChange={e => {
-                    setSelectedStaffId(e.target.value);
-                    setAccessKey('');
-                    setLoginError('');
-                  }}
-                  className="w-full px-4 py-3 bg-surface rounded-xl border border-border text-sm text-foreground"
-                >
-                  <option value="">Choose staff member...</option>
-                  {staff.map(s => (
-                    <option key={s.id} value={s.id}>{s.name} — {s.role}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted mb-1.5">Enter Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
-                  <input
-                    type="password"
-                    placeholder="Your assigned password"
-                    value={accessKey}
-                    onChange={e => { setAccessKey(e.target.value); setLoginError(''); }}
-                    className="w-full pl-10 pr-4 py-3 bg-surface rounded-xl border border-border text-sm"
-                  />
-                </div>
-              </div>
-
-              {loginError && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 text-red-700 text-xs">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {loginError}
-                </div>
-              )}
-
-              <button type="submit" disabled={loginSubmitting} className="w-full py-3 bg-accent hover:bg-accent-hover disabled:opacity-60 text-white rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2">
-                <LogIn className="w-4 h-4" /> {loginSubmitting ? 'Checking...' : 'Login'}
-              </button>
-            </form>
-
-            <p className="text-[10px] text-muted text-center mt-6">Contact your admin if you haven&apos;t been assigned a login password.</p>
-          </div>
+      <div className="min-h-[80vh] flex items-center justify-center">
+        <div className="glass-card p-8 text-center max-w-md">
+          <h1 className="text-lg font-semibold text-foreground">Employee profile not linked</h1>
+          <p className="text-sm text-muted mt-2">Your login is valid, but Admin must link it to an active Staff profile before this portal can be used.</p>
         </div>
       </div>
     );
@@ -612,7 +514,7 @@ export default function StaffPortalPage() {
               Welcome, {me.name.split(' ')[0]}
               <span className="text-xs font-normal text-muted bg-surface px-2 py-0.5 rounded-full">{me.role}</span>
             </h1>
-            <p className="text-sm text-muted mt-0.5">Staff Portal — Shift: 9:00 AM – 8:00 PM</p>
+            <p className="text-sm text-muted mt-0.5">Staff Portal{me.routingDepartmentName ? ` — ${me.routingDepartmentName}` : ' — Department not assigned'} · Shift: 9:00 AM – 8:00 PM</p>
           </div>
         </div>
         <div className="flex flex-col items-end gap-2">

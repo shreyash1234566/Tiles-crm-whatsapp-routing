@@ -1,8 +1,5 @@
 'use client';
-
 import { useState, useEffect, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { getStaff } from '@/app/actions/staff';
 import { getStoreSettings } from '@/app/actions/settings';
 import { getBrand } from '@/lib/brand';
 import Image from 'next/image';
@@ -23,26 +20,6 @@ function LoginContent() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [storeProfile, setStoreProfile] = useState({ name: brand.name, logo: brand.logo });
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get('callbackUrl') || '/';
-
-  // Staff login state
-  const [staffList, setStaffList] = useState([]);
-  const [staffLoading, setStaffLoading] = useState(false);
-  const [selectedStaffId, setSelectedStaffId] = useState('');
-  const [staffPassword, setStaffPassword] = useState('');
-
-  useEffect(() => {
-    if (mode === 'staff' && staffList.length === 0) {
-      setStaffLoading(true);
-      getStaff().then(res => {
-        if (res.success) setStaffList(res.data);
-        setStaffLoading(false);
-      });
-    }
-  }, [mode, staffList.length]);
-
   useEffect(() => {
     let active = true;
     getStoreSettings().then(res => {
@@ -53,7 +30,7 @@ function LoginContent() {
       });
     });
     return () => { active = false; };
-  }, []);
+  }, [brand.logo, brand.name]);
 
   const handleAdminSubmit = async (e) => {
     e.preventDefault();
@@ -66,23 +43,19 @@ function LoginContent() {
         body: JSON.stringify({ email, password, type: 'credentials' }),
       });
 
-      let result = {};
-      try {
-        result = await res.json();
-      } catch {
-        // Response was not JSON
-      }
+      const result = await res.json();
 
       if (!res.ok) {
-        setError(result.error || (res.status === 401 ? 'Invalid email or password' : 'Login failed. Please try again.'));
+        setError(result.error || 'Invalid email or password');
       } else {
         // Full page reload so AuthProvider re-mounts and fetches the fresh session.
         // Always redirect admin login to '/' (dashboard), never follow callbackUrl,
         // which could be '/staff-portal' from a previous staff session.
-        window.location.href = '/';
+        window.history.replaceState(null, '', '/')
+        window.location.reload()
       }
     } catch {
-      setError('Network error. Please check your connection and try again.');
+      setError('Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -91,12 +64,8 @@ function LoginContent() {
   const handleStaffSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!selectedStaffId) {
-      setError('Please select a staff member');
-      return;
-    }
-    if (!staffPassword) {
-      setError('Please enter your login password');
+    if (!email.trim() || !password) {
+      setError('Please enter your employee email and password');
       return;
     }
     setLoading(true);
@@ -104,28 +73,19 @@ function LoginContent() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          staffId: selectedStaffId,
-          password: staffPassword,
-          type: 'staff-credentials',
-        }),
+        body: JSON.stringify({ email, password, type: 'staff-credentials' }),
       });
 
-      let result = {};
-      try {
-        result = await res.json();
-      } catch {
-        // Response was not JSON
-      }
+      const result = await res.json();
 
       if (!res.ok) {
-        setError(result.error || (res.status === 401 ? 'Invalid staff credentials.' : 'Login failed. Please try again.'));
+        setError(result.error || 'Invalid employee credentials.');
       } else {
-        // Full page reload so AuthProvider re-mounts and fetches the fresh session
-        window.location.href = '/staff-portal';
+        window.history.replaceState(null, '', result.redirectTo || '/staff-portal')
+        window.location.reload()
       }
     } catch {
-      setError('Network error. Please check your connection and try again.');
+      setError('Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -195,7 +155,7 @@ function LoginContent() {
               {mode === 'admin' ? 'Admin Login' : 'Staff Login'}
             </h1>
             <p className="text-gray-500 dark:text-gray-400 mt-1">
-              {mode === 'admin' ? 'Sign in with your admin credentials' : 'Select your name and enter your assigned login password'}
+              {mode === 'admin' ? 'Sign in with your admin credentials' : 'Sign in with your employee email and password'}
             </p>
           </div>
 
@@ -232,32 +192,23 @@ function LoginContent() {
           {mode === 'staff' && (
             <form onSubmit={handleStaffSubmit} className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Select Staff Member</label>
-                {staffLoading ? (
-                  <div className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-400 text-sm animate-pulse">Loading staff...</div>
-                ) : (
-                  <select value={selectedStaffId} onChange={(e) => setSelectedStaffId(e.target.value)} required
-                    className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition-all">
-                    <option value="">Choose your name</option>
-                    {staffList.filter(s => s.status === 'Active' && s.hasLogin && s.loginActive).map(s => (
-                      <option key={s.id} value={s.id}>{s.name} — {s.role}</option>
-                    ))}
-                  </select>
-                )}
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Employee Email</label>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" autoFocus placeholder="employee@example.com"
+                  className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition-all" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Password</label>
-                <input type="password" value={staffPassword} onChange={(e) => setStaffPassword(e.target.value)} required placeholder="Enter your login password"
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" placeholder="Enter your login password"
                   className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition-all" />
               </div>
               <button type="submit" disabled={loading}
                 className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-400 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2">
                 {loading ? (
                   <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> Signing in...</>
-                ) : 'Enter Staff Portal'}
+                ) : 'Sign In'}
               </button>
               <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-                <p className="text-xs text-amber-600 dark:text-amber-400 text-center">Use the login password assigned by admin in Settings / Team.</p>
+                <p className="text-xs text-amber-600 dark:text-amber-400 text-center">Use the email and password assigned by Admin in Settings → Team.</p>
               </div>
             </form>
           )}

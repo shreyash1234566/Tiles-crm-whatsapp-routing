@@ -36,7 +36,6 @@ import {
   Facebook,
   Instagram,
   Sparkles,
-  Handshake,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useSession } from '@/components/AuthProvider';
@@ -52,7 +51,6 @@ const navItems = [
   { href: '/walkins', label: 'Walk-ins', icon: UserPlus },
   { href: '/leads', label: 'Leads', icon: Users },
   { href: '/indiamart-leads', label: 'IndiaMART Leads', icon: Building2, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/dealers', label: 'Dealers & Partners', icon: Handshake },
   { href: '/staff', label: 'Staff', icon: UsersRound, roles: ['ADMIN', 'MANAGER'] },
   { href: '/appointments', label: 'Appointments', icon: Calendar },
   { href: '/inventory', label: 'Inventory', icon: Package },
@@ -66,8 +64,7 @@ const navItems = [
   { href: '/manufacturing', label: 'Manufacturing', icon: Factory, roles: ['ADMIN', 'MANAGER', 'STAFF'] },
   { href: '/drafts', label: 'Drafts', icon: Trash2, roles: ['ADMIN', 'MANAGER'] },
   { href: '/email-marketing', label: 'Email Marketing', icon: MailPlus, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/whatsapp-marketing', label: 'WhatsApp Marketing', icon: Megaphone, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/social-inbox', label: 'Instagram & FB Inbox', icon: MessageSquare, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/routing-crm', label: 'Group Inbox', icon: MessageSquare },
   { href: '/calls', label: 'Call Center', icon: Headphones },
   { href: '/gst', label: 'GST Compliance', icon: FileSpreadsheet, roles: ['ADMIN', 'MANAGER'] },
   { href: '/expenses', label: 'Expenses', icon: Calculator, roles: ['ADMIN', 'MANAGER', 'STAFF'] },
