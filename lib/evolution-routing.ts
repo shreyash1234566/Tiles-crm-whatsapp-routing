@@ -27,7 +27,11 @@ export type DepartmentMatch = {
   departmentId: number | null
   departmentName: string | null
   routingReason: string | null
+  routeType: 'DIRECT_MENTION' | 'KEYWORD' | 'AI_CLASSIFIED' | 'EXISTING' | 'DEFAULT'
   mentionPriority: boolean
+  assignedUserId?: number | null
+  confidence?: number | null
+  intent?: IntentResult['department'] | null
 }
 
 function stringValue(value: unknown): string {
@@ -233,6 +237,77 @@ function containsPhrase(text: string, phrase: string): boolean {
   return new RegExp(`(^|\\s|[@#])${escapeRegExp(clean)}(?=$|\\s|[.!?,:;)])`, 'i').test(text)
 }
 
+export type IntentResult = {
+  department: 'sales' | 'accounts' | 'logistics' | 'unclear'
+  confidence: number
+  reason: string
+}
+
+const INTENT_PROMPT = `Classify a B2B WhatsApp group message into exactly one department.\nSales: inquiries, rates, samples, product questions, new orders.\nAccounts: invoices, GST, payment, refunds, billing, ledger.\nLogistics: bilty, LR, transport, tracking, dispatch status, delivery.\nIf genuinely ambiguous, return unclear. Output only JSON with department, confidence from 0 to 1, and a short reason.`
+
+function validIntent(value: unknown): IntentResult | null {
+  const object = objectValue(value)
+  const department = stringValue(object.department).toLowerCase()
+  if (!['sales', 'accounts', 'logistics', 'unclear'].includes(department)) return null
+  const confidence = Math.max(0, Math.min(1, Number(object.confidence)))
+  return { department: department as IntentResult['department'], confidence: Number.isFinite(confidence) ? confidence : 0, reason: firstString(object.reason) || 'No reason returned' }
+}
+
+async function jsonPost(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 7000)
+  try {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body), signal: controller.signal, cache: 'no-store' })
+    if (!response.ok) throw new Error(`classifier HTTP ${response.status}`)
+    return await response.json()
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function contentText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map((item) => stringValue(objectValue(item).text)).filter(Boolean).join('\n')
+  return ''
+}
+
+async function classifyWithGroq(text: string): Promise<IntentResult | null> {
+  const apiKey = process.env.GROQ_API_KEY?.trim()
+  if (!apiKey) return null
+  try {
+    const response = await jsonPost(process.env.GROQ_ROUTING_URL || 'https://api.groq.com/openai/v1/chat/completions', { Authorization: `Bearer ${apiKey}` }, { model: process.env.GROQ_ROUTING_MODEL || 'llama-3.1-8b-instant', temperature: 0, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: INTENT_PROMPT }, { role: 'user', content: text }] })
+    const root = objectValue(response)
+    const choice = Array.isArray(root.choices) ? objectValue(root.choices[0]) : {}
+    const message = objectValue(choice.message)
+    return validIntent(JSON.parse(contentText(message.content)))
+  } catch (error) {
+    console.error('[evolution/router] Groq classification failed:', error)
+    return null
+  }
+}
+
+async function classifyWithClaude(text: string): Promise<IntentResult | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim()
+  if (!apiKey) return null
+  try {
+    const response = await jsonPost(process.env.ANTHROPIC_ROUTING_URL || 'https://api.anthropic.com/v1/messages', { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, { model: process.env.ANTHROPIC_ROUTING_MODEL || 'claude-haiku-4-5-20251001', max_tokens: 160, system: INTENT_PROMPT, messages: [{ role: 'user', content: text }] })
+    const root = objectValue(response)
+    const content = Array.isArray(root.content) ? root.content.map((item) => stringValue(objectValue(item).text)).join('\n') : ''
+    return validIntent(JSON.parse(content))
+  } catch (error) {
+    console.error('[evolution/router] Claude classification failed:', error)
+    return null
+  }
+}
+
+export async function classifyIntent(text: string): Promise<IntentResult> {
+  const groq = await classifyWithGroq(text)
+  if (groq && groq.department !== 'unclear' && groq.confidence >= 0.7) return groq
+  const claude = await classifyWithClaude(text)
+  if (claude) return claude
+  return groq || { department: 'unclear', confidence: 0, reason: 'LLM unavailable or uncertain' }
+}
+
 export async function resolveDepartmentForMessage(input: {
   groupJid: string
   subject: string
@@ -240,37 +315,47 @@ export async function resolveDepartmentForMessage(input: {
   mentionedJids: string[]
   existingDepartmentId?: number | null
 }): Promise<DepartmentMatch> {
-  if (input.existingDepartmentId) {
-    const existing = await prisma.routingDepartment.findUnique({ where: { id: input.existingDepartmentId }, select: { id: true, name: true, isActive: true } })
-    if (existing?.isActive) {
-      const aliases = (process.env.EVOLUTION_BUSINESS_ALIASES || '').split(',').map((value) => value.trim()).filter(Boolean)
-      const haystack = `${input.subject} ${input.text || ''}`.toLowerCase()
-      const mentionPriority = aliases.some((alias) => containsPhrase(haystack, alias)) || input.mentionedJids.length > 0
-      return { departmentId: existing.id, departmentName: existing.name, routingReason: 'existing-group-mapping', mentionPriority }
-    }
-  }
-
   const departments = await prisma.routingDepartment.findMany({
     where: { isActive: true },
-    include: { users: { where: { isActive: true, staff: { status: 'Active' } }, select: { routingPhone: true, routingAliases: true } } },
+    include: { users: { where: { isActive: true, staff: { status: 'Active' } }, select: { id: true, name: true, routingPhone: true, routingAliases: true, staff: { select: { name: true } } } } },
     orderBy: { id: 'asc' },
   })
   const haystack = `${input.subject} ${input.text || ''}`.toLowerCase()
   const mentionedJids = new Set(input.mentionedJids.map(normalizePhoneJid))
   const businessAliases = (process.env.EVOLUTION_BUSINESS_ALIASES || '').split(',').map((value) => value.trim()).filter(Boolean)
-  let mentionPriority = businessAliases.some((alias) => containsPhrase(haystack, alias))
+  const businessMention = businessAliases.some((alias) => containsPhrase(haystack, alias))
 
+  // Explicit @tag or a person/profile alias always wins over keywords and AI.
   for (const department of departments) {
-    const directMention = department.users.some((user) => user.routingPhone && mentionedJids.has(normalizePhoneJid(user.routingPhone)))
-    const aliases = department.users.flatMap((user) => user.routingAliases || [])
-    const keywordMatch = containsPhrase(haystack, department.name) || aliases.some((alias) => containsPhrase(haystack, alias))
-    if (directMention || keywordMatch) {
-      mentionPriority = mentionPriority || directMention || aliases.some((alias) => containsPhrase(haystack, alias))
-      return { departmentId: department.id, departmentName: department.name, routingReason: directMention ? 'direct-department-mention' : 'department-keyword', mentionPriority }
+    for (const user of department.users) {
+      const aliases = [user.name, user.staff?.name, ...(user.routingAliases || [])].filter((value): value is string => Boolean(value))
+      const directMention = Boolean(user.routingPhone && mentionedJids.has(normalizePhoneJid(user.routingPhone))) || aliases.some((alias) => containsPhrase(haystack, alias))
+      if (directMention) return { departmentId: department.id, departmentName: department.name, routingReason: 'direct-person-mention', routeType: 'DIRECT_MENTION', mentionPriority: true, assignedUserId: user.id, confidence: 1, intent: null }
     }
   }
 
-  return { departmentId: null, departmentName: null, routingReason: null, mentionPriority }
+  // Human-readable department names and configured aliases are deterministic.
+  for (const department of departments) {
+    const aliases = department.users.flatMap((user) => user.routingAliases || [])
+    if (containsPhrase(haystack, department.name) || aliases.some((alias) => containsPhrase(haystack, alias))) {
+      return { departmentId: department.id, departmentName: department.name, routingReason: 'department-keyword', routeType: 'KEYWORD', mentionPriority: businessMention || aliases.some((alias) => containsPhrase(haystack, alias)), confidence: 1, intent: null }
+    }
+  }
+
+  // Only ambiguous/no-keyword messages reach the LLM. A confident result can hand off
+  // an existing thread; an unclear result preserves its current department.
+  const intent = await classifyIntent(input.text || input.subject)
+  if (intent.department !== 'unclear' && intent.confidence >= 0.7) {
+    const department = departments.find((candidate) => candidate.name.toLowerCase() === intent.department)
+    if (department) return { departmentId: department.id, departmentName: department.name, routingReason: 'ai-classified', routeType: 'AI_CLASSIFIED', mentionPriority: businessMention, confidence: intent.confidence, intent: intent.department }
+  }
+
+  const existing = input.existingDepartmentId ? departments.find((department) => department.id === input.existingDepartmentId) : null
+  if (existing) return { departmentId: existing.id, departmentName: existing.name, routingReason: 'existing-group-mapping', routeType: 'EXISTING', mentionPriority: businessMention, confidence: intent.confidence, intent: intent.department }
+
+  const fallback = departments.find((department) => department.name.toLowerCase() === 'sales') || departments[0]
+  if (fallback) return { departmentId: fallback.id, departmentName: fallback.name, routingReason: 'default-sales-fallback', routeType: 'DEFAULT', mentionPriority: businessMention, confidence: intent.confidence, intent: intent.department }
+  return { departmentId: null, departmentName: null, routingReason: 'no-active-department', routeType: 'DEFAULT', mentionPriority: businessMention, confidence: intent.confidence, intent: intent.department }
 }
 
 export async function getEvolutionOwnerUserId(): Promise<number | null> {

@@ -2609,6 +2609,10 @@ model EvolutionGroup {
   departmentId       Int?
   departmentName     String?
   routingReason      String?
+  routeType          String   @default("DEFAULT")
+  intent             String?
+  confidence         Float?
+  assignedUserId     Int?
   mentionPriority    Boolean  @default(false)
   lastMentionAt      DateTime?
   lastMessageText    String?
@@ -2622,6 +2626,7 @@ model EvolutionGroup {
   updatedAt          DateTime @updatedAt
 
   messages           EvolutionGroupMessage[]
+  ticket             EvolutionGroupTicket?
 
   @@unique([userId, groupJid])
   @@index([userId, departmentId, status])
@@ -2651,4 +2656,45 @@ model EvolutionGroupMessage {
   @@index([groupId, createdAt])
   @@index([messageId])
   @@map("evolution_group_messages")
+}
+
+
+model EvolutionGroupTicket {
+  id              String   @id @default(cuid())
+  groupId         String   @unique
+  departmentId    Int?
+  departmentName  String?
+  assignedUserId  Int?
+  status          String   @default("open")
+  routeType       String   @default("default")
+  lastIntent      String?
+  confidence      Float?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  group           EvolutionGroup        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  audits          EvolutionRoutingAudit[]
+
+  @@index([departmentId, status])
+  @@index([routeType, createdAt])
+  @@map("evolution_group_tickets")
+}
+
+model EvolutionRoutingAudit {
+  id                 String   @id @default(cuid())
+  ticketId           String
+  messageId          String?
+  event              String
+  routeType          String
+  fromDepartmentId   Int?
+  toDepartmentId     Int?
+  confidence         Float?
+  reason             String?
+  createdAt          DateTime @default(now())
+
+  ticket             EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@index([event, createdAt])
+  @@map("evolution_routing_audits")
 }

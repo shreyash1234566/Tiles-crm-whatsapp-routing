@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { extractEvolutionMessages, getEvolutionConfig, isGroupJid, normalizePhoneJid } from './evolution-routing'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { classifyIntent, extractEvolutionMessages, getEvolutionConfig, isGroupJid, normalizePhoneJid } from './evolution-routing'
 
 afterEach(() => {
   delete process.env.EVOLUTION_API_URL
   delete process.env.EVOLUTION_API_KEY
   delete process.env.EVOLUTION_INSTANCE_NAME
   delete process.env.EVOLUTION_WEBHOOK_SECRET
+  delete process.env.GROQ_API_KEY
+  delete process.env.ANTHROPIC_API_KEY
+  vi.unstubAllGlobals()
 })
 
 describe('Evolution group routing adapter', () => {
@@ -60,5 +63,30 @@ describe('Evolution group routing adapter', () => {
 
   it('normalizes phone JIDs for direct mention matching', () => {
     expect(normalizePhoneJid('919999999999@s.whatsapp.net')).toBe('919999999999')
+  })
+
+  it('uses a confident Groq result without escalating', async () => {
+    process.env.GROQ_API_KEY = 'test-groq-key'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '{"department":"sales","confidence":0.95,"reason":"rate inquiry"}' } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(classifyIntent('What is the rate for this tile?')).resolves.toMatchObject({ department: 'sales', confidence: 0.95 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('api.groq.com')
+  })
+
+  it('escalates low-confidence Groq output to Claude', async () => {
+    process.env.GROQ_API_KEY = 'test-groq-key'
+    process.env.ANTHROPIC_API_KEY = 'test-anthropic-key'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"department":"unclear","confidence":0.3,"reason":"ambiguous"}' } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ content: [{ type: 'text', text: '{"department":"logistics","confidence":0.9,"reason":"delivery request"}' }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(classifyIntent('Please check the delivery status.')).resolves.toMatchObject({ department: 'logistics', confidence: 0.9 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('api.anthropic.com')
+  })
+
+  it('returns unclear when no LLM credentials are configured', async () => {
+    await expect(classifyIntent('A message with no deterministic keyword')).resolves.toMatchObject({ department: 'unclear', confidence: 0 })
   })
 })

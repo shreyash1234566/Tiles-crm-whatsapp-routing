@@ -12,19 +12,30 @@ async function getOwnerUserId(): Promise<number | null> {
 
 async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof extractEvolutionMessages>) {
   for (const item of incoming) {
-    const subject = item.subject === item.groupJid ? (await getEvolutionGroupSubject(item.groupJid)) || item.subject : item.subject
-    const existing = await prisma.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { id: true, departmentId: true } })
-    const routing = await resolveDepartmentForMessage({ groupJid: item.groupJid, subject, text: item.text, mentionedJids: item.mentionedJids, existingDepartmentId: existing?.departmentId })
-    const group = await prisma.evolutionGroup.upsert({
-      where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
-      update: { subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
-      create: { userId: ownerUserId, groupJid: item.groupJid, subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
-      select: { id: true },
-    })
     try {
-      const message = await prisma.evolutionGroupMessage.create({ data: { groupId: group.id, messageId: item.messageId, senderJid: item.senderJid, senderName: item.senderName, text: item.text, messageType: item.messageType, mediaUrl: item.mediaUrl, quotedMessageId: item.quotedMessageId, mentionedJids: item.mentionedJids, fromMe: item.fromMe, status: item.fromMe ? 'sent' : 'received', createdAt: item.createdAt } })
-      const updatedGroup = await prisma.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, ...(item.fromMe ? {} : { lastInboundAt: item.createdAt, unreadCount: { increment: 1 } }) } })
-      void publishEvent('chat_events', { type: 'new_message', userId: String(ownerUserId), conversationId: group.id, payload: { group: updatedGroup, message } })
+      const subject = item.subject === item.groupJid ? (await getEvolutionGroupSubject(item.groupJid)) || item.subject : item.subject
+      const previous = await prisma.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { departmentId: true } })
+      const routing = await resolveDepartmentForMessage({ groupJid: item.groupJid, subject, text: item.text, mentionedJids: item.mentionedJids, existingDepartmentId: previous?.departmentId })
+      const result = await prisma.$transaction(async (tx) => {
+        const current = await tx.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { id: true, departmentId: true } })
+        const fromDepartmentId = current?.departmentId ?? null
+        const group = await tx.evolutionGroup.upsert({
+          where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
+          update: { subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
+          create: { userId: ownerUserId, groupJid: item.groupJid, subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
+        })
+        const ticket = await tx.evolutionGroupTicket.upsert({
+          where: { groupId: group.id },
+          update: { departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
+          create: { groupId: group.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
+        })
+        const message = await tx.evolutionGroupMessage.create({ data: { groupId: group.id, messageId: item.messageId, senderJid: item.senderJid, senderName: item.senderName, text: item.text, messageType: item.messageType, mediaUrl: item.mediaUrl, quotedMessageId: item.quotedMessageId, mentionedJids: item.mentionedJids, fromMe: item.fromMe, status: item.fromMe ? 'sent' : 'received', createdAt: item.createdAt } })
+        const isHandoff = fromDepartmentId !== null && routing.departmentId !== null && fromDepartmentId !== routing.departmentId
+        await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, event: isHandoff ? 'HANDOFF' : 'ROUTED', routeType: routing.routeType, fromDepartmentId, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason } })
+        const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, ...(item.fromMe ? {} : { lastInboundAt: item.createdAt, unreadCount: { increment: 1 } }) } })
+        return { message, group: updatedGroup }
+      })
+      void publishEvent('chat_events', { type: 'new_message', userId: String(ownerUserId), conversationId: result.group.id, payload: result })
     } catch (error: unknown) {
       if (error instanceof Error && error.message.includes('Unique constraint')) continue
       console.error('[evolution/webhook] message processing failed:', error)
