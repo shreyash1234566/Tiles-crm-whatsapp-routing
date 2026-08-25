@@ -88,7 +88,9 @@ build_images() {
 # ── Run database migrations ──────────────────────────────────────────────────
 run_migrations() {
   log "Running CRM database migrations..."
-  ${COMPOSE_CMD} run --rm migrate
+  # Always rebuild this short-lived image so a newly pulled migration file is
+  # present even when the app image was built during an earlier deploy.
+  ${COMPOSE_CMD} run --rm --build migrate
   log "Migrations complete."
 }
 
