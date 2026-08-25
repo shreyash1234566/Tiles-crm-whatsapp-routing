@@ -59,10 +59,7 @@ services:
     build: .
     restart: always
     ports:
-      - target: 3000
-        published: "${CRM_APP_HOST_PORT:-4000}"
-        host_ip: 127.0.0.1
-        protocol: tcp
+      - "127.0.0.1:${CRM_APP_HOST_PORT:-4000}:3000"
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-furniturecrm}"
       NEXTAUTH_SECRET: "${NEXTAUTH_SECRET}"
@@ -129,10 +126,7 @@ services:
       dockerfile: Dockerfile
     restart: always
     ports:
-      - target: 3001
-        published: "${CRM_WS_HOST_PORT:-4001}"
-        host_ip: 127.0.0.1
-        protocol: tcp
+      - "127.0.0.1:${CRM_WS_HOST_PORT:-4001}:3001"
     environment:
       PORT: "3001"
       REDIS_URL: "redis://redis:6379"

@@ -15,12 +15,7 @@ services:
   app:
     restart: unless-stopped
     ports:
-      # Long syntax avoids the ambiguous short-form parsing that can result
-      # in an unbound `0` host port on older Docker Compose releases.
-      - target: 3000
-        published: "${CRM_APP_HOST_PORT:-4000}"
-        host_ip: 127.0.0.1
-        protocol: tcp
+      - "127.0.0.1:${CRM_APP_HOST_PORT:-4000}:3000"
     environment:
       EVOLUTION_API_URL: "http://evolution:8080"
       EVOLUTION_API_KEY: "${EVOLUTION_API_KEY}"
@@ -43,10 +38,7 @@ services:
   ws-server:
     restart: unless-stopped
     ports:
-      - target: 3001
-        published: "${CRM_WS_HOST_PORT:-4001}"
-        host_ip: 127.0.0.1
-        protocol: tcp
+      - "127.0.0.1:${CRM_WS_HOST_PORT:-4001}:3001"
     networks:
       - internal
 
