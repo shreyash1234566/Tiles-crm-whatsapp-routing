@@ -110,6 +110,10 @@ services:
       start_period: 30s
     networks:
       - internal
+      # Evolution must call WhatsApp and the public webhook URL. Keep its
+      # databases on the isolated network, but give the API its own outbound
+      # bridge so external DNS/HTTPS works without exposing port 8080.
+      - egress
 
   # ── Evolution Postgres ────────────────────────────────────────────────
   evolution-db:
@@ -152,7 +156,12 @@ volumes:
 networks:
   internal:
     internal: true
+  # Outbound-only project network for Evolution API. No host port is
+  # published, so this remains isolated from the furniture CRM deployment.
+  egress:
+    driver: bridge
   # Host-published app/WebSocket ports must attach to a non-internal bridge.
-  # Databases, Redis, and Evolution remain isolated on `internal` only.
+  # Databases and Redis remain on `internal` only; Evolution additionally uses
+  # the private outbound bridge above for webhook/WhatsApp traffic.
   edge:
     driver: bridge
