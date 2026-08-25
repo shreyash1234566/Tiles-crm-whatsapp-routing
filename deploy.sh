@@ -101,7 +101,9 @@ start_services() {
   run_migrations
 
   log "Starting CRM app + ws-server..."
-  ${COMPOSE_CMD} up -d --no-deps app ws-server
+  # Force recreation so changed port bindings are applied even when an older
+  # container survived a partial `compose down`.
+  ${COMPOSE_CMD} up -d --force-recreate --no-deps app ws-server
 }
 
 # ── Health check ─────────────────────────────────────────────────────────────
