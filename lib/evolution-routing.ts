@@ -8,6 +8,16 @@ export type EvolutionConfig = {
   webhookSecret: string
 }
 
+export class EvolutionApiError extends Error {
+  readonly status: number
+
+  constructor(status: number, detail: string) {
+    super(`Evolution API ${status}: ${detail}`)
+    this.name = 'EvolutionApiError'
+    this.status = status
+  }
+}
+
 export type EvolutionInboundMessage = {
   groupJid: string
   messageId: string
@@ -94,7 +104,7 @@ export function isAuthorizedEvolutionWebhook(request: Request): boolean {
   )
 }
 
-export async function evolutionRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 8000): Promise<T> {
+export async function evolutionRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 15000): Promise<T> {
   const config = getEvolutionConfig()
   if (!config) throw new Error('Evolution API is not configured')
   const headers = new Headers(init.headers)
@@ -106,6 +116,11 @@ export async function evolutionRequest<T>(path: string, init: RequestInit = {}, 
   let response: Response
   try {
     response = await fetch(`${config.baseUrl}${path}`, { ...init, headers, cache: 'no-store', signal: controller.signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Evolution API request timed out after ${timeoutMs / 1000}s (${path})`)
+    }
+    throw error
   } finally {
     clearTimeout(timeout)
   }
@@ -114,7 +129,7 @@ export async function evolutionRequest<T>(path: string, init: RequestInit = {}, 
   try { parsed = raw ? JSON.parse(raw) : null } catch { parsed = raw }
   if (!response.ok) {
     const detail = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
-    throw new Error(`Evolution API ${response.status}: ${detail}`)
+    throw new EvolutionApiError(response.status, detail)
   }
   return parsed as T
 }
@@ -189,7 +204,23 @@ export async function getEvolutionConnectionState() {
 export async function getEvolutionQrCode() {
   const config = getEvolutionConfig()
   if (!config) throw new Error('Evolution API is not configured')
-  return evolutionRequest<unknown>(`/instance/connect/${encodeURIComponent(config.instanceName)}`)
+  const instance = encodeURIComponent(config.instanceName)
+  try {
+    return await evolutionRequest<unknown>(`/instance/connect/${instance}`, {}, 30000)
+  } catch (error) {
+    // A fresh deployment may have the Evolution API running but not yet have
+    // its named instance. Create it once, then request the QR again.
+    if (!(error instanceof EvolutionApiError) || ![400, 404].includes(error.status)) throw error
+    await evolutionRequest<unknown>('/instance/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceName: config.instanceName,
+        qrcode: true,
+        integration: 'WHATSAPP-BAILEYS',
+      }),
+    }, 30000)
+    return evolutionRequest<unknown>(`/instance/connect/${instance}`, {}, 30000)
+  }
 }
 
 export async function getEvolutionGroupSubject(groupJid: string): Promise<string | null> {
