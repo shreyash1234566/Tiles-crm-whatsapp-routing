@@ -3,7 +3,7 @@
 #
 # What this file does versus the base compose:
 #  • Exposes the CRM app on 127.0.0.1:4000 for Nginx reverse-proxy
-#  • Keeps ws-server internal (Nginx proxies /socket.io/ to it via Docker network)
+#  • Publishes ws-server on 127.0.0.1:4001 for Nginx /socket.io proxying
 #  • Adds Evolution API with its own isolated Postgres + Redis
 #  • Adds persistent volumes for Evolution state
 #  • Puts ai-agent under a profile so it only starts when explicitly requested
@@ -18,7 +18,7 @@ services:
       # Long syntax avoids the ambiguous short-form parsing that can result
       # in an unbound `0` host port on older Docker Compose releases.
       - target: 3000
-        published: "4000"
+        published: "${CRM_APP_HOST_PORT:-4000}"
         host_ip: 127.0.0.1
         protocol: tcp
     environment:
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
     ports:
       - target: 3001
-        published: "3001"
+        published: "${CRM_WS_HOST_PORT:-4001}"
         host_ip: 127.0.0.1
         protocol: tcp
     networks:

@@ -22,6 +22,8 @@ GIT_BRANCH="main"
 GIT_REPO="https://github.com/shreyash1234566/Tiles-crm-whatsapp-routing.git"
 
 COMPOSE_CMD="docker compose -f ${COMPOSE_BASE} -f ${COMPOSE_PROD} --env-file ${ENV_FILE}"
+CRM_APP_HOST_PORT=4000
+CRM_WS_HOST_PORT=4001
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
@@ -30,6 +32,14 @@ hr()   { echo "─────────────────────�
 
 require_env_file() {
   [[ -f "${ENV_FILE}" ]] || die "Missing ${ENV_FILE}. Copy .env.prod.example and fill in real values."
+}
+
+load_host_ports() {
+  local value
+  value="$(awk -F= '$1 == "CRM_APP_HOST_PORT" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print $2; exit}' "${ENV_FILE}")"
+  [[ -n "${value}" ]] && CRM_APP_HOST_PORT="${value}"
+  value="$(awk -F= '$1 == "CRM_WS_HOST_PORT" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print $2; exit}' "${ENV_FILE}")"
+  [[ -n "${value}" ]] && CRM_WS_HOST_PORT="${value}"
 }
 
 # ── First-time setup ──────────────────────────────────────────────────────────
@@ -126,8 +136,8 @@ health_check() {
     ok=false
   }
 
-  check "CRM app (localhost:4000)" "http://localhost:4000/api/auth/me"
-  check "WebSocket (localhost:3001)" "http://localhost:3001/health"
+  check "CRM app (localhost:${CRM_APP_HOST_PORT})" "http://localhost:${CRM_APP_HOST_PORT}/api/auth/me"
+  check "WebSocket (localhost:${CRM_WS_HOST_PORT})" "http://localhost:${CRM_WS_HOST_PORT}/health"
 
   ${COMPOSE_CMD} ps
   hr
@@ -149,6 +159,7 @@ main() {
   [[ "${DO_SETUP}" == "true" ]] && { setup; exit 0; }
 
   require_env_file
+  load_host_ports
 
   hr
   log "Tiles CRM — Production Deploy"

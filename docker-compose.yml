@@ -16,7 +16,8 @@ services:
         -c random_page_cost=1.1
         -c effective_io_concurrency=200
         -c wal_compression=on
-    # Map port for local dev
+    # The existing furniture CRM uses 3000/3001 on this VPS. Keep this
+    # project on its dedicated 4000/4001 host bindings.
     #ports:
     # - "5432:5432"
     volumes:
@@ -58,7 +59,10 @@ services:
     build: .
     restart: always
     ports:
-      - "127.0.0.1:3000:3000"
+      - target: 3000
+        published: "${CRM_APP_HOST_PORT:-4000}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-furniturecrm}"
       NEXTAUTH_SECRET: "${NEXTAUTH_SECRET}"
@@ -78,7 +82,7 @@ services:
       BUSINESS_TYPE: "${BUSINESS_TYPE:-tiles}"
       NEXT_PUBLIC_BUSINESS_TYPE: "${NEXT_PUBLIC_BUSINESS_TYPE:-tiles}"
       # Socket.io gateway URL — consumed by socket.io-client in the browser
-      NEXT_PUBLIC_WS_URL: "https://${DOMAIN:-crm.kosmicfurniture.com}:3001"
+      NEXT_PUBLIC_WS_URL: "https://${DOMAIN:-crm.kosmicfurniture.com}:4001"
       # Images stored on VPS local volume — no cloud storage needed
       UPLOAD_DIR: "/app/uploads"
       # AI / STT / TTS providers
@@ -125,7 +129,10 @@ services:
       dockerfile: Dockerfile
     restart: always
     ports:
-      - "3001:3001"
+      - target: 3001
+        published: "${CRM_WS_HOST_PORT:-4001}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       PORT: "3001"
       REDIS_URL: "redis://redis:6379"

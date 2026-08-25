@@ -17,6 +17,10 @@ NEXTAUTH_SECRET=your_nextauth_secret
 CRM_API_SECRET=your_api_secret_for_cron
 DOMAIN=my-crm-project.duckdns.org
 
+# This VPS already uses 3000/3001 for another CRM.
+CRM_APP_HOST_PORT=4000
+CRM_WS_HOST_PORT=4001
+
 # Cloudflare R2 Storage
 R2_ACCOUNT_ID=your_account_id
 R2_ACCESS_KEY_ID=your_access_key
@@ -72,11 +76,24 @@ server {
     ssl_certificate /etc/letsencrypt/live/my-crm-project.duckdns.org/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/my-crm-project.duckdns.org/privkey.pem;
 
-    location / {
-        proxy_pass http://127.0.0.1:3000;
+    # Socket.IO must reach the separate realtime gateway.
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:4001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
