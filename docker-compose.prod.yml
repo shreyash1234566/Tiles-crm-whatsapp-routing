@@ -15,7 +15,12 @@ services:
   app:
     restart: unless-stopped
     ports:
-      - "127.0.0.1:4000:3000"
+      # Long syntax avoids the ambiguous short-form parsing that can result
+      # in an unbound `0` host port on older Docker Compose releases.
+      - target: 3000
+        published: "4000"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       EVOLUTION_API_URL: "http://evolution:8080"
       EVOLUTION_API_KEY: "${EVOLUTION_API_KEY}"
@@ -38,7 +43,10 @@ services:
   ws-server:
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3001:3001"
+      - target: 3001
+        published: "3001"
+        host_ip: 127.0.0.1
+        protocol: tcp
     networks:
       - internal
 
