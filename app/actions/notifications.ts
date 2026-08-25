@@ -179,6 +179,9 @@ export async function markNotificationRead(notificationId: number) {
   if (n.userId !== null && n.userId !== uId) {
     return { success: false, error: 'Unauthorized' }
   }
+  if (n.userId === null && session.user.role !== 'ADMIN') {
+    return { success: false, error: 'Unauthorized - Only Admins can dismiss global alerts' }
+  }
 
   await prisma.notification.update({
     where: { id: notificationId },

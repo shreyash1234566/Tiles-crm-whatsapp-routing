@@ -81,7 +81,7 @@ export default function RoutingCrmPage() {
       setGroups(body.data || []);
 
       setActiveGroupId((current) => {
-        const urlId = initialGroupId ? Number(initialGroupId) : null;
+        const urlId = initialGroupId || null;
         if (urlId && body.data?.some(g => g.id === urlId)) return urlId;
         return current && (body.data || []).some((group) => group.id === current) ? current : (body.data?.[0]?.id || null);
       });
@@ -129,8 +129,8 @@ export default function RoutingCrmPage() {
     if (status !== 'authenticated') return;
 
     if (initialGroupId) {
-      const idNum = Number(initialGroupId);
-      if (!Number.isNaN(idNum) && groups.some(g => g.id === idNum)) {
+      const idNum = initialGroupId;
+      if (groups.some(g => g.id === idNum)) {
         setActiveGroupId(idNum);
       }
     }

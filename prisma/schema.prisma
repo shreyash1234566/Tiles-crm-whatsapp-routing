@@ -1022,7 +1022,10 @@ model Notification {
   @@index([type])
   @@index([userId])
   @@index([userId, read])
+  sourceId  String?
+  
   @@index([read, createdAt]) // fetch unread notifications sorted newest-first
+  @@unique([userId, type, sourceId])
 }
 
 // ─── STORE CAMPAIGNS (QR Codes) ──────────────────────

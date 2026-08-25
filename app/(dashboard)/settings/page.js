@@ -30,10 +30,10 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { getStoreSettings, updateStoreSettings } from "@/app/actions/settings";
+// Cleanup of remaining Assign Login import and UI artifacts
 import {
   getStaff,
   createStaff,
-  assignStaffLogin,
   updateStaffMember,
 } from "@/app/actions/staff";
 import { getChannelConfigs, upsertChannelConfig } from "@/app/actions/channels";
@@ -172,15 +172,14 @@ export default function SettingsPage() {
   const [inviteError, setInviteError] = useState("");
   const [inviteSuccess, setInviteSuccess] = useState("");
   const [inviteForm, setInviteForm] = useState(getInitialInviteForm());
-  const [showLoginSetupForm, setShowLoginSetupForm] = useState(false);
   const [loginSetupForm, setLoginSetupForm] = useState({
     staffId: "",
     loginUsername: "",
     loginPassword: "",
   });
-  const [assigningLogin, setAssigningLogin] = useState(false);
-  const [assignLoginError, setAssignLoginError] = useState("");
-  const [assignLoginSuccess, setAssignLoginSuccess] = useState("");
+  
+  
+  
   const [showEditForm, setShowEditForm] = useState(false);
   const [editForm, setEditForm] = useState(getInitialEditForm());
   const [editingMember, setEditingMember] = useState(false);
@@ -301,50 +300,9 @@ export default function SettingsPage() {
     }
   };
 
-  const openAssignLoginForm = (member) => {
-    setShowLoginSetupForm(true);
-    setAssignLoginError("");
-    setAssignLoginSuccess("");
-    setLoginSetupForm({
-      staffId: String(member.id),
-      loginUsername: member.email || "",
-      loginPassword: "",
-    });
-  };
+  /* removed openAssignLoginForm */
 
-  const handleAssignLogin = async (e) => {
-    e.preventDefault();
-    if (!loginSetupForm.staffId) return;
-
-    setAssigningLogin(true);
-    setAssignLoginError("");
-    setAssignLoginSuccess("");
-
-    try {
-      const res = await assignStaffLogin(
-        Number(loginSetupForm.staffId),
-        loginSetupForm.loginUsername,
-        loginSetupForm.loginPassword,
-      );
-
-      if (!res.success) {
-        setAssignLoginError(res.error || "Failed to assign login credentials");
-        return;
-      }
-
-      await refreshTeamMembers();
-      setAssignLoginSuccess("Login credentials assigned successfully");
-      setShowLoginSetupForm(false);
-      setLoginSetupForm({ staffId: "", loginUsername: "", loginPassword: "" });
-    } catch (err) {
-      console.error("Assign login error:", err);
-      setAssignLoginError(
-        "Failed to assign login credentials. Please try again.",
-      );
-    } finally {
-      setAssigningLogin(false);
-    }
-  };
+  /* removed handleAssignLogin */
 
   const openEditMemberForm = (member) => {
     setShowEditForm(true);
@@ -1573,114 +1531,10 @@ export default function SettingsPage() {
                 </form>
               )}
 
-              {assignLoginSuccess && (
-                <p className="mb-3 text-xs text-success">
-                  {assignLoginSuccess}
-                </p>
-              )}
-              {assignLoginError && (
-                <p className="mb-3 text-xs text-danger">{assignLoginError}</p>
-              )}
+              
+              
 
-              {showLoginSetupForm && (
-                <form
-                  onSubmit={handleAssignLogin}
-                  className="mb-5 p-4 rounded-xl bg-surface border border-border space-y-3"
-                >
-                  <p className="text-xs text-muted">
-                    Assign login credentials for an existing team member.
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">
-                        Team Member
-                      </label>
-                      <select
-                        value={loginSetupForm.staffId}
-                        onChange={(e) =>
-                          setLoginSetupForm((prev) => ({
-                            ...prev,
-                            staffId: e.target.value,
-                          }))
-                        }
-                        required
-                        className="w-full"
-                      >
-                        <option value="">Select member</option>
-                        {teamMembers
-                          .filter((m) => !m.hasLogin)
-                          .map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">
-                        Login Username
-                      </label>
-                      <input
-                        type="text"
-                        value={loginSetupForm.loginUsername}
-                        onChange={(e) =>
-                          setLoginSetupForm((prev) => ({
-                            ...prev,
-                            loginUsername: e.target.value,
-                          }))
-                        }
-                        placeholder="e.g. rahul123 or john.doe"
-                        autoComplete="off"
-                        required
-                        className="w-full"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">
-                        Login Password
-                      </label>
-                      <input
-                        type="password"
-                        value={loginSetupForm.loginPassword}
-                        onChange={(e) =>
-                          setLoginSetupForm((prev) => ({
-                            ...prev,
-                            loginPassword: e.target.value,
-                          }))
-                        }
-                        required
-                        minLength={4}
-                        className="w-full"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="submit"
-                      disabled={assigningLogin}
-                      className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-accent-hover disabled:opacity-60 text-white rounded-xl text-sm font-semibold transition-all"
-                    >
-                      {assigningLogin ? "Assigning..." : "Assign Login"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowLoginSetupForm(false);
-                        setAssignLoginError("");
-                        setAssignLoginSuccess("");
-                        setLoginSetupForm({
-                          staffId: "",
-                          loginUsername: "",
-                          loginPassword: "",
-                        });
-                      }}
-                      className="px-3 py-2 border border-border rounded-xl text-sm text-muted hover:text-foreground hover:bg-surface-hover transition-all"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              )}
+                
 
               {editSuccess && (
                 <p className="mb-3 text-xs text-success">{editSuccess}</p>
