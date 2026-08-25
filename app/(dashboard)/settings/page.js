@@ -1994,12 +1994,6 @@ export default function SettingsPage() {
                             <span className="text-xs text-muted">
                               Not assigned
                             </span>
-                            <button
-                              onClick={() => openAssignLoginForm(m)}
-                              className="text-[10px] px-2 py-0.5 rounded border border-border text-accent hover:bg-accent/10 transition-colors"
-                            >
-                              Set Login
-                            </button>
                           </div>
                         )}
                       </td>
@@ -2068,14 +2062,7 @@ export default function SettingsPage() {
                       >
                         Edit
                       </button>
-                      {!m.hasLogin && (
-                        <button
-                          onClick={() => openAssignLoginForm(m)}
-                          className="text-[10px] px-2 py-0.5 rounded border border-border text-accent hover:bg-accent/10 transition-colors"
-                        >
-                          Set Login
-                        </button>
-                      )}
+
                     </div>
                   </div>
                 ))}

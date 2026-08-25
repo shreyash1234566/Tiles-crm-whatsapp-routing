@@ -55,18 +55,6 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           select: { id: true },
         })
 
-        // Create user-scoped notifications for each recipient
-        await Promise.all(recipients.map((user) => 
-          prisma.notification.create({
-            data: {
-              userId: user.id,
-              type: 'whatsapp',
-              title: item.senderName || item.senderJid.split('@')[0],
-              subtitle: item.text ? (item.text.length > 50 ? item.text.substring(0, 50) + '...' : item.text) : 'New message in Group',
-              href: '/routing-crm?group_id=' + result.group.id,
-            }
-          })
-        )).catch(err => console.error('[evolution/webhook] Failed to create notifications', err))
         if (duplicate) return
 
         const subject = item.subject === item.groupJid ? (await getEvolutionGroupSubject(item.groupJid)) || item.subject : item.subject
@@ -122,6 +110,20 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           conversationId: result.group.id,
           payload: result,
         })
+
+        // Create user-scoped notifications for each recipient locally since recipients and result exist now
+        const recipientIds = recipients.map((r) => r.id);
+        await Promise.all(recipientIds.map((uId) =>
+          prisma.notification.create({
+            data: {
+              userId: uId,
+              type: 'whatsapp',
+              title: item.senderName || item.senderJid.split('@')[0] || 'WhatsApp Group',
+              subtitle: item.text ? (item.text.length > 50 ? item.text.substring(0, 50) + '...' : item.text) : 'New message in Group',
+              href: '/routing-crm?group_id=' + result.group.id,
+            }
+          })
+        )).catch(err => { console.error('[evolution/webhook] Failed to create notifications', err); return []; });
       })
     } catch (error: unknown) {
       if (error instanceof Error && error.message.includes('Unique constraint')) continue

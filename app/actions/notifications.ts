@@ -175,8 +175,12 @@ export async function markNotificationRead(notificationId: number) {
 }
 
 export async function markAllAlertNotificationsRead() {
+  const session = await getSession()
+  if (!session?.user) return { success: false, error: 'Unauthorized' }
+  const uId = Number(session.user.id)
+  
   await prisma.notification.updateMany({
-    where: notifWhere,
+    where: { read: false, OR: [{ userId: null }, { userId: uId }] },
     data: { read: true },
   })
 

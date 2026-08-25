@@ -35,6 +35,7 @@ model User {
 
   accounts Account[]
   sessions Session[]
+  notifications Notification[] @relation("UserNotifications")
 }
 
 model RoutingDepartment {
@@ -1006,6 +1007,8 @@ model StoreSettings {
 // ─── IN-APP NOTIFICATIONS ───────────────────────────
 
 model Notification {
+  userId    Int?
+  user      User?    @relation("UserNotifications", fields: [userId], references: [id])
   id        Int      @id @default(autoincrement())
   type      String // 'stock_alert' | 'field_visit'
   title     String
