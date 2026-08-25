@@ -104,6 +104,7 @@ export default function DealersPage() {
   const [selected, setSelected] = useState(null)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [tab, setTab] = useState('overview')
@@ -112,27 +113,40 @@ export default function DealersPage() {
 
   const loadDetail = useCallback(async (id) => {
     setDetailLoading(true)
-    const res = await getDealer(id)
-    if (res.success) setSelected(res.data)
-    setDetailLoading(false)
+    try {
+      const res = await getDealer(id)
+      if (!res.success) throw new Error(res.error || 'Could not load this dealer')
+      setSelected(res.data)
+    } catch (loadError) {
+      setError(loadError?.message || 'Could not load this dealer')
+    } finally {
+      setDetailLoading(false)
+    }
   }, [])
 
   const load = useCallback(async (keepSelected = true) => {
     setLoading(true)
-    const [dashRes, dealerRes, staffRes, productRes, listRes] = await Promise.all([
-      getDealerDashboard(), getDealers({ status: statusFilter === 'ALL' ? undefined : statusFilter, search }), getDealerStaff(), getProducts(), getDealerPriceLists(),
-    ])
-    if (dashRes.success) setDashboard(dashRes.data)
-    if (dealerRes.success) {
+    setError('')
+    try {
+      const [dashRes, dealerRes, staffRes, productRes, listRes] = await Promise.all([
+        getDealerDashboard(), getDealers({ status: statusFilter === 'ALL' ? undefined : statusFilter, search }), getDealerStaff(), getProducts(), getDealerPriceLists(),
+      ])
+      const failed = [dashRes, dealerRes, staffRes, productRes, listRes].find(result => !result?.success)
+      if (failed) throw new Error(failed.error || 'Could not load dealer workspace')
+
+      setDashboard(dashRes.data)
       setDealers(dealerRes.data)
       if (keepSelected && selected?.id && dealerRes.data.some(dealer => dealer.id === selected.id)) await loadDetail(selected.id)
       else if (!selected && dealerRes.data[0]) await loadDetail(dealerRes.data[0].id)
       else if (selected && !dealerRes.data.some(dealer => dealer.id === selected.id)) setSelected(null)
+      setStaff(staffRes.data)
+      setProducts(productRes.data)
+      setPriceLists(listRes.data)
+    } catch (loadError) {
+      setError(loadError?.message || 'Could not load dealer workspace')
+    } finally {
+      setLoading(false)
     }
-    if (staffRes.success) setStaff(staffRes.data)
-    if (productRes.success) setProducts(productRes.data)
-    if (listRes.success) setPriceLists(listRes.data)
-    setLoading(false)
   }, [search, statusFilter, selected, loadDetail])
 
   useEffect(() => {
@@ -177,13 +191,17 @@ export default function DealersPage() {
     if (res.success) { notify('Dealer assignment updated', { variant: 'success' }); await refresh() } else notify(res.error, { variant: 'danger' })
   }
 
-  if (loading && !dashboard) return <div className="space-y-5 animate-pulse"><div className="h-10 w-72 rounded-xl bg-surface" /><div className="grid gap-4 md:grid-cols-4">{[1, 2, 3, 4].map(item => <div key={item} className="h-32 rounded-2xl bg-surface" />)}</div><div className="h-[520px] rounded-2xl bg-surface" /></div>
+  if (loading && !dashboard && !error) return <div className="space-y-5 animate-pulse"><div className="h-10 w-72 rounded-xl bg-surface" /><div className="grid gap-4 md:grid-cols-4">{[1, 2, 3, 4].map(item => <div key={item} className="h-32 rounded-2xl bg-surface" />)}</div><div className="h-[520px] rounded-2xl bg-surface" /></div>
+
+  if (error && !dashboard) return <section className={`${cardClass} mx-auto max-w-2xl p-6`}><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-danger" /><div><h1 className="font-semibold text-foreground">Dealers &amp; Partners is unavailable</h1><p className="mt-1 text-sm text-muted">{error}</p><Button className="mt-4" onClick={refresh}><RefreshCw className="h-4 w-4" />Retry</Button></div></div></section>
 
   return <div className="space-y-5 pb-8">
     <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
       <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Channel partners</p><h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground md:text-3xl">Dealers &amp; Partners</h1><p className="mt-1 max-w-2xl text-sm text-muted">Manage dealer relationships, staff ownership, orders, credit, visits and after-sales claims in one place.</p></div>
       <div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={refresh}><RefreshCw className="h-4 w-4" />Refresh</Button>{canManage && <Button onClick={() => setModal('dealer')}><Plus className="h-4 w-4" />Add dealer</Button>}</div>
     </header>
+
+    {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-light px-4 py-3 text-sm text-danger"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span><button className="ml-auto font-medium underline" onClick={refresh}>Retry</button></div>}
 
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard icon={Users} label="Total partners" value={dashboard?.total || 0} hint={`${dashboard?.active || 0} active accounts`} />
