@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { classifyIntent, extractEvolutionMessages, getEvolutionConfig, isGroupJid, normalizePhoneJid, sendEvolutionGroupMedia } from './evolution-routing'
+import { classifyIntent, extractEvolutionMessages, getEvolutionConfig, isGroupJid, normalizePhoneJid, sendEvolutionGroupMedia, sendEvolutionGroupText } from './evolution-routing'
 
 afterEach(() => {
   delete process.env.EVOLUTION_API_URL
@@ -109,6 +109,21 @@ describe('Evolution group routing adapter', () => {
     await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', mediaUrl: 'http://app:3000/api/uploads/a.pdf', mediaType: 'document', mimeType: 'application/pdf', fileName: 'invoice.pdf' })
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/message/sendMedia/tiles')
     expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"fileName":"invoice.pdf"')
+  })
+
+  it('sends text in the top-level field required by Evolution v2.3.7', async () => {
+    process.env.EVOLUTION_API_URL = 'http://evolution:8080'
+    process.env.EVOLUTION_API_KEY = 'key'
+    process.env.EVOLUTION_INSTANCE_NAME = 'tiles'
+    process.env.EVOLUTION_WEBHOOK_SECRET = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ key: { id: 'sent' } }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sendEvolutionGroupText({ groupJid: '120363123@g.us', text: 'hi' })
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))
+    expect(body).toMatchObject({ number: '120363123@g.us', text: 'hi' })
+    expect(body.textMessage).toBeUndefined()
   })
 
   it('uses a confident Groq result without escalating', async () => {

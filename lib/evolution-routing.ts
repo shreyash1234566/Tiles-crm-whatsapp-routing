@@ -493,7 +493,10 @@ export async function sendEvolutionGroupText(input: { groupJid: string; text: st
     : undefined
   return evolutionRequest<unknown>(`/message/sendText/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
-    body: JSON.stringify({ number: input.groupJid, textMessage: { text: input.text }, linkPreview: true, ...(quoted ? { quoted } : {}) }),
+    // Evolution API v2.3.7 validates `text` at the top level. Although newer
+    // docs show `textMessage.text`, that shape is rejected by the pinned image
+    // with: instance requires property "text".
+    body: JSON.stringify({ number: input.groupJid, text: input.text, linkPreview: true, ...(quoted ? { quoted } : {}) }),
   })
 }
 
