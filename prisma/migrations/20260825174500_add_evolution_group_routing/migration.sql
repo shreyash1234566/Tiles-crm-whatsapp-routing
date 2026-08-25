@@ -1,11 +1,14 @@
--- Add Evolution API group-routing support without altering existing CRM modules.
+-- Add Evolution API group-routing support without altering existing CRM
+-- modules. This migration is deliberately idempotent: some installations
+-- already received these fields/tables through `prisma db push` before the
+-- migration history was deployed.
 
 ALTER TABLE "User"
-  ADD COLUMN "routingDepartmentId" INTEGER,
-  ADD COLUMN "routingPhone" TEXT,
-  ADD COLUMN "routingAliases" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+  ADD COLUMN IF NOT EXISTS "routingDepartmentId" INTEGER,
+  ADD COLUMN IF NOT EXISTS "routingPhone" TEXT,
+  ADD COLUMN IF NOT EXISTS "routingAliases" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 
-CREATE TABLE "RoutingDepartment" (
+CREATE TABLE IF NOT EXISTS "RoutingDepartment" (
   "id" SERIAL NOT NULL,
   "name" TEXT NOT NULL,
   "isActive" BOOLEAN NOT NULL DEFAULT true,
@@ -14,7 +17,7 @@ CREATE TABLE "RoutingDepartment" (
   CONSTRAINT "RoutingDepartment_pkey" PRIMARY KEY ("id")
 );
 
-CREATE TABLE "EvolutionGroup" (
+CREATE TABLE IF NOT EXISTS "EvolutionGroup" (
   "id" TEXT NOT NULL,
   "userId" INTEGER NOT NULL,
   "groupJid" TEXT NOT NULL,
@@ -40,7 +43,7 @@ CREATE TABLE "EvolutionGroup" (
   CONSTRAINT "EvolutionGroup_pkey" PRIMARY KEY ("id")
 );
 
-CREATE TABLE "EvolutionGroupMessage" (
+CREATE TABLE IF NOT EXISTS "EvolutionGroupMessage" (
   "id" TEXT NOT NULL,
   "groupId" TEXT NOT NULL,
   "messageId" TEXT NOT NULL,
@@ -57,7 +60,7 @@ CREATE TABLE "EvolutionGroupMessage" (
   CONSTRAINT "EvolutionGroupMessage_pkey" PRIMARY KEY ("id")
 );
 
-CREATE TABLE "EvolutionGroupTicket" (
+CREATE TABLE IF NOT EXISTS "EvolutionGroupTicket" (
   "id" TEXT NOT NULL,
   "groupId" TEXT NOT NULL,
   "departmentId" INTEGER,
@@ -72,7 +75,7 @@ CREATE TABLE "EvolutionGroupTicket" (
   CONSTRAINT "EvolutionGroupTicket_pkey" PRIMARY KEY ("id")
 );
 
-CREATE TABLE "EvolutionRoutingAudit" (
+CREATE TABLE IF NOT EXISTS "EvolutionRoutingAudit" (
   "id" TEXT NOT NULL,
   "ticketId" TEXT NOT NULL,
   "messageId" TEXT,
@@ -86,37 +89,41 @@ CREATE TABLE "EvolutionRoutingAudit" (
   CONSTRAINT "EvolutionRoutingAudit_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "User_routingPhone_key" ON "User"("routingPhone");
-CREATE UNIQUE INDEX "RoutingDepartment_name_key" ON "RoutingDepartment"("name");
-CREATE UNIQUE INDEX "EvolutionGroup_userId_groupJid_key" ON "EvolutionGroup"("userId", "groupJid");
-CREATE INDEX "EvolutionGroup_userId_departmentId_status_idx" ON "EvolutionGroup"("userId", "departmentId", "status");
-CREATE INDEX "EvolutionGroup_userId_mentionPriority_lastMessageAt_idx" ON "EvolutionGroup"("userId", "mentionPriority", "lastMessageAt");
-CREATE INDEX "EvolutionGroup_groupJid_idx" ON "EvolutionGroup"("groupJid");
-CREATE UNIQUE INDEX "EvolutionGroupMessage_groupId_messageId_key" ON "EvolutionGroupMessage"("groupId", "messageId");
-CREATE INDEX "EvolutionGroupMessage_groupId_createdAt_idx" ON "EvolutionGroupMessage"("groupId", "createdAt");
-CREATE INDEX "EvolutionGroupMessage_messageId_idx" ON "EvolutionGroupMessage"("messageId");
-CREATE UNIQUE INDEX "EvolutionGroupTicket_groupId_key" ON "EvolutionGroupTicket"("groupId");
-CREATE INDEX "EvolutionGroupTicket_departmentId_status_idx" ON "EvolutionGroupTicket"("departmentId", "status");
-CREATE INDEX "EvolutionGroupTicket_routeType_createdAt_idx" ON "EvolutionGroupTicket"("routeType", "createdAt");
-CREATE INDEX "EvolutionRoutingAudit_ticketId_createdAt_idx" ON "EvolutionRoutingAudit"("ticketId", "createdAt");
-CREATE INDEX "EvolutionRoutingAudit_event_createdAt_idx" ON "EvolutionRoutingAudit"("event", "createdAt");
+CREATE UNIQUE INDEX IF NOT EXISTS "User_routingPhone_key" ON "User"("routingPhone");
+CREATE UNIQUE INDEX IF NOT EXISTS "RoutingDepartment_name_key" ON "RoutingDepartment"("name");
+CREATE UNIQUE INDEX IF NOT EXISTS "EvolutionGroup_userId_groupJid_key" ON "EvolutionGroup"("userId", "groupJid");
+CREATE INDEX IF NOT EXISTS "EvolutionGroup_userId_departmentId_status_idx" ON "EvolutionGroup"("userId", "departmentId", "status");
+CREATE INDEX IF NOT EXISTS "EvolutionGroup_userId_mentionPriority_lastMessageAt_idx" ON "EvolutionGroup"("userId", "mentionPriority", "lastMessageAt");
+CREATE INDEX IF NOT EXISTS "EvolutionGroup_groupJid_idx" ON "EvolutionGroup"("groupJid");
+CREATE UNIQUE INDEX IF NOT EXISTS "EvolutionGroupMessage_groupId_messageId_key" ON "EvolutionGroupMessage"("groupId", "messageId");
+CREATE INDEX IF NOT EXISTS "EvolutionGroupMessage_groupId_createdAt_idx" ON "EvolutionGroupMessage"("groupId", "createdAt");
+CREATE INDEX IF NOT EXISTS "EvolutionGroupMessage_messageId_idx" ON "EvolutionGroupMessage"("messageId");
+CREATE UNIQUE INDEX IF NOT EXISTS "EvolutionGroupTicket_groupId_key" ON "EvolutionGroupTicket"("groupId");
+CREATE INDEX IF NOT EXISTS "EvolutionGroupTicket_departmentId_status_idx" ON "EvolutionGroupTicket"("departmentId", "status");
+CREATE INDEX IF NOT EXISTS "EvolutionGroupTicket_routeType_createdAt_idx" ON "EvolutionGroupTicket"("routeType", "createdAt");
+CREATE INDEX IF NOT EXISTS "EvolutionRoutingAudit_ticketId_createdAt_idx" ON "EvolutionRoutingAudit"("ticketId", "createdAt");
+CREATE INDEX IF NOT EXISTS "EvolutionRoutingAudit_event_createdAt_idx" ON "EvolutionRoutingAudit"("event", "createdAt");
 
-ALTER TABLE "User"
-  ADD CONSTRAINT "User_routingDepartmentId_fkey"
-  FOREIGN KEY ("routingDepartmentId") REFERENCES "RoutingDepartment"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
-
-ALTER TABLE "EvolutionGroupMessage"
-  ADD CONSTRAINT "EvolutionGroupMessage_groupId_fkey"
-  FOREIGN KEY ("groupId") REFERENCES "EvolutionGroup"("id")
-  ON DELETE CASCADE ON UPDATE CASCADE;
-
-ALTER TABLE "EvolutionGroupTicket"
-  ADD CONSTRAINT "EvolutionGroupTicket_groupId_fkey"
-  FOREIGN KEY ("groupId") REFERENCES "EvolutionGroup"("id")
-  ON DELETE CASCADE ON UPDATE CASCADE;
-
-ALTER TABLE "EvolutionRoutingAudit"
-  ADD CONSTRAINT "EvolutionRoutingAudit_ticketId_fkey"
-  FOREIGN KEY ("ticketId") REFERENCES "EvolutionGroupTicket"("id")
-  ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'User_routingDepartmentId_fkey') THEN
+    ALTER TABLE "User" ADD CONSTRAINT "User_routingDepartmentId_fkey"
+      FOREIGN KEY ("routingDepartmentId") REFERENCES "RoutingDepartment"("id")
+      ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'EvolutionGroupMessage_groupId_fkey') THEN
+    ALTER TABLE "EvolutionGroupMessage" ADD CONSTRAINT "EvolutionGroupMessage_groupId_fkey"
+      FOREIGN KEY ("groupId") REFERENCES "EvolutionGroup"("id")
+      ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'EvolutionGroupTicket_groupId_fkey') THEN
+    ALTER TABLE "EvolutionGroupTicket" ADD CONSTRAINT "EvolutionGroupTicket_groupId_fkey"
+      FOREIGN KEY ("groupId") REFERENCES "EvolutionGroup"("id")
+      ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'EvolutionRoutingAudit_ticketId_fkey') THEN
+    ALTER TABLE "EvolutionRoutingAudit" ADD CONSTRAINT "EvolutionRoutingAudit_ticketId_fkey"
+      FOREIGN KEY ("ticketId") REFERENCES "EvolutionGroupTicket"("id")
+      ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
