@@ -38,9 +38,13 @@ require_env_file() {
 load_host_ports() {
   local value
   value="$(awk -F= '$1 == "CRM_APP_HOST_PORT" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print $2; exit}' "${ENV_FILE}")"
-  [[ -n "${value}" ]] && CRM_APP_HOST_PORT="${value}"
+  if [[ -n "${value}" ]]; then
+    CRM_APP_HOST_PORT="${value}"
+  fi
   value="$(awk -F= '$1 == "CRM_WS_HOST_PORT" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print $2; exit}' "${ENV_FILE}")"
-  [[ -n "${value}" ]] && CRM_WS_HOST_PORT="${value}"
+  if [[ -n "${value}" ]]; then
+    CRM_WS_HOST_PORT="${value}"
+  fi
 }
 
 # ── First-time setup ──────────────────────────────────────────────────────────
