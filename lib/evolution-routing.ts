@@ -15,7 +15,11 @@ export type EvolutionInboundMessage = {
   senderName: string | null
   text: string | null
   messageType: string
+  mediaType: 'image' | 'document' | 'audio' | 'video' | null
+  mediaMimeType: string | null
+  mediaFileName: string | null
   mediaUrl: string | null
+  rawMessage: Record<string, unknown>
   quotedMessageId: string | null
   mentionedJids: string[]
   fromMe: boolean
@@ -84,10 +88,13 @@ export function isAuthorizedEvolutionWebhook(request: Request): boolean {
   const authorization = request.headers.get('authorization') || ''
   const bearer = authorization.replace(/^Bearer\s+/i, '').trim()
   const custom = request.headers.get('x-evolution-webhook-secret')?.trim() || ''
-  return (bearer && safeEqual(bearer, config.webhookSecret)) || (custom && safeEqual(custom, config.webhookSecret))
+  return Boolean(
+    (bearer && safeEqual(bearer, config.webhookSecret)) ||
+    (custom && safeEqual(custom, config.webhookSecret)),
+  )
 }
 
-export async function evolutionRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function evolutionRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 8000): Promise<T> {
   const config = getEvolutionConfig()
   if (!config) throw new Error('Evolution API is not configured')
   const headers = new Headers(init.headers)
@@ -95,7 +102,7 @@ export async function evolutionRequest<T>(path: string, init: RequestInit = {}):
   headers.set('Accept', 'application/json')
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 8000)
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   let response: Response
   try {
     response = await fetch(`${config.baseUrl}${path}`, { ...init, headers, cache: 'no-store', signal: controller.signal })
@@ -110,6 +117,63 @@ export async function evolutionRequest<T>(path: string, init: RequestInit = {}):
     throw new Error(`Evolution API ${response.status}: ${detail}`)
   }
   return parsed as T
+}
+
+function mediaInfo(message: Record<string, unknown>): {
+  type: EvolutionInboundMessage['mediaType']
+  mimeType: string | null
+  fileName: string | null
+} {
+  const candidates: Array<[EvolutionInboundMessage['mediaType'], Record<string, unknown>]> = [
+    ['image', objectValue(message.imageMessage)],
+    ['document', objectValue(message.documentMessage)],
+    ['audio', objectValue(message.audioMessage)],
+    ['video', objectValue(message.videoMessage)],
+  ]
+  for (const [type, value] of candidates) {
+    if (Object.keys(value).length > 0) {
+      return {
+        type,
+        mimeType: firstString(value.mimetype, value.mimeType),
+        fileName: firstString(value.fileName, value.filename, value.name),
+      }
+    }
+  }
+  return { type: null, mimeType: null, fileName: null }
+}
+
+function base64FromEvolutionResponse(value: unknown): Buffer | null {
+  const root = objectValue(value)
+  const nested = objectValue(root.data)
+  const raw = firstString(root.base64, nested.base64, root.media, nested.media)
+  if (!raw) return null
+  const normalized = raw.replace(/^data:[^;,]+;base64,/i, '').replace(/\s/g, '')
+  if (!normalized) return null
+  const buffer = Buffer.from(normalized, 'base64')
+  return buffer.length > 0 ? buffer : null
+}
+
+/**
+ * Evolution webhook media URLs are encrypted WhatsApp CDN URLs, so they
+ * cannot be rendered by a browser. Retrieve the decrypted base64 immediately
+ * while Evolution still has the message key in its store.
+ */
+export async function downloadEvolutionMedia(rawMessage: Record<string, unknown>): Promise<Buffer | null> {
+  const embedded = base64FromEvolutionResponse(rawMessage)
+  if (embedded) return embedded
+  const config = getEvolutionConfig()
+  if (!config) return null
+  try {
+    const response = await evolutionRequest<unknown>(
+      `/chat/getBase64FromMediaMessage/${encodeURIComponent(config.instanceName)}`,
+      { method: 'POST', body: JSON.stringify({ message: rawMessage, convertToMp4: false }) },
+      30000,
+    )
+    return base64FromEvolutionResponse(response)
+  } catch (error) {
+    console.warn('[evolution/media] unable to download inbound media:', error)
+    return null
+  }
 }
 
 export async function getEvolutionConnectionState() {
@@ -174,6 +238,25 @@ function extractText(message: Record<string, unknown>, data: Record<string, unkn
   return text
 }
 
+/** Unwrap WhatsApp's ephemeral/view-once envelopes without altering the raw
+ * WebMessageInfo retained for Evolution's media-download endpoint. */
+function unwrapMessage(message: Record<string, unknown>): Record<string, unknown> {
+  let current = message
+  for (let index = 0; index < 4; index += 1) {
+    const wrapper = objectValue(
+      current.ephemeralMessage ||
+      current.viewOnceMessage ||
+      current.viewOnceMessageV2 ||
+      current.viewOnceMessageV2Extension ||
+      current.documentWithCaptionMessage,
+    )
+    const nested = objectValue(wrapper.message)
+    if (Object.keys(nested).length === 0) return current
+    current = nested
+  }
+  return current
+}
+
 function extractMessageType(message: Record<string, unknown>, data: Record<string, unknown>): string {
   return firstString(data.messageType, data.type, Object.keys(message)[0], 'text') || 'text'
 }
@@ -193,7 +276,8 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
   const messages: EvolutionInboundMessage[] = []
   for (const data of extractMessageItems(body)) {
     const key = objectValue(data.key)
-    const message = objectValue(data.message)
+    const rawMessage = objectValue(data.message)
+    const message = unwrapMessage(rawMessage)
     const contextInfo = objectValue(objectValue(message.extendedTextMessage).contextInfo)
     const groupJid = firstString(key.remoteJid, data.remoteJid, data.chatId, data.jid)
     const messageId = firstString(key.id, data.messageId, data.id)
@@ -207,7 +291,8 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
       ...(Array.isArray(contextInfo.mentionedJid) ? contextInfo.mentionedJid : []),
       ...(Array.isArray(data.mentionedJid) ? data.mentionedJid : []),
     ].filter((value): value is string => typeof value === 'string')
-    const media = objectValue(message.imageMessage).url || objectValue(message.videoMessage).url || objectValue(message.documentMessage).url
+    const info = mediaInfo(message)
+    const media = objectValue(message.imageMessage).url || objectValue(message.videoMessage).url || objectValue(message.documentMessage).url || objectValue(message.audioMessage).url
 
     messages.push({
       groupJid: normalizeJid(groupJid),
@@ -216,7 +301,11 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
       senderName: firstString(data.pushName, data.senderName, data.participantName),
       text: extractText(message, data),
       messageType: extractMessageType(message, data),
+      mediaType: info.type,
+      mediaMimeType: info.mimeType,
+      mediaFileName: info.fileName,
       mediaUrl: typeof media === 'string' ? media : null,
+      rawMessage: { ...data, messageType: extractMessageType(message, data) },
       quotedMessageId: firstString(contextInfo.stanzaId, data.quotedMessageId),
       mentionedJids: mentioned.map(normalizeJid),
       fromMe,
@@ -375,4 +464,34 @@ export async function sendEvolutionGroupText(input: { groupJid: string; text: st
     method: 'POST',
     body: JSON.stringify({ number: input.groupJid, textMessage: { text: input.text }, linkPreview: true, ...(quoted ? { quoted } : {}) }),
   })
+}
+
+export async function sendEvolutionGroupMedia(input: {
+  groupJid: string
+  mediaUrl: string
+  mediaType: 'image' | 'document' | 'audio' | 'video'
+  mimeType: string
+  fileName: string
+  caption?: string
+  quoted?: { id: string; text: string | null }
+}) {
+  const config = getEvolutionConfig()
+  if (!config) throw new Error('Evolution API is not configured')
+  const quoted = input.quoted?.id
+    ? { key: { id: input.quoted.id, remoteJid: input.groupJid, fromMe: false }, message: { conversation: input.quoted.text || '' } }
+    : undefined
+
+  if (input.mediaType === 'audio') {
+    return evolutionRequest<unknown>(`/message/sendWhatsAppAudio/${encodeURIComponent(config.instanceName)}`, {
+      method: 'POST',
+      body: JSON.stringify({ number: input.groupJid, audio: input.mediaUrl, mimetype: input.mimeType, ...(quoted ? { quoted } : {}) }),
+    }, 30000)
+  }
+
+  return evolutionRequest<unknown>(`/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
+    method: 'POST',
+    // v2.3.7 accepts filename for images but fileName for documents. Sending
+    // both keeps the request compatible with that API version.
+    body: JSON.stringify({ number: input.groupJid, mediatype: input.mediaType, media: input.mediaUrl, mimetype: input.mimeType, fileName: input.fileName, filename: input.fileName, ...(input.caption ? { caption: input.caption } : {}), ...(quoted ? { quoted } : {}) }),
+  }, 30000)
 }

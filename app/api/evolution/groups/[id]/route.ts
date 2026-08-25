@@ -6,6 +6,8 @@ import { getEvolutionOwnerUserId } from '@/lib/evolution-routing'
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const session = await getSession()
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const claimantId = Number(session.user.id)
+  if (!Number.isInteger(claimantId) || claimantId <= 0) return NextResponse.json({ error: 'Invalid user session' }, { status: 401 })
   const ownerId = await getEvolutionOwnerUserId()
   if (!ownerId) return NextResponse.json({ error: 'No active Admin owner configured' }, { status: 503 })
   const { id } = await context.params
@@ -16,7 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     where: { id },
     data: body.action === 'release'
       ? { claimedByUserId: null, claimedAt: null }
-      : { claimedByUserId: session.user.id, claimedAt: new Date() },
+      : { claimedByUserId: claimantId, claimedAt: new Date() },
   })
   return NextResponse.json({ data: updated })
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { classifyIntent, extractEvolutionMessages, getEvolutionConfig, isGroupJid, normalizePhoneJid } from './evolution-routing'
+import { classifyIntent, extractEvolutionMessages, getEvolutionConfig, isGroupJid, normalizePhoneJid, sendEvolutionGroupMedia } from './evolution-routing'
 
 afterEach(() => {
   delete process.env.EVOLUTION_API_URL
@@ -52,6 +52,36 @@ describe('Evolution group routing adapter', () => {
     expect(extractEvolutionMessages({ event: 'MESSAGES_UPSERT', data: { key: { remoteJid: '919999999999@s.whatsapp.net', id: 'DIRECT' }, message: { conversation: 'hello' } } })).toEqual([])
   })
 
+  it('retains the metadata and original payload needed to retrieve image, document, and audio media', () => {
+    const [image] = extractEvolutionMessages({
+      event: 'MESSAGES_UPSERT',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'IMAGE-1', participant: '919999999999@s.whatsapp.net' },
+        message: { imageMessage: { mimetype: 'image/jpeg', fileName: 'tile.jpg', url: 'https://encrypted.example/media' } },
+      },
+    })
+    expect(image).toMatchObject({ mediaType: 'image', mediaMimeType: 'image/jpeg', mediaFileName: 'tile.jpg' })
+    expect(image.rawMessage).toMatchObject({ key: { id: 'IMAGE-1' }, messageType: 'imageMessage' })
+
+    const [audio] = extractEvolutionMessages({
+      event: 'MESSAGES_UPSERT',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'AUDIO-1', participant: '919999999999@s.whatsapp.net' },
+        message: { audioMessage: { mimetype: 'audio/ogg; codecs=opus' } },
+      },
+    })
+    expect(audio).toMatchObject({ mediaType: 'audio', mediaMimeType: 'audio/ogg; codecs=opus' })
+
+    const [document] = extractEvolutionMessages({
+      event: 'MESSAGES_UPSERT',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'DOC-1', participant: '919999999999@s.whatsapp.net' },
+        message: { ephemeralMessage: { message: { documentMessage: { mimetype: 'application/pdf', fileName: 'invoice.pdf' } } } },
+      },
+    })
+    expect(document).toMatchObject({ mediaType: 'document', mediaMimeType: 'application/pdf', mediaFileName: 'invoice.pdf' })
+  })
+
   it('requires all server-side Evolution secrets before declaring configuration available', () => {
     process.env.EVOLUTION_API_URL = 'https://evolution.example.test'
     process.env.EVOLUTION_API_KEY = 'key'
@@ -63,6 +93,22 @@ describe('Evolution group routing adapter', () => {
 
   it('normalizes phone JIDs for direct mention matching', () => {
     expect(normalizePhoneJid('919999999999@s.whatsapp.net')).toBe('919999999999')
+  })
+
+  it('uses the dedicated Evolution audio endpoint and media endpoint for other files', async () => {
+    process.env.EVOLUTION_API_URL = 'http://evolution:8080'
+    process.env.EVOLUTION_API_KEY = 'key'
+    process.env.EVOLUTION_INSTANCE_NAME = 'tiles'
+    process.env.EVOLUTION_WEBHOOK_SECRET = 'secret'
+    const fetchMock = vi.fn().mockImplementation(() => new Response(JSON.stringify({ key: { id: 'sent' } }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', mediaUrl: 'http://app:3000/api/uploads/a.ogg', mediaType: 'audio', mimeType: 'audio/ogg', fileName: 'voice.ogg' })
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/message/sendWhatsAppAudio/tiles')
+
+    await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', mediaUrl: 'http://app:3000/api/uploads/a.pdf', mediaType: 'document', mimeType: 'application/pdf', fileName: 'invoice.pdf' })
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/message/sendMedia/tiles')
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"fileName":"invoice.pdf"')
   })
 
   it('uses a confident Groq result without escalating', async () => {

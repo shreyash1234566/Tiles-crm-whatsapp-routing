@@ -1,7 +1,29 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { getSession } from '@/lib/auth-helpers'
-import { getEvolutionOwnerUserId, sendEvolutionGroupText } from '@/lib/evolution-routing'
+import { getEvolutionOwnerUserId, sendEvolutionGroupMedia, sendEvolutionGroupText } from '@/lib/evolution-routing'
+import { uploadFile } from '@/lib/r2'
+
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024
+
+type MediaType = 'image' | 'document' | 'audio' | 'video'
+
+function mediaTypeFor(mimeType: string): MediaType {
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType.startsWith('audio/')) return 'audio'
+  if (mimeType.startsWith('video/')) return 'video'
+  return 'document'
+}
+
+function evolutionCanFetch(path: string): string {
+  // In Compose, both containers share the internal network. This avoids
+  // relying on a temporary public tunnel for an outbound WhatsApp attachment.
+  const configured = process.env.EVOLUTION_MEDIA_BASE_URL?.trim()
+  const internal = process.env.EVOLUTION_API_URL?.includes('://evolution:')
+  const base = configured || (internal ? 'http://app:3000' : (process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL))
+  if (!base) throw new Error('No app URL is available for Evolution to fetch the attachment')
+  return `${base.replace(/\/$/, '')}${path}`
+}
 
 async function access() {
   const session = await getSession()
@@ -39,29 +61,69 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const current = await access()
   if (!current) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const body = await request.json().catch(() => ({})) as { group_id?: string; text?: string; quoted_message_id?: string }
-  const groupId = String(body.group_id || '').trim()
-  const text = String(body.text || '').trim()
-  if (!groupId || !text) return NextResponse.json({ error: 'group_id and text are required' }, { status: 400 })
+  let groupId = ''
+  let text = ''
+  let quotedMessageId = ''
+  let attachment: File | null = null
+
+  if (request.headers.get('content-type')?.includes('multipart/form-data')) {
+    const form = await request.formData()
+    groupId = String(form.get('group_id') || '').trim()
+    text = String(form.get('text') || '').trim()
+    quotedMessageId = String(form.get('quoted_message_id') || '').trim()
+    const file = form.get('file')
+    if (file && typeof file === 'object' && 'arrayBuffer' in file && 'size' in file) attachment = file as File
+  } else {
+    const body = await request.json().catch(() => ({})) as { group_id?: string; text?: string; quoted_message_id?: string }
+    groupId = String(body.group_id || '').trim()
+    text = String(body.text || '').trim()
+    quotedMessageId = String(body.quoted_message_id || '').trim()
+  }
+
+  if (!groupId || (!text && !attachment)) return NextResponse.json({ error: 'group_id and either text or an attachment are required' }, { status: 400 })
+  if (attachment && attachment.size > MAX_MEDIA_BYTES) return NextResponse.json({ error: 'Attachment is too large. Maximum size is 25MB.' }, { status: 413 })
   const group = await visibleGroup(groupId, current.user, current.ownerId)
   if (!group) return NextResponse.json({ error: 'Group not found' }, { status: 404 })
-  const quoted = body.quoted_message_id ? group.messages.find((message) => message.id === body.quoted_message_id) : undefined
+  const quoted = quotedMessageId ? group.messages.find((message) => message.id === quotedMessageId) : undefined
   try {
-    const response = await sendEvolutionGroupText({ groupJid: group.groupJid, text, quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined })
+    let mediaUrl: string | null = null
+    let messageType = 'conversation'
+    let response: unknown
+
+    if (attachment) {
+      const buffer = Buffer.from(await attachment.arrayBuffer())
+      const mimeType = attachment.type || 'application/octet-stream'
+      const mediaType = mediaTypeFor(mimeType)
+      mediaUrl = await uploadFile(buffer, attachment.name || `attachment.${mediaType}`, mimeType, `evolution/outbound/${current.ownerId}`)
+      response = await sendEvolutionGroupMedia({
+        groupJid: group.groupJid,
+        mediaUrl: evolutionCanFetch(mediaUrl),
+        mediaType,
+        mimeType,
+        fileName: attachment.name || `attachment.${mediaType}`,
+        caption: text || undefined,
+        quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined,
+      })
+      messageType = mediaType
+    } else {
+      response = await sendEvolutionGroupText({ groupJid: group.groupJid, text, quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined })
+    }
+
     const message = await prisma.evolutionGroupMessage.create({
       data: {
         groupId: group.id,
         messageId: sentMessageId(response),
         senderJid: 'me',
         senderName: current.user.name || 'CRM user',
-        text,
-        messageType: 'conversation',
+        text: text || null,
+        messageType,
+        mediaUrl,
         fromMe: true,
         status: 'sent',
         quotedMessageId: quoted?.messageId || null,
       },
     })
-    const updatedGroup = await prisma.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: text, lastMessageAt: new Date() } })
+    const updatedGroup = await prisma.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: text || `[${messageType}]`, lastMessageAt: new Date() } })
     return NextResponse.json({ data: { message, group: updatedGroup } })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to send group message' }, { status: 502 })

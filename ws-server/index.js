@@ -155,17 +155,25 @@ subscriber.on('message', (channel, raw) => {
     return
   }
 
-  const { type, userId, conversationId, payload } = event
+  const { type, userId, userIds, conversationId, payload } = event
 
-  if (!userId) {
+  const recipients = [...new Set([
+    ...(typeof userId === 'string' && userId ? [userId] : []),
+    ...(Array.isArray(userIds) ? userIds.filter((id) => typeof id === 'string' && id) : []),
+  ])]
+
+  if (recipients.length === 0) {
     console.warn('[ws-server] event missing userId, skipping:', type)
     return
   }
 
-  // Emit only to the private user room — no cross-tenant leakage
-  io.to(`user:${userId}`).emit(type, { conversationId, ...payload })
+  // Emit only to server-selected private user rooms — clients cannot choose
+  // recipients or subscribe to another department's events.
+  for (const recipient of recipients) {
+    io.to(`user:${recipient}`).emit(type, { conversationId, ...payload })
+  }
 
-  console.log(`[ws] emitting "${type}" → user:${userId}  conv:${conversationId}`)
+  console.log(`[ws] emitting "${type}" → users:${recipients.join(',')}  conv:${conversationId}`)
 })
 
 // ── Start ─────────────────────────────────────────────────────────────────
