@@ -1020,6 +1020,8 @@ model Notification {
 
   @@index([read])
   @@index([type])
+  @@index([userId])
+  @@index([userId, read])
   @@index([read, createdAt]) // fetch unread notifications sorted newest-first
 }
 

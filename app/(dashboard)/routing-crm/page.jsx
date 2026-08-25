@@ -79,13 +79,18 @@ export default function RoutingCrmPage() {
       if (!response.ok) throw new Error('Unable to load groups');
       const body = await response.json();
       setGroups(body.data || []);
-      setActiveGroupId((current) => current && (body.data || []).some((group) => group.id === current) ? current : (body.data?.[0]?.id || null));
+
+      setActiveGroupId((current) => {
+        const urlId = initialGroupId ? Number(initialGroupId) : null;
+        if (urlId && body.data?.some(g => g.id === urlId)) return urlId;
+        return current && (body.data || []).some((group) => group.id === current) ? current : (body.data?.[0]?.id || null);
+      });
     } catch (error) {
       setNotice(error.message || 'Unable to load groups');
     } finally {
       setLoadingGroups(false);
     }
-  }, []);
+  }, [initialGroupId]);
 
   const loadMessages = useCallback(async (groupId) => {
     if (!groupId) {
@@ -120,26 +125,29 @@ export default function RoutingCrmPage() {
     onMessageEvent: refreshFromRealtime,
   });
 
-    useEffect(() => {
+  useEffect(() => {
     if (status !== 'authenticated') return;
-    
-    // Parse the async groups result to set initial group id
-    loadGroups().then((loaded) => {
-      if (initialGroupId && !activeGroupId) {
-        const idNum = Number(initialGroupId);
-        if (!Number.isNaN(idNum) && loaded && loaded.some(g => g.id === idNum)) {
-          setActiveGroupId(idNum);
-        }
-      }
-    });
 
+    if (initialGroupId) {
+      const idNum = Number(initialGroupId);
+      if (!Number.isNaN(idNum) && groups.some(g => g.id === idNum)) {
+        setActiveGroupId(idNum);
+      }
+    }
+  }, [initialGroupId, groups]);
+
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+
+    void loadGroups();
     void loadConnection();
+
     const timer = setInterval(() => {
       void loadGroups();
       void loadConnection();
     }, 30000);
     return () => clearInterval(timer);
-  }, [status, loadGroups, loadConnection, initialGroupId, activeGroupId]);
+  }, [status, loadGroups, loadConnection]);
 
   useEffect(() => {
     void loadMessages(activeGroupId);

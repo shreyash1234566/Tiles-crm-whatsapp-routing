@@ -236,42 +236,6 @@ export async function createStaff(data: unknown) {
   return { success: true, data: staff }
 }
 
-export async function assignStaffLogin(staffId: number, loginUsername: string, loginPassword: string) {
-  try { await requireRole('ADMIN', 'MANAGER') } catch { return { success: false, error: 'Manager access required' } }
-
-  const username = loginUsername.trim()
-  const password = loginPassword.trim()
-
-  if (!username) return { success: false, error: 'Login username is required' }
-  if (!password || password.length < 4) return { success: false, error: 'Password/PIN must be at least 4 characters' }
-
-  const staff = await prisma.staff.findUnique({
-    where: { id: staffId },
-    include: { user: { select: { id: true } } },
-  })
-  if (!staff) return { success: false, error: 'Staff not found' }
-  if (staff.user) return { success: false, error: 'This team member already has login credentials' }
-
-  const existingUser = await prisma.user.findUnique({ where: { email: username } })
-  if (existingUser) return { success: false, error: 'Login username is already in use' }
-
-  const hashedPassword = await bcrypt.hash(password, 12)
-
-  await prisma.user.create({
-    data: {
-      email: username,
-      name: staff.name,
-      hashedPassword,
-      role: 'STAFF' as UserRole,
-      staffId: staff.id,
-    },
-  })
-
-  revalidatePath('/staff')
-  revalidatePath('/settings')
-
-  return { success: true }
-}
 
 export async function verifyStaffPortalPassword(staffId: number, password: string) {
   try { await requireAuth() } catch { return { success: false, error: 'Unauthorized' } }

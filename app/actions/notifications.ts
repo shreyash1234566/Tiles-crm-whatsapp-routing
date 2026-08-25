@@ -166,6 +166,20 @@ export async function markAllConversationNotificationsRead() {
 }
 
 export async function markNotificationRead(notificationId: number) {
+  const session = await getSession()
+  if (!session?.user) return { success: false, error: 'Unauthorized' }
+  const uId = Number(session.user.id)
+
+  const n = await prisma.notification.findUnique({
+    where: { id: notificationId },
+    select: { userId: true },
+  })
+
+  if (!n) return { success: false, error: 'Not found' }
+  if (n.userId !== null && n.userId !== uId) {
+    return { success: false, error: 'Unauthorized' }
+  }
+
   await prisma.notification.update({
     where: { id: notificationId },
     data: { read: true },
