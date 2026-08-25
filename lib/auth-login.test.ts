@@ -56,6 +56,18 @@ describe('employee login route', () => {
     expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ id: '7', staffId: 12, role: 'STAFF' }))
   })
 
+  it('authenticates an employee by the selected staff id', async () => {
+    mocks.findStaff.mockResolvedValue({ status: 'Active', user: user() })
+
+    const response = await POST(request({ type: 'staff-credentials', staffId: '12', password: 'employee-password' }))
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ success: true, redirectTo: '/routing-crm' })
+    expect(mocks.findStaff).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 12 } }))
+    expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ id: '7', staffId: 12, role: 'STAFF' }))
+  })
+
   it('routes an unassigned employee to the Staff Portal rather than exposing all tickets', async () => {
     mocks.findUser.mockResolvedValue(user({ routingDepartmentId: null }))
 

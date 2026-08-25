@@ -122,6 +122,29 @@ export async function getStaff() {
   }
 }
 
+// The login screen needs only a safe list of selectable employees. Keep this
+// separate from getStaff(), which returns portal data and must not be exposed
+// to an unauthenticated browser before login.
+export async function getStaffLoginOptions() {
+  const staff = await prisma.staff.findMany({
+    where: { status: 'Active' },
+    select: {
+      id: true,
+      name: true,
+      role: true,
+      user: { select: { role: true, isActive: true } },
+    },
+    orderBy: { name: 'asc' },
+  })
+
+  return {
+    success: true,
+    data: staff
+      .filter((member) => member.user?.role === 'STAFF' && member.user.isActive)
+      .map(({ id, name, role }) => ({ id, name, role })),
+  }
+}
+
 export async function getStaffPortalProfile(staffId: number) {
   let session
   try { session = await requireAuth() } catch { return { success: false, error: 'Unauthorized' } }

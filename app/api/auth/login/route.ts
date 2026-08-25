@@ -83,10 +83,12 @@ export async function POST(req: Request) {
     // Compatibility path for existing staff accounts during migration. New accounts must use email/password.
     if (type === 'staff-credentials') {
       if (!staffId || typeof password !== 'string' || !password) {
-        return NextResponse.json({ error: 'Missing employee email or password' }, { status: 400 })
+        return NextResponse.json({ error: 'Select a staff member and enter your password' }, { status: 400 })
       }
-      const sId = Number.parseInt(String(staffId), 10)
-      if (Number.isNaN(sId)) return NextResponse.json({ error: 'Invalid employee ID' }, { status: 400 })
+      const staffIdText = String(staffId).trim()
+      if (!/^\d+$/.test(staffIdText)) return NextResponse.json({ error: 'Invalid staff member' }, { status: 400 })
+      const sId = Number(staffIdText)
+      if (!Number.isSafeInteger(sId) || sId <= 0) return NextResponse.json({ error: 'Invalid staff member' }, { status: 400 })
 
       const staff = await prisma.staff.findUnique({
         where: { id: sId },

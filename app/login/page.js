@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, Suspense } from 'react';
+import { getStaffLoginOptions } from '@/app/actions/staff';
 import { getStoreSettings } from '@/app/actions/settings';
 import { getBrand } from '@/lib/brand';
 import Image from 'next/image';
@@ -17,9 +18,32 @@ function LoginContent() {
   const [mode, setMode] = useState(null); // null = chooser, 'admin', 'staff'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [staffList, setStaffList] = useState([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [staffPassword, setStaffPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [storeProfile, setStoreProfile] = useState({ name: brand.name, logo: brand.logo });
+
+  useEffect(() => {
+    if (mode !== 'staff') return;
+    let active = true;
+    setStaffLoading(true);
+    getStaffLoginOptions()
+      .then((result) => {
+        if (!active) return;
+        if (result?.success) setStaffList(result.data || []);
+        else setError(result?.error || 'Unable to load staff accounts.');
+      })
+      .catch(() => {
+        if (active) setError('Unable to load staff accounts. Please try again.');
+      })
+      .finally(() => {
+        if (active) setStaffLoading(false);
+      });
+    return () => { active = false; };
+  }, [mode]);
   useEffect(() => {
     let active = true;
     getStoreSettings().then(res => {
@@ -64,8 +88,12 @@ function LoginContent() {
   const handleStaffSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!email.trim() || !password) {
-      setError('Please enter your employee email and password');
+    if (!selectedStaffId) {
+      setError('Please select your name');
+      return;
+    }
+    if (!staffPassword) {
+      setError('Please enter your password');
       return;
     }
     setLoading(true);
@@ -73,7 +101,7 @@ function LoginContent() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, type: 'staff-credentials' }),
+        body: JSON.stringify({ staffId: selectedStaffId, password: staffPassword, type: 'staff-credentials' }),
       });
 
       const result = await res.json();
@@ -155,7 +183,7 @@ function LoginContent() {
               {mode === 'admin' ? 'Admin Login' : 'Staff Login'}
             </h1>
             <p className="text-gray-500 dark:text-gray-400 mt-1">
-              {mode === 'admin' ? 'Sign in with your admin credentials' : 'Sign in with your employee email and password'}
+              {mode === 'admin' ? 'Sign in with your admin credentials' : 'Select your name and enter your password'}
             </p>
           </div>
 
@@ -192,13 +220,23 @@ function LoginContent() {
           {mode === 'staff' && (
             <form onSubmit={handleStaffSubmit} className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Employee Email</label>
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" autoFocus placeholder="employee@example.com"
-                  className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition-all" />
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Select Staff Member</label>
+                {staffLoading ? (
+                  <div className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-400 text-sm animate-pulse">Loading staff...</div>
+                ) : (
+                  <select value={selectedStaffId} onChange={(e) => setSelectedStaffId(e.target.value)} required autoFocus autoComplete="username"
+                    className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition-all">
+                    <option value="">Choose your name</option>
+                    {staffList.map((staff) => <option key={staff.id} value={staff.id}>{staff.name} — {staff.role}</option>)}
+                  </select>
+                )}
+                {!staffLoading && staffList.length === 0 && (
+                  <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">No active staff login is assigned. Ask Admin to set a login in Settings → Team.</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Password</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" placeholder="Enter your login password"
+                <input type="password" value={staffPassword} onChange={(e) => setStaffPassword(e.target.value)} required autoComplete="current-password" placeholder="Enter your login password"
                   className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition-all" />
               </div>
               <button type="submit" disabled={loading}
@@ -208,13 +246,13 @@ function LoginContent() {
                 ) : 'Sign In'}
               </button>
               <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-                <p className="text-xs text-amber-600 dark:text-amber-400 text-center">Use the email and password assigned by Admin in Settings → Team.</p>
+                <p className="text-xs text-amber-600 dark:text-amber-400 text-center">Use the password assigned by Admin in Settings → Team.</p>
               </div>
             </form>
           )}
 
           {/* Back button */}
-          <button onClick={() => { setMode(null); setError(''); }} className="w-full mt-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
+          <button onClick={() => { setMode(null); setError(''); setSelectedStaffId(''); setStaffPassword(''); }} className="w-full mt-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
             ← Back to role selection
           </button>
         </div>
