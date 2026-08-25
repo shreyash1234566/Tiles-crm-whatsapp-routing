@@ -18,7 +18,15 @@ services:
       - "127.0.0.1:4000:3000"
     environment:
       EVOLUTION_API_URL: "http://evolution:8080"
+      EVOLUTION_API_KEY: "${EVOLUTION_API_KEY}"
+      EVOLUTION_INSTANCE_NAME: "${EVOLUTION_INSTANCE_NAME}"
+      EVOLUTION_WEBHOOK_SECRET: "${EVOLUTION_WEBHOOK_SECRET}"
       EVOLUTION_WEBHOOK_URL: "https://${DOMAIN}/api/evolution/webhook"
+      EVOLUTION_OWNER_USER_ID: "${EVOLUTION_OWNER_USER_ID:-}"
+      EVOLUTION_BUSINESS_ALIASES: "${EVOLUTION_BUSINESS_ALIASES:-Tiles CRM,Homzentic,Tiles,Granite,Marble}"
+      GROQ_ROUTING_MODEL: "${GROQ_ROUTING_MODEL:-llama-3.1-8b-instant}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_ROUTING_MODEL: "${ANTHROPIC_ROUTING_MODEL:-claude-haiku-4-5-20251001}"
       NEXT_PUBLIC_WS_URL: "https://${DOMAIN}"
     networks:
       - internal
