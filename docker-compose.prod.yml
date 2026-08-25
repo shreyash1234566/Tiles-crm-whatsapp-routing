@@ -1,89 +1,66 @@
-# docker-compose.prod.yml — Production overlay
+# docker-compose.prod.yml — Production overlay (Nginx-based VPS)
 # Usage:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # What this file does versus the base compose:
-#  • Adds Caddy reverse proxy for TLS termination (ports 80/443 only)
+#  • Exposes the CRM app on 127.0.0.1:4000 for Nginx reverse-proxy
+#  • Keeps ws-server internal (Nginx proxies /socket.io/ to it via Docker network)
 #  • Adds Evolution API with its own isolated Postgres + Redis
-#  • Locks ws-server behind Caddy (removes direct public port binding)
-#  • Adds persistent volumes for Caddy data/config and Evolution state
+#  • Adds persistent volumes for Evolution state
 #  • Puts ai-agent under a profile so it only starts when explicitly requested
-#  • Removes any direct public exposure of internal service ports
+#  • No Caddy — the host Nginx handles TLS and public ports 80/443
 
 services:
 
-  # ── Caddy (HTTPS edge) ─────────────────────────────────────────────────────
-  caddy:
-    image: caddy:2-alpine
+  # ── CRM app — bind to localhost:4000 for Nginx ─────────────────────────
+  app:
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - app
-      - ws-server
-    networks:
-      - public
-      - internal
-
-  # ── CRM app — override: bind only to internal network, not 127.0.0.1 ───────
-  app:
-    # Image is built and tagged externally: docker compose build app
-    restart: unless-stopped
-    ports: []          # remove the base 127.0.0.1:3000:3000 binding
-    expose:
-      - "3000"         # reachable inside Docker network only
+      - "127.0.0.1:4000:3000"
     environment:
       EVOLUTION_API_URL: "http://evolution:8080"
       EVOLUTION_WEBHOOK_URL: "https://${DOMAIN}/api/evolution/webhook"
+      NEXT_PUBLIC_WS_URL: "https://${DOMAIN}"
     networks:
       - internal
     depends_on:
       evolution:
         condition: service_healthy
 
-  # ── WebSocket gateway — internal only (Caddy proxies /ws/) ────────────────
+  # ── WebSocket gateway — internal only (Nginx proxies /socket.io/) ─────
   ws-server:
     restart: unless-stopped
-    ports: []          # remove the base 3001:3001 public binding
-    expose:
-      - "3001"
+    ports:
+      - "127.0.0.1:3001:3001"
     networks:
       - internal
 
-  # ── CRM Postgres — stay internal, no host port ────────────────────────────
+  # ── CRM Postgres — internal ───────────────────────────────────────────
   db:
     networks:
       - internal
 
-  # ── CRM Redis — stay internal, no host port ───────────────────────────────
+  # ── CRM Redis — internal ──────────────────────────────────────────────
   redis:
     networks:
       - internal
 
-  # ── Migration job — internal only ─────────────────────────────────────────
+  # ── Migration job — internal ──────────────────────────────────────────
   migrate:
     networks:
       - internal
 
-  # ── Evolution API ──────────────────────────────────────────────────────────
+  # ── Evolution API ─────────────────────────────────────────────────────
   evolution:
-    image: evoapicloud/evolution-api:v2.3.7   # pin to a specific release
+    image: evoapicloud/evolution-api:v2.3.7
     restart: unless-stopped
     expose:
       - "8080"
     environment:
-      # Server
       SERVER_URL: "https://${DOMAIN}/evolution"
       DEL_INSTANCE: "false"
-      # Auth
       AUTHENTICATION_TYPE: apikey
       AUTHENTICATION_API_KEY: "${EVOLUTION_API_KEY}"
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
-      # Database (Evolution's own Postgres)
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: "postgresql://${EVO_PG_USER:-evolution}:${EVO_PG_PASSWORD}@evolution-db:5432/${EVO_PG_DB:-evolutiondb}"
@@ -95,20 +72,16 @@ services:
       DATABASE_SAVE_DATA_CHATS: "true"
       DATABASE_SAVE_DATA_LABELS: "true"
       DATABASE_SAVE_DATA_HISTORIC: "true"
-      # Redis (Evolution's own Redis)
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: "redis://evolution-redis:6379"
       CACHE_REDIS_PREFIX_KEY: "evolution"
       CACHE_REDIS_SAVE_INSTANCES: "true"
-      # Instance storage (Baileys session files)
       STORE_MESSAGES: "true"
       STORE_MESSAGE_UP: "true"
       STORE_CONTACTS: "true"
       STORE_CHATS: "true"
-      # Webhook
-      WEBHOOK_GLOBAL_ENABLED: "false"      # per-instance webhooks only
+      WEBHOOK_GLOBAL_ENABLED: "false"
       WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
-      # Log
       LOG_LEVEL: "ERROR,WARN,INFO"
       LOG_COLOR: "true"
       LOG_BAILEYS: "error"
@@ -128,7 +101,7 @@ services:
     networks:
       - internal
 
-  # ── Evolution Postgres ─────────────────────────────────────────────────────
+  # ── Evolution Postgres ────────────────────────────────────────────────
   evolution-db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -146,7 +119,7 @@ services:
     networks:
       - internal
 
-  # ── Evolution Redis ────────────────────────────────────────────────────────
+  # ── Evolution Redis ───────────────────────────────────────────────────
   evolution-redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -161,7 +134,7 @@ services:
     networks:
       - internal
 
-  # ── AI Agent (Call Centre) — only starts with: --profile callcentre ────────
+  # ── AI Agent — only with: --profile callcentre ────────────────────────
   ai-agent:
     profiles:
       - callcentre
@@ -169,13 +142,10 @@ services:
       - internal
 
 volumes:
-  caddy_data:
-  caddy_config:
   evolution_instances:
   evolution_pgdata:
   evolution_redisdata:
 
 networks:
-  public:
   internal:
-    internal: true    # no direct internet access from internal services
+    internal: true

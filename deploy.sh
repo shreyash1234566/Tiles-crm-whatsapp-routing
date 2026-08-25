@@ -2,12 +2,13 @@
 # =============================================================================
 # deploy.sh — Tiles CRM production deployment script
 # =============================================================================
-# Run on the VPS as a non-root deploy user (e.g. deploy) with Docker access.
+# Run on the VPS as root or a deploy user with Docker access.
 # All secrets live in /opt/tiles-crm/.env.prod — NOT in the git repo.
 #
 # First-time setup:   ./deploy.sh --setup
 # Subsequent deploys: ./deploy.sh
-# With call-centre:   ./deploy.sh --callcentre
+# Rebuild images:     ./deploy.sh --build
+# With call-centre:   ./deploy.sh --build --callcentre
 # =============================================================================
 set -euo pipefail
 
@@ -35,23 +36,20 @@ require_env_file() {
 setup() {
   log "Running first-time setup..."
   hr
-
-  # Create deployment directory structure
   mkdir -p "${DEPLOY_DIR}"/{backups,logs}
   chmod 700 "${DEPLOY_DIR}"
 
-  # Clone repo if not present
   if [[ ! -d "${REPO_DIR}/.git" ]]; then
     log "Cloning repository..."
     git clone --branch "${GIT_BRANCH}" . "${REPO_DIR}" 2>/dev/null || \
-      die "Adjust REPO_DIR or clone manually: git clone <your-repo-url> ${REPO_DIR}"
+      die "Clone manually: git clone <your-repo-url> ${REPO_DIR}"
   fi
 
   log "Setup done. Now:"
   echo "  1. Copy .env.prod.example to ${ENV_FILE}"
   echo "  2. Fill in ALL values (generate secrets with: openssl rand -hex 32)"
   echo "  3. Point your domain DNS A record to this VPS IP"
-  echo "  4. Run: ./deploy.sh"
+  echo "  4. Run: ./deploy.sh --build"
   exit 0
 }
 
@@ -64,31 +62,30 @@ pull_latest() {
   log "Commit: $(git rev-parse --short HEAD) — $(git log -1 --format='%s')"
 }
 
-# ── Build CRM image ───────────────────────────────────────────────────────────
-build_crm() {
+# ── Build images ──────────────────────────────────────────────────────────────
+build_images() {
   log "Building CRM app image..."
   ${COMPOSE_CMD} build --no-cache app
   log "Building ws-server image..."
   ${COMPOSE_CMD} build --no-cache ws-server
 }
 
-# ── Run database migrations (never reset) ─────────────────────────────────────
+# ── Run database migrations ──────────────────────────────────────────────────
 run_migrations() {
-  log "Running CRM database migrations (safe: deploy only)..."
+  log "Running CRM database migrations..."
   ${COMPOSE_CMD} run --rm migrate
   log "Migrations complete."
 }
 
-# ── Start / update services ───────────────────────────────────────────────────
+# ── Start services ───────────────────────────────────────────────────────────
 start_services() {
   local profiles=()
   [[ "${CALLCENTRE:-false}" == "true" ]] && profiles=(--profile callcentre)
 
-  log "Starting infrastructure (Evolution DB, Evolution Redis, CRM DB, CRM Redis)..."
-  ${COMPOSE_CMD} "${profiles[@]}" up -d \
-    evolution-db evolution-redis db redis
+  log "Starting databases and Redis..."
+  ${COMPOSE_CMD} "${profiles[@]}" up -d evolution-db evolution-redis db redis
 
-  log "Waiting for DB health checks..."
+  log "Waiting for health checks..."
   sleep 10
 
   log "Starting Evolution API..."
@@ -98,11 +95,7 @@ start_services() {
   run_migrations
 
   log "Starting CRM app + ws-server..."
-  # --no-deps: don't restart infra that's already healthy
   ${COMPOSE_CMD} "${profiles[@]}" up -d --no-deps app ws-server
-
-  log "Starting Caddy..."
-  ${COMPOSE_CMD} "${profiles[@]}" up -d --no-deps caddy
 
   [[ "${CALLCENTRE:-false}" == "true" ]] && {
     log "Starting ai-agent (call centre profile)..."
@@ -110,19 +103,14 @@ start_services() {
   }
 }
 
-# ── Health check ──────────────────────────────────────────────────────────────
+# ── Health check ─────────────────────────────────────────────────────────────
 health_check() {
   hr
   log "Checking service health..."
-
-  # Load domain from env file
-  # shellcheck disable=SC1090
-  DOMAIN=$(grep '^DOMAIN=' "${ENV_FILE}" | cut -d= -f2 | tr -d '"')
-
   local ok=true
 
   check() {
-    local label=$1; local url=$2
+    local label=$1 url=$2
     if curl -fsS --max-time 10 "${url}" >/dev/null 2>&1; then
       log "  ✓ ${label}"
     else
@@ -131,52 +119,24 @@ health_check() {
     fi
   }
 
-  check "CRM HTTPS"         "https://${DOMAIN}/api/auth/me"
-  check "Evolution API"     "http://localhost:8080/"   # internal check via docker exec or port-forward
-  check "WebSocket health"  "http://localhost:3001/health"
+  check "CRM app (localhost:4000)" "http://localhost:4000/api/auth/me"
+  check "WebSocket (localhost:3001)" "http://localhost:3001/health"
 
   ${COMPOSE_CMD} ps
   hr
-
   [[ "${ok}" == "true" ]] && log "All checks passed." || log "Some checks failed — review logs above."
 }
 
-# ── Backup databases ──────────────────────────────────────────────────────────
-backup() {
-  local ts; ts=$(date '+%Y%m%d_%H%M%S')
-  local backup_dir="${DEPLOY_DIR}/backups/${ts}"
-  mkdir -p "${backup_dir}"
-
-  log "Backing up CRM database..."
-  ${COMPOSE_CMD} exec -T db \
-    pg_dump -U "${POSTGRES_USER:-crm}" "${POSTGRES_DB:-tiles_crm}" \
-    | gzip > "${backup_dir}/crm_db.sql.gz"
-
-  log "Backing up Evolution database..."
-  ${COMPOSE_CMD} exec -T evolution-db \
-    pg_dump -U "${EVO_PG_USER:-evolution}" "${EVO_PG_DB:-evolutiondb}" \
-    | gzip > "${backup_dir}/evolution_db.sql.gz"
-
-  log "Backing up Evolution instance files..."
-  ${COMPOSE_CMD} exec -T evolution \
-    tar czf - /evolution/instances 2>/dev/null \
-    > "${backup_dir}/evolution_instances.tar.gz" || true
-
-  log "Backup complete: ${backup_dir}"
-  # Keep last 7 daily backups
-  find "${DEPLOY_DIR}/backups" -maxdepth 1 -type d | sort | head -n -7 | xargs -r rm -rf
-}
-
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────────────────────────
 main() {
   local DO_SETUP=false
-  local DO_BUILD=true
+  local DO_BUILD=false
   CALLCENTRE=false
 
   for arg in "$@"; do
     case $arg in
       --setup)       DO_SETUP=true ;;
-      --no-build)    DO_BUILD=false ;;
+      --build)       DO_BUILD=true ;;
       --callcentre)  CALLCENTRE=true ;;
     esac
   done
@@ -192,7 +152,7 @@ main() {
   hr
 
   pull_latest
-  [[ "${DO_BUILD}" == "true" ]] && build_crm
+  [[ "${DO_BUILD}" == "true" ]] && build_images
   start_services
   health_check
 
