@@ -1,0 +1,181 @@
+# docker-compose.prod.yml — Production overlay
+# Usage:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this file does versus the base compose:
+#  • Adds Caddy reverse proxy for TLS termination (ports 80/443 only)
+#  • Adds Evolution API with its own isolated Postgres + Redis
+#  • Locks ws-server behind Caddy (removes direct public port binding)
+#  • Adds persistent volumes for Caddy data/config and Evolution state
+#  • Puts ai-agent under a profile so it only starts when explicitly requested
+#  • Removes any direct public exposure of internal service ports
+
+services:
+
+  # ── Caddy (HTTPS edge) ─────────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+      - ws-server
+    networks:
+      - public
+      - internal
+
+  # ── CRM app — override: bind only to internal network, not 127.0.0.1 ───────
+  app:
+    # Image is built and tagged externally: docker compose build app
+    restart: unless-stopped
+    ports: []          # remove the base 127.0.0.1:3000:3000 binding
+    expose:
+      - "3000"         # reachable inside Docker network only
+    environment:
+      EVOLUTION_API_URL: "http://evolution:8080"
+      EVOLUTION_WEBHOOK_URL: "https://${DOMAIN}/api/evolution/webhook"
+    networks:
+      - internal
+    depends_on:
+      evolution:
+        condition: service_healthy
+
+  # ── WebSocket gateway — internal only (Caddy proxies /ws/) ────────────────
+  ws-server:
+    restart: unless-stopped
+    ports: []          # remove the base 3001:3001 public binding
+    expose:
+      - "3001"
+    networks:
+      - internal
+
+  # ── CRM Postgres — stay internal, no host port ────────────────────────────
+  db:
+    networks:
+      - internal
+
+  # ── CRM Redis — stay internal, no host port ───────────────────────────────
+  redis:
+    networks:
+      - internal
+
+  # ── Migration job — internal only ─────────────────────────────────────────
+  migrate:
+    networks:
+      - internal
+
+  # ── Evolution API ──────────────────────────────────────────────────────────
+  evolution:
+    image: atendai/evolution-api:v2.2.3   # pin to a specific release
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      # Server
+      SERVER_URL: "https://${DOMAIN}/evolution"
+      DEL_INSTANCE: "false"
+      # Auth
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_API_KEY: "${EVOLUTION_API_KEY}"
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      # Database (Evolution's own Postgres)
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: "postgresql://${EVO_PG_USER:-evolution}:${EVO_PG_PASSWORD}@evolution-db:5432/${EVO_PG_DB:-evolutiondb}"
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_LABELS: "true"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
+      # Redis (Evolution's own Redis)
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: "redis://evolution-redis:6379"
+      CACHE_REDIS_PREFIX_KEY: "evolution"
+      CACHE_REDIS_SAVE_INSTANCES: "true"
+      # Instance storage (Baileys session files)
+      STORE_MESSAGES: "true"
+      STORE_MESSAGE_UP: "true"
+      STORE_CONTACTS: "true"
+      STORE_CHATS: "true"
+      # Webhook
+      WEBHOOK_GLOBAL_ENABLED: "false"      # per-instance webhooks only
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      # Log
+      LOG_LEVEL: "ERROR,WARN,INFO"
+      LOG_COLOR: "true"
+      LOG_BAILEYS: "error"
+    volumes:
+      - evolution_instances:/evolution/instances
+    depends_on:
+      evolution-db:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+
+  # ── Evolution Postgres ─────────────────────────────────────────────────────
+  evolution-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${EVO_PG_USER:-evolution}"
+      POSTGRES_PASSWORD: "${EVO_PG_PASSWORD}"
+      POSTGRES_DB: "${EVO_PG_DB:-evolutiondb}"
+    volumes:
+      - evolution_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${EVO_PG_USER:-evolution}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── Evolution Redis ────────────────────────────────────────────────────────
+  evolution-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - evolution_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── AI Agent (Call Centre) — only starts with: --profile callcentre ────────
+  ai-agent:
+    profiles:
+      - callcentre
+    networks:
+      - internal
+
+volumes:
+  caddy_data:
+  caddy_config:
+  evolution_instances:
+  evolution_pgdata:
+  evolution_redisdata:
+
+networks:
+  public:
+  internal:
+    internal: true    # no direct internet access from internal services

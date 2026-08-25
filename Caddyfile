@@ -1,0 +1,52 @@
+# Caddyfile — Production reverse proxy
+# Handles TLS automatically via Let's Encrypt.
+# Replace {$DOMAIN} with your real domain (set in .env.prod → DOMAIN=tiles.fz.com)
+#
+# Internal services (app, ws-server, evolution) are never exposed directly.
+
+{$DOMAIN} {
+
+  # ── CRM Next.js app ─────────────────────────────────────────────────────
+  # Everything that isn't a known sub-path goes to the CRM.
+  reverse_proxy /api/* app:3000
+  reverse_proxy /auth/* app:3000
+  reverse_proxy /* app:3000
+
+  # ── WebSocket gateway ────────────────────────────────────────────────────
+  # Socket.IO uses HTTP long-polling before upgrading to WS; proxy both.
+  @ws {
+    path /socket.io/*
+  }
+  reverse_proxy @ws ws-server:3001 {
+    header_up Host {host}
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    transport http {
+      # Allow WebSocket upgrades
+      versions 1.1
+    }
+  }
+
+  # ── Evolution API webhook (inbound only) ─────────────────────────────────
+  # The CRM webhook endpoint lives on the CRM app; this block is a no-op
+  # because /api/* is already handled above. Listed here for documentation.
+  # Evolution → POST https://{DOMAIN}/api/evolution/webhook
+
+  # ── Security headers ─────────────────────────────────────────────────────
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    # Remove server fingerprint
+    -Server
+  }
+
+  # ── Logging ──────────────────────────────────────────────────────────────
+  log {
+    output file /data/caddy-access.log {
+      roll_size 10mb
+      roll_keep 5
+    }
+  }
+}

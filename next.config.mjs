@@ -30,7 +30,7 @@ const nextConfig = {
         '*.ngrok-free.dev',
         '*.ngrok.app',
         '*.ngrok.io',
-        'crm.kosmicfurniture.com',
+        'tiles.fz.com',
       ],
     }
   },
