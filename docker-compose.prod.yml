@@ -134,13 +134,6 @@ services:
     networks:
       - internal
 
-  # ── AI Agent — only with: --profile callcentre ────────────────────────
-  ai-agent:
-    profiles:
-      - callcentre
-    networks:
-      - internal
-
 volumes:
   evolution_instances:
   evolution_pgdata:

@@ -23,6 +23,9 @@ RUN --mount=type=cache,target=/root/.npm npx prisma generate
 
 # Build Next.js (standalone output)
 ENV NEXT_TELEMETRY_DISABLED=1
+ARG NEXT_PUBLIC_BUSINESS_TYPE=tiles
+ENV NEXT_PUBLIC_BUSINESS_TYPE=${NEXT_PUBLIC_BUSINESS_TYPE}
+ENV BUSINESS_TYPE=tiles
 RUN npm run build
 
 # ─── Stage 3: Runner ──────────────────────────────────

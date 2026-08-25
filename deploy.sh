@@ -8,7 +8,6 @@
 # First-time setup:   ./deploy.sh --setup
 # Subsequent deploys: ./deploy.sh
 # Rebuild images:     ./deploy.sh --build
-# With call-centre:   ./deploy.sh --build --callcentre
 # =============================================================================
 set -euo pipefail
 
@@ -20,6 +19,7 @@ COMPOSE_BASE="${REPO_DIR}/docker-compose.yml"
 COMPOSE_PROD="${REPO_DIR}/docker-compose.prod.yml"
 GIT_REMOTE="origin"
 GIT_BRANCH="main"
+GIT_REPO="https://github.com/shreyash1234566/Tiles-crm-whatsapp-routing.git"
 
 COMPOSE_CMD="docker compose -f ${COMPOSE_BASE} -f ${COMPOSE_PROD} --env-file ${ENV_FILE}"
 
@@ -41,8 +41,8 @@ setup() {
 
   if [[ ! -d "${REPO_DIR}/.git" ]]; then
     log "Cloning repository..."
-    git clone --branch "${GIT_BRANCH}" . "${REPO_DIR}" 2>/dev/null || \
-      die "Clone manually: git clone <your-repo-url> ${REPO_DIR}"
+    git clone --branch "${GIT_BRANCH}" "${GIT_REPO}" "${REPO_DIR}" 2>/dev/null || \
+      die "Clone manually: git clone --branch ${GIT_BRANCH} ${GIT_REPO} ${REPO_DIR}"
   fi
 
   log "Setup done. Now:"
@@ -79,28 +79,20 @@ run_migrations() {
 
 # ── Start services ───────────────────────────────────────────────────────────
 start_services() {
-  local profiles=()
-  [[ "${CALLCENTRE:-false}" == "true" ]] && profiles=(--profile callcentre)
-
   log "Starting databases and Redis..."
-  ${COMPOSE_CMD} "${profiles[@]}" up -d evolution-db evolution-redis db redis
+  ${COMPOSE_CMD} up -d evolution-db evolution-redis db redis
 
   log "Waiting for health checks..."
   sleep 10
 
   log "Starting Evolution API..."
-  ${COMPOSE_CMD} "${profiles[@]}" up -d evolution
+  ${COMPOSE_CMD} up -d evolution
 
   log "Running CRM migrations..."
   run_migrations
 
   log "Starting CRM app + ws-server..."
-  ${COMPOSE_CMD} "${profiles[@]}" up -d --no-deps app ws-server
-
-  [[ "${CALLCENTRE:-false}" == "true" ]] && {
-    log "Starting ai-agent (call centre profile)..."
-    ${COMPOSE_CMD} "${profiles[@]}" up -d --no-deps ai-agent
-  }
+  ${COMPOSE_CMD} up -d --no-deps app ws-server
 }
 
 # ── Health check ─────────────────────────────────────────────────────────────
@@ -131,13 +123,11 @@ health_check() {
 main() {
   local DO_SETUP=false
   local DO_BUILD=false
-  CALLCENTRE=false
 
   for arg in "$@"; do
     case $arg in
       --setup)       DO_SETUP=true ;;
       --build)       DO_BUILD=true ;;
-      --callcentre)  CALLCENTRE=true ;;
     esac
   done
 

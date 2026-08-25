@@ -75,6 +75,8 @@ services:
       OUTBOUND_SIP_TRUNK_ID: "${OUTBOUND_SIP_TRUNK_ID}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
       REDIS_URL: "redis://redis:6379"
+      BUSINESS_TYPE: "${BUSINESS_TYPE:-tiles}"
+      NEXT_PUBLIC_BUSINESS_TYPE: "${NEXT_PUBLIC_BUSINESS_TYPE:-tiles}"
       # Socket.io gateway URL — consumed by socket.io-client in the browser
       NEXT_PUBLIC_WS_URL: "https://${DOMAIN:-crm.kosmicfurniture.com}:3001"
       # Images stored on VPS local volume — no cloud storage needed
@@ -138,20 +140,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Python AI Agent for Call Centre
-  ai-agent:
-    build:
-      context: ./ai-agent
-      dockerfile: Dockerfile
-    restart: always
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
 volumes:
   pgdata:
