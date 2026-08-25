@@ -101,6 +101,10 @@ start_services() {
   # remains untouched.
   log "Removing previous containers and stale project network..."
   ${COMPOSE_CMD} down --remove-orphans --timeout 30 >/dev/null 2>&1 || true
+  # Compose can leave stopped containers with stale/null port bindings after
+  # a failed network recreation. Remove only this project's app containers so
+  # the next `up` creates fresh HostConfig.PortBindings.
+  ${COMPOSE_CMD} rm --stop --force app ws-server >/dev/null 2>&1 || true
   local network_labels
   network_labels="$(docker network inspect repo_internal --format '{{.Labels}}' 2>/dev/null || true)"
   if [[ "${network_labels}" == *"com.docker.compose.project:${COMPOSE_PROJECT}"* ]]; then
@@ -123,6 +127,20 @@ start_services() {
   # Force recreation so changed port bindings are applied even when an older
   # container survived a partial `compose down`.
   ${COMPOSE_CMD} up -d --force-recreate --no-deps app ws-server
+}
+
+assert_host_bindings() {
+  local app_binding ws_binding
+  app_binding="$(${COMPOSE_CMD} port app 3000 2>/dev/null || true)"
+  ws_binding="$(${COMPOSE_CMD} port ws-server 3001 2>/dev/null || true)"
+
+  if [[ "${app_binding}" != *":${CRM_APP_HOST_PORT}"* ]]; then
+    die "CRM app port binding missing. Expected 127.0.0.1:${CRM_APP_HOST_PORT}, got: ${app_binding:-<none>}"
+  fi
+  if [[ "${ws_binding}" != *":${CRM_WS_HOST_PORT}"* ]]; then
+    die "WebSocket port binding missing. Expected 127.0.0.1:${CRM_WS_HOST_PORT}, got: ${ws_binding:-<none>}"
+  fi
+  log "Port bindings: app=${app_binding}, ws=${ws_binding}"
 }
 
 # ── Health check ─────────────────────────────────────────────────────────────
@@ -179,6 +197,7 @@ main() {
   pull_latest
   [[ "${DO_BUILD}" == "true" ]] && build_images
   start_services
+  assert_host_bindings
   health_check
 
   log "Deploy finished."
