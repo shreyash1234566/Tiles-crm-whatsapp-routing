@@ -19,18 +19,13 @@ export interface ChatEvent {
   type: 'new_message' | 'message_status' | 'conversation_update' | 'new_conversation'
   /** Routing: ws-server emits only to `user:<userId>` rooms */
   userId: string
-  /**
-   * Optional additional recipients. This lets a department-scoped event reach
-   * the assigned staff as well as the CRM owner, without exposing it to any
-   * client that has not authenticated as one of those users.
-   */
-  userIds?: string[]
   conversationId: string
   payload: Record<string, unknown>
 }
 
 // ── Singleton ──────────────────────────────────────────────────────────────
 declare global {
+  // eslint-disable-next-line no-var
   var _redisClient: Redis | undefined
 }
 

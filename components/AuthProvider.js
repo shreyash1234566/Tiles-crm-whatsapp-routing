@@ -1,8 +1,7 @@
 'use client';
-/* eslint-disable react-hooks/set-state-in-effect */
 
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 const AuthContext = createContext({
   data: null,
@@ -14,22 +13,15 @@ export default function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [status, setStatus] = useState('loading');
   const router = useRouter();
-  const pathname = usePathname();
 
-  const fetchSession = useCallback(async () => {
+  const fetchSession = async () => {
     try {
       const res = await fetch('/api/auth/me');
       if (res.ok) {
         const data = await res.json();
         setSession(data);
-        if (!data?.user && pathname !== '/login' && pathname !== '/walkin-form') {
-          router.replace('/login');
-        }
       } else {
         setSession(null);
-        if (pathname !== '/login' && pathname !== '/walkin-form') {
-          router.replace('/login');
-        }
       }
     } catch (error) {
       console.error('Failed to fetch session:', error);
@@ -37,11 +29,11 @@ export default function AuthProvider({ children }) {
     } finally {
       setStatus('authenticated'); // Even if null, we've finished checking
     }
-  }, [pathname, router]);
+  };
 
   useEffect(() => {
     fetchSession();
-  }, [fetchSession]);
+  }, []);
 
   const value = {
     data: session,

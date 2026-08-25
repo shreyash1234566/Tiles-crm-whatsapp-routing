@@ -15,17 +15,45 @@ import IndiaMartIntegrationSettings from './IndiaMartIntegrationSettings';
 
 const channelDefinitions = [
   {
-    channel: 'Evolution',
-    name: 'WhatsApp Group Routing',
-    description: 'Connect an Evolution API instance for group message routing',
+    channel: 'WhatsApp',
+    name: 'WhatsApp Business',
+    description: 'Connect WhatsApp Business API for automated messaging',
     icon: '💬',
     fields: [
-      { key: 'instanceName', label: 'Instance Name', placeholder: 'crm-main', type: 'text' },
-      { key: 'apiUrl', label: 'Evolution API URL', placeholder: 'https://evolution.example.com', type: 'text' },
-      { key: 'apiKey', label: 'Evolution API Key', placeholder: 'Server-side API key', type: 'password' },
-      { key: 'webhookSecret', label: 'Webhook Secret', placeholder: 'Separate inbound webhook secret', type: 'password' },
+      { key: 'phoneNumberId', label: 'Phone Number ID', placeholder: 'From Meta Business Suite', type: 'text' },
+      { key: 'apiToken', label: 'Permanent API Token', placeholder: 'Meta Graph API token', type: 'password' },
+      { key: 'verifyToken', label: 'Webhook Verify Token', placeholder: 'Any string you choose', type: 'text' },
+      { key: 'templateName', label: 'Notification Template Name', placeholder: 'e.g. furniture_order_update (approved template)', type: 'text' },
+      { key: 'templateLanguage', label: 'Template Language Code', placeholder: 'en (default)', type: 'text' },
     ],
-    docs: 'https://evolutionapi-evolution-api-90.mintlify.app/concepts/webhooks',
+    docs: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started',
+  },
+  {
+    channel: 'Instagram',
+    name: 'Instagram',
+    description: 'Receive and reply to Instagram DMs via the unified social webhook',
+    icon: '📸',
+    fields: [
+      { key: 'igAccountId', label: 'Instagram Business Account ID', placeholder: 'From Meta Business Suite → Instagram → About', type: 'text' },
+      { key: 'pageId', label: 'Linked Facebook Page ID', placeholder: 'The Facebook Page linked to this Instagram account', type: 'text' },
+      { key: 'accessToken', label: 'Page Access Token', placeholder: 'Long-lived token from Graph API', type: 'password' },
+      { key: 'appSecret', label: 'App Secret (optional)', placeholder: 'For webhook signature verification', type: 'password' },
+      { key: 'verifyToken', label: 'Webhook Verify Token', placeholder: 'Any string you choose', type: 'text' },
+    ],
+    docs: 'https://developers.facebook.com/docs/messenger-platform/instagram',
+  },
+  {
+    channel: 'Facebook',
+    name: 'Facebook Messenger',
+    description: 'Connect a Facebook Page for messaging via the unified social webhook',
+    icon: '👥',
+    fields: [
+      { key: 'pageId', label: 'Facebook Page ID', placeholder: 'From Page settings → About', type: 'text' },
+      { key: 'accessToken', label: 'Page Access Token', placeholder: 'Long-lived token from Graph API', type: 'password' },
+      { key: 'appSecret', label: 'App Secret (optional)', placeholder: 'For webhook signature verification', type: 'password' },
+      { key: 'verifyToken', label: 'Webhook Verify Token', placeholder: 'Any string you choose', type: 'text' },
+    ],
+    docs: 'https://developers.facebook.com/docs/messenger-platform/getting-started',
   },
   {
     channel: 'Website',
@@ -52,9 +80,6 @@ const staffRoleOptions = [
   'Junior Sales Executive',
   'Design Consultant',
   'Warehouse Manager',
-  'Accountant',
-  'Accounts Executive',
-  'Logistics Executive',
 ];
 
 const getInitialInviteForm = () => ({
@@ -63,12 +88,8 @@ const getInitialInviteForm = () => ({
   phone: '',
   email: '',
   joinDate: new Date().toISOString().split('T')[0],
-  loginEmail: '',
+  loginUsername: '',
   loginPassword: '',
-  permissionRole: 'STAFF',
-  routingDepartmentId: '',
-  routingPhone: '',
-  routingAliases: '',
 });
 
 const getInitialEditForm = () => ({
@@ -79,12 +100,8 @@ const getInitialEditForm = () => ({
   email: '',
   status: 'Active',
   joinDate: new Date().toISOString().split('T')[0],
-  loginEmail: '',
+  loginUsername: '',
   loginPassword: '',
-  permissionRole: 'STAFF',
-  routingDepartmentId: '',
-  routingPhone: '',
-  routingAliases: '',
 });
 
 export default function SettingsPage() {
@@ -96,14 +113,13 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [storeSettings, setStoreSettings] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
-  const [routingDepartments, setRoutingDepartments] = useState([]);
   const [showInviteForm, setShowInviteForm] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState('');
   const [inviteSuccess, setInviteSuccess] = useState('');
   const [inviteForm, setInviteForm] = useState(getInitialInviteForm());
   const [showLoginSetupForm, setShowLoginSetupForm] = useState(false);
-  const [loginSetupForm, setLoginSetupForm] = useState({ staffId: '', loginEmail: '', loginPassword: '' });
+  const [loginSetupForm, setLoginSetupForm] = useState({ staffId: '', loginUsername: '', loginPassword: '' });
   const [assigningLogin, setAssigningLogin] = useState(false);
   const [assignLoginError, setAssignLoginError] = useState('');
   const [assignLoginSuccess, setAssignLoginSuccess] = useState('');
@@ -166,14 +182,9 @@ export default function SettingsPage() {
     role: s.role || 'Staff',
     status: s.status || 'Active',
     joinDate: s.joinDate || new Date().toISOString().split('T')[0],
-    loginEmail: s.loginEmail || s.loginUsername || '',
+    loginUsername: s.loginUsername || '',
     hasLogin: !!s.hasLogin,
     loginActive: !!s.loginActive,
-    permissionRole: s.permissionRole || 'STAFF',
-    routingDepartmentId: s.routingDepartmentId ? String(s.routingDepartmentId) : '',
-    routingDepartmentName: s.routingDepartmentName || '',
-    routingPhone: s.routingPhone || '',
-    routingAliases: Array.isArray(s.routingAliases) ? s.routingAliases.join(', ') : '',
   });
 
   const refreshTeamMembers = async () => {
@@ -189,10 +200,8 @@ export default function SettingsPage() {
     try {
       const payload = {
         ...inviteForm,
-        loginEmail: inviteForm.loginEmail.trim(),
+        loginUsername: inviteForm.loginUsername.trim(),
         loginPassword: inviteForm.loginPassword,
-        routingDepartmentId: inviteForm.routingDepartmentId ? Number(inviteForm.routingDepartmentId) : null,
-        routingAliases: inviteForm.routingAliases.split(',').map(value => value.trim()).filter(Boolean),
       };
 
       const res = await createStaff(payload);
@@ -219,7 +228,7 @@ export default function SettingsPage() {
     setAssignLoginSuccess('');
     setLoginSetupForm({
       staffId: String(member.id),
-      loginEmail: member.loginEmail || member.email || '',
+      loginUsername: member.email || '',
       loginPassword: '',
     });
   };
@@ -235,7 +244,7 @@ export default function SettingsPage() {
     try {
       const res = await assignStaffLogin(
         Number(loginSetupForm.staffId),
-        loginSetupForm.loginEmail,
+        loginSetupForm.loginUsername,
         loginSetupForm.loginPassword
       );
 
@@ -247,7 +256,7 @@ export default function SettingsPage() {
       await refreshTeamMembers();
       setAssignLoginSuccess('Login credentials assigned successfully');
       setShowLoginSetupForm(false);
-      setLoginSetupForm({ staffId: '', loginEmail: '', loginPassword: '' });
+      setLoginSetupForm({ staffId: '', loginUsername: '', loginPassword: '' });
     } catch (err) {
       console.error('Assign login error:', err);
       setAssignLoginError('Failed to assign login credentials. Please try again.');
@@ -268,12 +277,8 @@ export default function SettingsPage() {
       email: member.email || '',
       status: member.status || 'Active',
       joinDate: member.joinDate || new Date().toISOString().split('T')[0],
-      loginEmail: member.loginEmail || member.email || '',
+      loginUsername: member.loginUsername || '',
       loginPassword: '',
-      permissionRole: member.permissionRole || 'STAFF',
-      routingDepartmentId: member.routingDepartmentId || '',
-      routingPhone: member.routingPhone || '',
-      routingAliases: member.routingAliases || '',
     });
   };
 
@@ -294,12 +299,8 @@ export default function SettingsPage() {
         email: editForm.email,
         status: editForm.status,
         joinDate: editForm.joinDate,
-        loginEmail: editForm.loginEmail.trim(),
+        loginUsername: editForm.loginUsername.trim(),
         loginPassword: editForm.loginPassword,
-        permissionRole: editForm.permissionRole,
-        routingDepartmentId: editForm.routingDepartmentId ? Number(editForm.routingDepartmentId) : null,
-        routingPhone: editForm.routingPhone,
-        routingAliases: editForm.routingAliases.split(',').map(value => value.trim()).filter(Boolean),
       };
 
       const res = await updateStaffMember(payload);
@@ -402,8 +403,7 @@ export default function SettingsPage() {
       getStoreSettings(),
       getStaff(),
       getChannelConfigs(),
-      fetch('/api/routing/users', { cache: 'no-store' }).then(res => res.ok ? res.json() : null).catch(() => null),
-    ]).then(([settingsRes, staffRes, channelsRes, routingRes]) => {
+    ]).then(([settingsRes, staffRes, channelsRes]) => {
       if (settingsRes.success) {
         setStoreSettings(settingsRes.data);
         // Load SMTP form from saved settings
@@ -417,7 +417,6 @@ export default function SettingsPage() {
         });
       }
       if (staffRes.success) setTeamMembers(staffRes.data.map(mapTeamMember));
-      if (routingRes?.departments) setRoutingDepartments(routingRes.departments);
       if (channelsRes.success) {
         const configMap = {};
         const formMap = {};
@@ -865,20 +864,9 @@ export default function SettingsPage() {
               {inviteSuccess && <p className="mb-3 text-xs text-success">{inviteSuccess}</p>}
               {inviteError && <p className="mb-3 text-xs text-danger">{inviteError}</p>}
 
-              <div className="mb-4 rounded-xl border border-border bg-surface p-3">
-                <p className="text-xs font-semibold text-foreground">Routing readiness</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {routingDepartments.map(department => {
-                    const ready = teamMembers.filter(member => member.routingDepartmentId === String(department.id) && member.hasLogin && member.loginActive && member.routingPhone && member.status === 'Active').length;
-                    return <span key={department.id} className={`rounded-full px-2.5 py-1 text-[11px] ${ready > 0 ? 'bg-success-light text-success' : 'bg-danger-light text-danger'}`}>{department.name}: {ready} ready</span>;
-                  })}
-                </div>
-                <p className="mt-2 text-[11px] text-muted">A ready recipient has an active employee account, an active Staff profile, a department, and an authorized routing phone.</p>
-              </div>
-
               {showInviteForm && (
                 <form onSubmit={handleInviteMember} className="mb-5 p-4 rounded-xl bg-surface border border-border space-y-3">
-                  <p className="text-xs text-muted">Create the employee profile and login account together. Use the employee’s real email and assign a department only when they should receive that department’s routed work.</p>
+                  <p className="text-xs text-muted">Add a team member and optionally assign login credentials. Username can be anything unique (e.g. <strong>rahul123</strong>) — no email required.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-muted mb-1.5">Full Name</label>
@@ -921,27 +909,23 @@ export default function SettingsPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Login Email</label>
+                      <label className="block text-xs font-medium text-muted mb-1.5">Login Username <span className="text-muted font-normal">(optional, e.g. rahul123)</span></label>
                       <input
-                        type="email"
-                        value={inviteForm.loginEmail}
-                        onChange={e => setInviteForm(prev => ({ ...prev, loginEmail: e.target.value }))}
-                        placeholder="employee@example.com"
-                        autoComplete="username"
-                        required
+                        type="text"
+                        value={inviteForm.loginUsername}
+                        onChange={e => setInviteForm(prev => ({ ...prev, loginUsername: e.target.value }))}
+                        placeholder="e.g. rahul123 or john.doe"
+                        autoComplete="off"
                         className="w-full"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Temporary Password</label>
+                      <label className="block text-xs font-medium text-muted mb-1.5">Login Password</label>
                       <input
                         type="password"
                         value={inviteForm.loginPassword}
                         onChange={e => setInviteForm(prev => ({ ...prev, loginPassword: e.target.value }))}
-                        placeholder="Minimum 8 characters"
-                        minLength={8}
-                        autoComplete="new-password"
-                        required
+                        placeholder="Minimum 4 characters"
                         className="w-full"
                       />
                     </div>
@@ -955,33 +939,7 @@ export default function SettingsPage() {
                         className="w-full"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Permission Role</label>
-                      <select value={inviteForm.permissionRole} onChange={e => setInviteForm(prev => ({ ...prev, permissionRole: e.target.value }))} className="w-full">
-                        <option value="STAFF">Staff</option>
-                        {session?.user?.role === 'ADMIN' && <>
-                          <option value="MANAGER">Manager</option>
-                          <option value="ADMIN">Admin</option>
-                        </>}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Routing Department</label>
-                      <select value={inviteForm.routingDepartmentId} onChange={e => setInviteForm(prev => ({ ...prev, routingDepartmentId: e.target.value }))} className="w-full">
-                        <option value="">No routed department</option>
-                        {routingDepartments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Authorized Routing Phone</label>
-                      <input type="tel" value={inviteForm.routingPhone} onChange={e => setInviteForm(prev => ({ ...prev, routingPhone: e.target.value }))} placeholder="Country code + number" required={Boolean(inviteForm.routingDepartmentId)} className="w-full" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Routing Aliases <span className="font-normal">(optional)</span></label>
-                      <input type="text" value={inviteForm.routingAliases} onChange={e => setInviteForm(prev => ({ ...prev, routingAliases: e.target.value }))} placeholder="comma-separated names or aliases" className="w-full" />
-                    </div>
                   </div>
-                  <p className="text-[11px] text-muted">Department routing requires an active login and an authorized phone. The permission role controls CRM access; the job title above describes the employee’s work.</p>
                   <div className="flex items-center gap-2">
                     <button
                       type="submit"
@@ -1010,7 +968,7 @@ export default function SettingsPage() {
 
               {showLoginSetupForm && (
                 <form onSubmit={handleAssignLogin} className="mb-5 p-4 rounded-xl bg-surface border border-border space-y-3">
-                  <p className="text-xs text-muted">Assign a private email/password login to an existing team member. Department routing can be configured from the edit form.</p>
+                  <p className="text-xs text-muted">Assign login credentials for an existing team member.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-muted mb-1.5">Team Member</label>
@@ -1027,13 +985,13 @@ export default function SettingsPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Login Email</label>
+                      <label className="block text-xs font-medium text-muted mb-1.5">Login Username</label>
                       <input
-                        type="email"
-                        value={loginSetupForm.loginEmail}
-                        onChange={e => setLoginSetupForm(prev => ({ ...prev, loginEmail: e.target.value }))}
-                        placeholder="employee@example.com"
-                        autoComplete="username"
+                        type="text"
+                        value={loginSetupForm.loginUsername}
+                        onChange={e => setLoginSetupForm(prev => ({ ...prev, loginUsername: e.target.value }))}
+                        placeholder="e.g. rahul123 or john.doe"
+                        autoComplete="off"
                         required
                         className="w-full"
                       />
@@ -1045,8 +1003,7 @@ export default function SettingsPage() {
                         value={loginSetupForm.loginPassword}
                         onChange={e => setLoginSetupForm(prev => ({ ...prev, loginPassword: e.target.value }))}
                         required
-                        minLength={8}
-                        autoComplete="new-password"
+                        minLength={4}
                         className="w-full"
                       />
                     </div>
@@ -1065,7 +1022,7 @@ export default function SettingsPage() {
                         setShowLoginSetupForm(false);
                         setAssignLoginError('');
                         setAssignLoginSuccess('');
-                        setLoginSetupForm({ staffId: '', loginEmail: '', loginPassword: '' });
+                        setLoginSetupForm({ staffId: '', loginUsername: '', loginPassword: '' });
                       }}
                       className="px-3 py-2 border border-border rounded-xl text-sm text-muted hover:text-foreground hover:bg-surface-hover transition-all"
                     >
@@ -1080,7 +1037,7 @@ export default function SettingsPage() {
 
               {showEditForm && (
                 <form onSubmit={handleUpdateMember} className="mb-5 p-4 rounded-xl bg-surface border border-border space-y-3">
-                  <p className="text-xs text-muted">Update the employee profile, permission role, department routing, or login password. Changes take effect on the next request.</p>
+                  <p className="text-xs text-muted">Update team member profile and optionally reset login password.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-muted mb-1.5">Full Name</label>
@@ -1117,37 +1074,12 @@ export default function SettingsPage() {
                       <input type="date" value={editForm.joinDate} onChange={e => setEditForm(prev => ({ ...prev, joinDate: e.target.value }))} required className="w-full" />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Login Email</label>
-                      <input type="email" value={editForm.loginEmail} onChange={e => setEditForm(prev => ({ ...prev, loginEmail: e.target.value }))} placeholder="employee@example.com" autoComplete="username" className="w-full" />
+                      <label className="block text-xs font-medium text-muted mb-1.5">Login Username</label>
+                      <input type="text" value={editForm.loginUsername} onChange={e => setEditForm(prev => ({ ...prev, loginUsername: e.target.value }))} placeholder="e.g. rahul123" autoComplete="off" className="w-full" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-muted mb-1.5">New Password (optional)</label>
-                      <input type="password" value={editForm.loginPassword} onChange={e => setEditForm(prev => ({ ...prev, loginPassword: e.target.value }))} placeholder="Minimum 8 characters" minLength={8} autoComplete="new-password" className="w-full" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Permission Role</label>
-                      <select value={editForm.permissionRole} onChange={e => setEditForm(prev => ({ ...prev, permissionRole: e.target.value }))} className="w-full">
-                        <option value="STAFF">Staff</option>
-                        {session?.user?.role === 'ADMIN' && <>
-                          <option value="MANAGER">Manager</option>
-                          <option value="ADMIN">Admin</option>
-                        </>}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Routing Department</label>
-                      <select value={editForm.routingDepartmentId} onChange={e => setEditForm(prev => ({ ...prev, routingDepartmentId: e.target.value }))} className="w-full">
-                        <option value="">No routed department</option>
-                        {routingDepartments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Authorized Routing Phone</label>
-                      <input type="tel" value={editForm.routingPhone} onChange={e => setEditForm(prev => ({ ...prev, routingPhone: e.target.value }))} placeholder="Country code + number" required={Boolean(editForm.routingDepartmentId)} className="w-full" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-muted mb-1.5">Routing Aliases <span className="font-normal">(optional)</span></label>
-                      <input type="text" value={editForm.routingAliases} onChange={e => setEditForm(prev => ({ ...prev, routingAliases: e.target.value }))} placeholder="comma-separated names or aliases" className="w-full" />
+                      <input type="password" value={editForm.loginPassword} onChange={e => setEditForm(prev => ({ ...prev, loginPassword: e.target.value }))} placeholder="Leave blank to keep current" className="w-full" />
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1178,17 +1110,17 @@ export default function SettingsPage() {
 
               {/* Desktop table */}
               <table className="crm-table hidden sm:table">
-                <thead><tr><th>Name</th><th>Job Profile</th><th>Permission</th><th>Login</th><th>Routing</th><th>Status</th><th>Action</th></tr></thead>
+                <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Login</th><th>Status</th><th>Action</th></tr></thead>
                 <tbody>
                   {teamMembers.map((m) => (
                     <tr key={m.id}>
                       <td className="font-medium text-foreground">{m.name}</td>
-                      <td className="text-muted"><div>{m.role}</div><div className="text-[10px]">{m.email}</div></td>
-                      <td><span className="badge bg-accent-light text-accent">{m.permissionRole}</span></td>
+                      <td className="text-muted">{m.email}</td>
+                      <td><span className="badge bg-accent-light text-accent">{m.role}</span></td>
                       <td>
                         {m.hasLogin ? (
                           <div className="flex flex-col">
-                            <span className="text-xs text-foreground">{m.loginEmail}</span>
+                            <span className="text-xs text-foreground">{m.loginUsername}</span>
                             <span className={`text-[10px] ${m.loginActive ? 'text-success' : 'text-muted'}`}>{m.loginActive ? 'Active login' : 'Login disabled'}</span>
                           </div>
                         ) : (
@@ -1202,11 +1134,6 @@ export default function SettingsPage() {
                             </button>
                           </div>
                         )}
-                      </td>
-                      <td>
-                        {m.routingDepartmentName ? (
-                          <div className="flex flex-col"><span className="text-xs text-foreground">{m.routingDepartmentName}</span><span className={`text-[10px] ${m.routingPhone && m.loginActive && m.status === 'Active' ? 'text-success' : 'text-danger'}`}>{m.routingPhone && m.loginActive && m.status === 'Active' ? 'Ready recipient' : 'Setup required'}</span></div>
-                        ) : <span className="text-xs text-muted">Not assigned</span>}
                       </td>
                       <td><span className={`badge ${m.status === 'Active' ? 'bg-success-light text-success' : 'bg-info-light text-info'}`}>{m.status}</span></td>
                       <td>
@@ -1229,13 +1156,11 @@ export default function SettingsPage() {
                       <div>
                         <p className="text-sm font-medium text-foreground">{m.name}</p>
                         <p className="text-xs text-muted mt-0.5">{m.email}</p>
-                        <p className="text-[11px] text-muted mt-1">Login: {m.hasLogin ? m.loginEmail : 'Not assigned'}</p>
-                        <p className="text-[11px] text-muted mt-1">Routing: {m.routingDepartmentName ? `${m.routingDepartmentName} · ${m.routingPhone && m.loginActive && m.status === 'Active' ? 'Ready' : 'Setup required'}` : 'Not assigned'}</p>
+                        <p className="text-[11px] text-muted mt-1">Login: {m.hasLogin ? m.loginUsername : 'Not assigned'}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 mt-2">
                       <span className="badge bg-accent-light text-accent">{m.role}</span>
-                      <span className="badge bg-surface-hover text-muted">{m.permissionRole}</span>
                       <span className={`badge ${m.status === 'Active' ? 'bg-success-light text-success' : 'bg-info-light text-info'}`}>{m.status}</span>
                       <button
                         onClick={() => openEditMemberForm(m)}

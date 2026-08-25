@@ -7,6 +7,7 @@
     "dev:webpack": "next dev --webpack",
     "dev:clean": "rm -rf .next && next dev --webpack",
     "build": "next build --webpack && node scripts/prepare-standalone.mjs",
+    "postinstall": "prisma generate",
     "start": "node .next/standalone/server.js",
     "start:next": "next start",
     "lint": "eslint",
