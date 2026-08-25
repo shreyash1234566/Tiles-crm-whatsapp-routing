@@ -136,8 +136,9 @@ const BRANDS: Record<Vertical, BrandIdentity> = {
  * Requirements: 1.4, 13.2
  */
 export function resolveVertical(raw?: string | null): Vertical {
-    if (typeof raw !== 'string') return 'furniture'
-    return raw.trim().toLowerCase() === 'tiles' ? 'tiles' : 'furniture'
+    return typeof raw === 'string' && raw.trim().toLowerCase() === 'furniture'
+        ? 'furniture'
+        : 'tiles'
 }
 
 /**

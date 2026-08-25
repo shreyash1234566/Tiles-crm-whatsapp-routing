@@ -15,45 +15,17 @@ import IndiaMartIntegrationSettings from './IndiaMartIntegrationSettings';
 
 const channelDefinitions = [
   {
-    channel: 'WhatsApp',
-    name: 'WhatsApp Business',
-    description: 'Connect WhatsApp Business API for automated messaging',
+    channel: 'Evolution',
+    name: 'WhatsApp Group Routing',
+    description: 'Connect an Evolution API instance for group message routing',
     icon: '💬',
     fields: [
-      { key: 'phoneNumberId', label: 'Phone Number ID', placeholder: 'From Meta Business Suite', type: 'text' },
-      { key: 'apiToken', label: 'Permanent API Token', placeholder: 'Meta Graph API token', type: 'password' },
-      { key: 'verifyToken', label: 'Webhook Verify Token', placeholder: 'Any string you choose', type: 'text' },
-      { key: 'templateName', label: 'Notification Template Name', placeholder: 'e.g. furniture_order_update (approved template)', type: 'text' },
-      { key: 'templateLanguage', label: 'Template Language Code', placeholder: 'en (default)', type: 'text' },
+      { key: 'apiUrl', label: 'Evolution API URL', placeholder: 'https://evolution.example.com', type: 'text' },
+      { key: 'apiKey', label: 'Evolution API Key', placeholder: 'Server-side API key', type: 'password' },
+      { key: 'webhookSecret', label: 'Webhook Secret', placeholder: 'Separate inbound webhook secret', type: 'password' },
+      { key: 'llmModel', label: 'LLM Model', placeholder: 'e.g. llama-3.3-70b-versatile', type: 'text' },
     ],
-    docs: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started',
-  },
-  {
-    channel: 'Instagram',
-    name: 'Instagram',
-    description: 'Receive and reply to Instagram DMs via the unified social webhook',
-    icon: '📸',
-    fields: [
-      { key: 'igAccountId', label: 'Instagram Business Account ID', placeholder: 'From Meta Business Suite → Instagram → About', type: 'text' },
-      { key: 'pageId', label: 'Linked Facebook Page ID', placeholder: 'The Facebook Page linked to this Instagram account', type: 'text' },
-      { key: 'accessToken', label: 'Page Access Token', placeholder: 'Long-lived token from Graph API', type: 'password' },
-      { key: 'appSecret', label: 'App Secret (optional)', placeholder: 'For webhook signature verification', type: 'password' },
-      { key: 'verifyToken', label: 'Webhook Verify Token', placeholder: 'Any string you choose', type: 'text' },
-    ],
-    docs: 'https://developers.facebook.com/docs/messenger-platform/instagram',
-  },
-  {
-    channel: 'Facebook',
-    name: 'Facebook Messenger',
-    description: 'Connect a Facebook Page for messaging via the unified social webhook',
-    icon: '👥',
-    fields: [
-      { key: 'pageId', label: 'Facebook Page ID', placeholder: 'From Page settings → About', type: 'text' },
-      { key: 'accessToken', label: 'Page Access Token', placeholder: 'Long-lived token from Graph API', type: 'password' },
-      { key: 'appSecret', label: 'App Secret (optional)', placeholder: 'For webhook signature verification', type: 'password' },
-      { key: 'verifyToken', label: 'Webhook Verify Token', placeholder: 'Any string you choose', type: 'text' },
-    ],
-    docs: 'https://developers.facebook.com/docs/messenger-platform/getting-started',
+    docs: 'https://evolutionapi-evolution-api-90.mintlify.app/concepts/webhooks',
   },
   {
     channel: 'Website',

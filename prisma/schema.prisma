@@ -26,11 +26,24 @@ model User {
   isActive       Boolean  @default(true)
   staffId        Int?     @unique
   staff          Staff?   @relation(fields: [staffId], references: [id])
+  routingDepartmentId Int?
+  routingDepartment   RoutingDepartment? @relation(fields: [routingDepartmentId], references: [id])
+  routingPhone        String? @unique
+  routingAliases      String[] @default([])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   accounts Account[]
   sessions Session[]
+}
+
+model RoutingDepartment {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  users     User[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Account {
@@ -2897,4 +2910,103 @@ model DealerPriceListItem {
 
   @@unique([priceListId, productId])
   @@index([productId])
+}
+
+// ─── Evolution API group routing ──────────────────────────────────────────
+
+model EvolutionGroup {
+  id                 String   @id @default(cuid())
+  userId             Int
+  groupJid           String
+  subject            String
+  departmentId       Int?
+  departmentName     String?
+  routingReason      String?
+  routeType          String   @default("DEFAULT")
+  intent             String?
+  confidence         Float?
+  assignedUserId     Int?
+  mentionPriority    Boolean  @default(false)
+  lastMentionAt      DateTime?
+  lastMessageText    String?
+  lastMessageAt      DateTime?
+  lastInboundAt      DateTime?
+  unreadCount        Int      @default(0)
+  claimedByUserId    Int?
+  claimedAt          DateTime?
+  status             String   @default("open")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  messages           EvolutionGroupMessage[]
+  ticket             EvolutionGroupTicket?
+
+  @@unique([userId, groupJid])
+  @@index([userId, departmentId, status])
+  @@index([userId, mentionPriority, lastMessageAt])
+  @@index([groupJid])
+  @@map("evolution_groups")
+}
+
+model EvolutionGroupMessage {
+  id              String   @id @default(cuid())
+  groupId         String
+  messageId       String
+  senderJid       String
+  senderName      String?
+  text            String?
+  messageType     String   @default("text")
+  mediaUrl        String?
+  quotedMessageId String?
+  mentionedJids   String[] @default([])
+  fromMe          Boolean  @default(false)
+  status          String   @default("received")
+  createdAt       DateTime @default(now())
+
+  group           EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, messageId])
+  @@index([groupId, createdAt])
+  @@index([messageId])
+  @@map("evolution_group_messages")
+}
+
+model EvolutionGroupTicket {
+  id              String   @id @default(cuid())
+  groupId         String   @unique
+  departmentId    Int?
+  departmentName  String?
+  assignedUserId  Int?
+  status          String   @default("open")
+  routeType       String   @default("default")
+  lastIntent      String?
+  confidence      Float?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  group           EvolutionGroup         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  audits          EvolutionRoutingAudit[]
+
+  @@index([departmentId, status])
+  @@index([routeType, createdAt])
+  @@map("evolution_group_tickets")
+}
+
+model EvolutionRoutingAudit {
+  id                 String   @id @default(cuid())
+  ticketId           String
+  messageId          String?
+  event              String
+  routeType          String
+  fromDepartmentId   Int?
+  toDepartmentId     Int?
+  confidence         Float?
+  reason             String?
+  createdAt          DateTime @default(now())
+
+  ticket             EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@index([event, createdAt])
+  @@map("evolution_routing_audits")
 }

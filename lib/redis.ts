@@ -19,6 +19,8 @@ export interface ChatEvent {
   type: 'new_message' | 'message_status' | 'conversation_update' | 'new_conversation'
   /** Routing: ws-server emits only to `user:<userId>` rooms */
   userId: string
+  /** Additional server-selected recipients for department-scoped events. */
+  userIds?: string[]
   conversationId: string
   payload: Record<string, unknown>
 }

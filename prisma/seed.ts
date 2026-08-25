@@ -708,11 +708,10 @@ async function main() {
   const vertical = resolveVertical(process.env.BUSINESS_TYPE)
   console.log(`🏷️  Seeding vertical: ${vertical}\n`)
 
-  if (vertical === 'tiles') {
-    await seedTiles()
-  } else {
-    // Default / "furniture": behave exactly as before.
+  if (vertical === 'furniture') {
     await seedFurniture()
+  } else {
+    await seedTiles()
   }
 }
 

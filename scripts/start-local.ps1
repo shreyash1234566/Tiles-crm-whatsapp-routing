@@ -11,7 +11,7 @@ $env:Path = "C:\pgsql-local\pgsql\bin;C:\nodejs-new\node-v22.15.0-win-x64;" + $e
 
 Write-Host ""
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host "  Furniture CRM — Starting Dev Env"    -ForegroundColor Cyan
+Write-Host "  Tiles, Granite & Marble CRM — Starting Dev Env" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -35,8 +35,9 @@ if (-not $pgRunning) {
 }
 
 # ─── 4. Set DATABASE_URL env var ─────────────────────────
-$env:DATABASE_URL = "postgresql://postgres:postgres123@localhost:5432/furniturecrm"
-Write-Host "[3/5] DATABASE_URL set" -ForegroundColor Green
+$env:BUSINESS_TYPE = "tiles"
+$env:NEXT_PUBLIC_BUSINESS_TYPE = "tiles"
+Write-Host "[3/5] Tiles showroom configuration selected" -ForegroundColor Green
 
 # ─── 5. Check if node_modules exists, install if not ─────
 if (-not (Test-Path "node_modules")) {
@@ -49,7 +50,7 @@ if (-not (Test-Path "node_modules")) {
 # ─── 6. Start Next.js dev server ─────────────────────────
 Write-Host "[5/5] Starting Next.js..." -ForegroundColor Green
 Write-Host ""
-Write-Host "  Admin Login:  admin@furniturecrm.com / admin123" -ForegroundColor Magenta
+Write-Host "  Admin Login:  admin@tilescrm.com / admin123" -ForegroundColor Magenta
 Write-Host "  Staff Login:  [staff email] / staff123" -ForegroundColor Magenta
 Write-Host "  URL:          http://localhost:3000" -ForegroundColor Magenta
 Write-Host ""
