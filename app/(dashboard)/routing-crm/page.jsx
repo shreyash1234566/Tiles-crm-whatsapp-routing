@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronLeft, Circle, Link2, Loader2, MessageSquare, Paperclip, RefreshCw, Send, UserCheck, Wifi, WifiOff, X } from 'lucide-react';
 import { useSession } from '@/components/AuthProvider';
 import { useSearchParams } from 'next/navigation';
@@ -37,7 +37,7 @@ function MediaAttachment({ message }) {
   return <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="mb-2 flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-accent hover:underline">Download document</a>;
 }
 
-export default function RoutingCrmPage() {
+function RoutingCrmContent() {
   const { data: session, status } = useSession();
   const user = session?.user;
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'MANAGER';
@@ -183,7 +183,7 @@ export default function RoutingCrmPage() {
     }
   }
 
-  
+
   useEffect(() => {
     if (isAdmin && status === 'authenticated') {
       fetch('/api/routing/users').then((r) => r.json()).then(data => {
@@ -197,10 +197,10 @@ export default function RoutingCrmPage() {
     setTransferring(true);
     setNotice('');
     try {
-      const response = await fetch(`/api/evolution/groups/${activeGroup.id}`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ action: 'transfer', departmentId: Number(transferDeptId) }) 
+      const response = await fetch(`/api/evolution/groups/${activeGroup.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'transfer', departmentId: Number(transferDeptId) })
       });
       const body = await response.json();
       if (!response.ok) {
@@ -287,34 +287,96 @@ export default function RoutingCrmPage() {
         </aside>
 
         <main className={`min-w-0 flex-1 ${activeGroup ? 'flex' : 'hidden md:flex'} flex-col bg-white`}>
-          {!activeGroup ? <div className="flex h-full items-center justify-center p-8 text-center text-muted"><div><MessageSquare className="mx-auto mb-3 h-10 w-10 opacity-30" /><p className="font-semibold text-foreground">Select a group to open the conversation</p><p className="mt-1 text-sm">Department tickets will appear here after Evolution sends a group event.</p></div></div> : <>
-            <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"><div className="flex min-w-0 items-center gap-3"><button type="button" onClick={() => setActiveGroupId(null)} className="rounded-lg p-1.5 text-muted hover:bg-surface-hover md:hidden"><ChevronLeft className="h-5 w-5" /></button><div className="min-w-0"><h2 className="truncate text-sm font-bold text-foreground">{activeGroup.subject}</h2><p className="text-xs text-muted">{activeGroup.departmentName || 'Admin review'} · {(activeGroup.routeType || 'DEFAULT').replace('_', ' ')}{activeGroup.confidence ? ` · ${Math.round(activeGroup.confidence * 100)}% confidence` : ''} · {activeGroup.groupJid}</p></div></div><div className="flex items-center gap-2">
-  {isAdmin && (
-    <div className="flex items-center gap-1 mr-2 hidden md:flex">
-      <select 
-        value={transferDeptId} 
-        onChange={(e) => setTransferDeptId(e.target.value)}
-        className="text-xs rounded-md border border-border px-2 py-1 outline-none bg-slate-50"
-      >
-        <option value="">Transfer to...</option>
-        {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-      </select>
-      <button 
-        type="button" 
-        onClick={transferGroup} 
-        disabled={!transferDeptId || transferring}
-        className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-slate-200 disabled:opacity-50"
-      >
-        Transfer
-      </button>
-    </div>
-  )}
-<span className="hidden text-xs text-muted sm:inline">{activeGroup.claimedByUserId ? 'Claimed' : 'Unclaimed'}</span><button type="button" onClick={() => { void claimGroup(claimedByCurrentUser ? 'release' : 'claim'); }} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-surface-hover"><UserCheck className="h-3.5 w-3.5" />{claimedByCurrentUser ? 'Release' : 'Claim'}</button></div></div>
-            <div className="min-h-0 flex-1 overflow-y-auto bg-[#efeae2] p-4"><div className="mx-auto max-w-3xl space-y-2">{loadingMessages ? <div className="flex justify-center p-8"><Loader2 className="h-5 w-5 animate-spin text-accent" /></div> : messages.length === 0 ? <div className="py-12 text-center text-sm text-muted">No messages in this group yet.</div> : messages.map((message) => <div key={message.id} className={`flex ${message.fromMe ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[82%] rounded-xl px-3 py-2 shadow-sm ${message.fromMe ? 'bg-[#d9fdd3]' : 'bg-white'}`}><div className="mb-1 flex items-center gap-2"><span className="text-[11px] font-semibold text-foreground">{message.fromMe ? 'You' : (message.senderName || message.senderJid)}</span>{message.mentionedJids?.length > 0 && <span className="text-[10px] font-bold text-rose-700">Mentioned</span>}</div><MediaAttachment message={message} />{message.text ? <p className="whitespace-pre-wrap break-words text-sm text-foreground">{message.text}</p> : !message.mediaUrl && <p className="whitespace-pre-wrap break-words text-sm text-foreground">[{message.messageType}]</p>}<p className="mt-1 text-right text-[10px] text-muted">{formatTime(message.createdAt)} {message.fromMe && <Check className="ml-1 inline h-3 w-3" />}</p></div></div>)}</div></div>
-            <form onSubmit={sendMessage} className="shrink-0 border-t border-border bg-white p-3">{attachment && <div className="mb-2 flex items-center justify-between rounded-lg bg-slate-100 px-3 py-2 text-xs text-foreground"><span className="truncate">Attached: {attachment.name}</span><button type="button" onClick={() => { setAttachment(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} className="ml-2 rounded p-1 hover:bg-slate-200" aria-label="Remove attachment"><X className="h-4 w-4" /></button></div>}<div className="flex items-end gap-2"><input ref={fileInputRef} type="file" className="hidden" accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip" onChange={(event) => { const file = event.target.files?.[0]; if (file) setAttachment(file); }} /><button type="button" onClick={() => fileInputRef.current?.click()} className="rounded-lg p-2 text-muted hover:bg-surface-hover" title="Attach image, document, audio, or video"><Paperclip className="h-5 w-5" /></button><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(event); } }} rows={1} placeholder="Type a reply or attach a file…" className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-border bg-slate-50 px-3 py-2.5 text-sm text-foreground outline-none focus:border-accent" /><button type="submit" disabled={sending || (!draft.trim() && !attachment)} className="rounded-xl bg-accent p-3 text-white disabled:cursor-not-allowed disabled:opacity-50"><Send className="h-4 w-4" /></button></div></form>
-          </>}
+          {!activeGroup ? (
+            <div className="flex h-full items-center justify-center p-8 text-center text-muted"><div><MessageSquare className="mx-auto mb-3 h-10 w-10 opacity-30" /><p className="font-semibold text-foreground">Select a group to open the conversation</p><p className="mt-1 text-sm">Department tickets will appear here after Evolution sends a group event.</p></div></div>
+          ) : (
+            <>
+              <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <button type="button" onClick={() => setActiveGroupId(null)} className="rounded-lg p-1.5 text-muted hover:bg-surface-hover md:hidden"><ChevronLeft className="h-5 w-5" /></button>
+                  <div className="min-w-0">
+                    <h2 className="truncate text-sm font-bold text-foreground">{activeGroup.subject}</h2>
+                    <p className="text-xs text-muted">{activeGroup.departmentName || 'Admin review'} · {(activeGroup.routeType || 'DEFAULT').replace('_', ' ')}{activeGroup.confidence ? ` · ${Math.round(activeGroup.confidence * 100)}% confidence` : ''} · {activeGroup.groupJid}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {isAdmin && (
+                    <div className="flex items-center gap-1 mr-2 hidden md:flex">
+                      <select
+                        value={transferDeptId}
+                        onChange={(e) => setTransferDeptId(e.target.value)}
+                        className="text-xs rounded-md border border-border px-2 py-1 outline-none bg-slate-50"
+                      >
+                        <option value="">Transfer to...</option>
+                        {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={transferGroup}
+                        disabled={!transferDeptId || transferring}
+                        className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-slate-200 disabled:opacity-50"
+                      >
+                        Transfer
+                      </button>
+                    </div>
+                  )}
+                  <span className="hidden text-xs text-muted sm:inline">{activeGroup.claimedByUserId ? 'Claimed' : 'Unclaimed'}</span>
+                  <button type="button" onClick={() => { void claimGroup(claimedByCurrentUser ? 'release' : 'claim'); }} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-surface-hover"><UserCheck className="h-3.5 w-3.5" />{claimedByCurrentUser ? 'Release' : 'Claim'}</button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto bg-[#efeae2] p-4">
+                <div className="mx-auto max-w-3xl space-y-2">
+                  {loadingMessages ? (
+                    <div className="flex justify-center p-8"><Loader2 className="h-5 w-5 animate-spin text-accent" /></div>
+                  ) : messages.length === 0 ? (
+                    <div className="py-12 text-center text-sm text-muted">No messages in this group yet.</div>
+                  ) : (
+                    messages.map((message) => (
+                      <div key={message.id} className={`flex ${message.fromMe ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[82%] rounded-xl px-3 py-2 shadow-sm ${message.fromMe ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+                          <div className="mb-1 flex items-center gap-2">
+                            <span className="text-[11px] font-semibold text-foreground">{message.fromMe ? 'You' : (message.senderName || message.senderJid)}</span>
+                            {message.mentionedJids?.length > 0 && <span className="text-[10px] font-bold text-rose-700">Mentioned</span>}
+                          </div>
+                          <MediaAttachment message={message} />
+                          {message.text ? (
+                            <p className="whitespace-pre-wrap break-words text-sm text-foreground">{message.text}</p>
+                          ) : !message.mediaUrl && (
+                            <p className="whitespace-pre-wrap break-words text-sm text-foreground">[{message.messageType}]</p>
+                          )}
+                          <p className="mt-1 text-right text-[10px] text-muted">{formatTime(message.createdAt)} {message.fromMe && <Check className="ml-1 inline h-3 w-3" />}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+              <form onSubmit={sendMessage} className="shrink-0 border-t border-border bg-white p-3">
+                {attachment && (
+                  <div className="mb-2 flex items-center justify-between rounded-lg bg-slate-100 px-3 py-2 text-xs text-foreground">
+                    <span className="truncate">Attached: {attachment.name}</span>
+                    <button type="button" onClick={() => { setAttachment(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} className="ml-2 rounded p-1 hover:bg-slate-200" aria-label="Remove attachment"><X className="h-4 w-4" /></button>
+                  </div>
+                )}
+                <div className="flex items-end gap-2">
+                  <input ref={fileInputRef} type="file" className="hidden" accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip" onChange={(event) => { const file = event.target.files?.[0]; if (file) setAttachment(file); }} />
+                  <button type="button" onClick={() => fileInputRef.current?.click()} className="rounded-lg p-2 text-muted hover:bg-surface-hover" title="Attach image, document, audio, or video"><Paperclip className="h-5 w-5" /></button>
+                  <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(event); } }} rows={1} placeholder="Type a reply or attach a file…" className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-border bg-slate-50 px-3 py-2.5 text-sm text-foreground outline-none focus:border-accent" />
+                  <button type="submit" disabled={sending || (!draft.trim() && !attachment)} className="rounded-xl bg-accent p-3 text-white disabled:cursor-not-allowed disabled:opacity-50"><Send className="h-4 w-4" /></button>
+                </div>
+              </form>
+            </>
+          )}
         </main>
       </div>
     </div>
+  );
+}
+
+export default function RoutingCrmPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[70vh] flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-accent" /></div>}>
+      <RoutingCrmContent />
+    </Suspense>
   );
 }

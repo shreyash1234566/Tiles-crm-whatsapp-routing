@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
 import { prisma } from './db'
-import { markNotificationRead, getTopNotifications } from '../app/actions/notifications'
+import { markNotificationRead, getTopNotifications, markAllAlertNotificationsRead } from '../app/actions/notifications'
 import * as authHelpers from './auth-helpers'
 
 vi.mock('./db', () => ({
@@ -8,6 +12,7 @@ vi.mock('./db', () => ({
     notification: {
       findUnique: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       findMany: vi.fn(),
       count: vi.fn(),
     },
@@ -81,3 +86,32 @@ describe('Notifications logic', () => {
     expect(result).toEqual({ success: true })
   })
 })
+
+  it('markAll does not dismiss global alerts for non-admin', async () => {
+    vi.mocked(authHelpers.getSession).mockResolvedValue({ 
+      user: { id: 2, email: 'user@example.com', name: 'User', role: 'SALES' } 
+    } as any)
+    
+    await markAllAlertNotificationsRead()
+    
+    // Check updateMany call
+    expect(prisma.notification.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { read: false, userId: 2 }
+        })
+    )
+  })
+
+  it('markAll dismisses global alerts for admin', async () => {
+    vi.mocked(authHelpers.getSession).mockResolvedValue({ 
+      user: { id: 1, email: 'admin@example.com', name: 'Admin', role: 'ADMIN' } 
+    } as any)
+    
+    await markAllAlertNotificationsRead()
+    
+    expect(prisma.notification.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { read: false, OR: [{ userId: null }, { userId: 1 }] }
+        })
+    )
+  })

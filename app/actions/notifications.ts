@@ -195,9 +195,13 @@ export async function markAllAlertNotificationsRead() {
   const session = await getSession()
   if (!session?.user) return { success: false, error: 'Unauthorized' }
   const uId = Number(session.user.id)
+
+  const whereClause = session.user.role === 'ADMIN'
+    ? { read: false, OR: [{ userId: null }, { userId: uId }] }
+    : { read: false, userId: uId }
   
   await prisma.notification.updateMany({
-    where: { read: false, OR: [{ userId: null }, { userId: uId }] },
+    where: whereClause,
     data: { read: true },
   })
 

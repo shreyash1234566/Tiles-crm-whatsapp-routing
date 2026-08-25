@@ -121,6 +121,7 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
               title: item.senderName || item.senderJid.split('@')[0] || 'WhatsApp Group',
               subtitle: item.text ? (item.text.length > 50 ? item.text.substring(0, 50) + '...' : item.text) : 'New message in Group',
               href: '/routing-crm?group_id=' + result.group.id,
+              sourceId: item.messageId,
             }
           })
         )).catch(err => { console.error('[evolution/webhook] Failed to create notifications', err); return []; });

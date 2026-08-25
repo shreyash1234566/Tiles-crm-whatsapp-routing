@@ -7,7 +7,7 @@ const projectRoot = dirname(fileURLToPath(import.meta.url));
 const nextConfig = {
   output: 'standalone',
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   // @xenova/transformers loads ONNX native bindings — must NOT be bundled.
   // Next.js server-side bundling breaks native .node addons; marking these
