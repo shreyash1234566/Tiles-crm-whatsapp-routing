@@ -54,6 +54,19 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           where: { messageId: item.messageId, group: { is: { userId: ownerUserId, groupJid: item.groupJid } } },
           select: { id: true },
         })
+
+        // Create user-scoped notifications for each recipient
+        await Promise.all(recipients.map((user) => 
+          prisma.notification.create({
+            data: {
+              userId: user.id,
+              type: 'whatsapp',
+              title: item.senderName || item.senderJid.split('@')[0],
+              subtitle: item.text ? (item.text.length > 50 ? item.text.substring(0, 50) + '...' : item.text) : 'New message in Group',
+              href: '/routing-crm?group_id=' + result.group.id,
+            }
+          })
+        )).catch(err => console.error('[evolution/webhook] Failed to create notifications', err))
         if (duplicate) return
 
         const subject = item.subject === item.groupJid ? (await getEvolutionGroupSubject(item.groupJid)) || item.subject : item.subject

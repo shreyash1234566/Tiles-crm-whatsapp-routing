@@ -102,6 +102,7 @@ export default function TopBar() {
 
   const getNotificationIcon = (type) => {
     if (type === 'conversation') return MessageSquare;
+    if (type === 'whatsapp') return MessageSquare;
     if (type === 'followup') return CalendarClock;
     if (type === 'stock_alert') return Package;
     if (type === 'field_visit') return MapPin;
@@ -112,6 +113,7 @@ export default function TopBar() {
 
   const getNotificationIconColor = (type) => {
     if (type === 'conversation') return 'text-info bg-info/10';
+    if (type === 'whatsapp') return 'text-green-600 bg-green-500/10';
     if (type === 'followup') return 'text-accent bg-accent/10';
     if (type === 'stock_alert') return 'text-warning bg-warning/10';
     if (type === 'field_visit') return 'text-success bg-success/10';
@@ -126,7 +128,7 @@ export default function TopBar() {
       if (!Number.isNaN(convoId)) {
         await markConversationNotificationRead(convoId);
       }
-    } else if (item.type === 'stock_alert' || item.type === 'field_visit' || item.type === 'purchase_order' || item.type === 'financial_alert') {
+    } else if (item.type === 'whatsapp' || item.type === 'stock_alert' || item.type === 'field_visit' || item.type === 'purchase_order' || item.type === 'financial_alert') {
       const notifId = Number(item.id.split('-')[1]);
       if (!Number.isNaN(notifId)) {
         await markNotificationRead(notifId);

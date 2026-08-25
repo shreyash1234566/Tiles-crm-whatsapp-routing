@@ -35,7 +35,7 @@ const staffPortalInclude: Prisma.StaffInclude = {
   activities: { orderBy: { date: 'desc' }, take: 10 },
   fieldVisits: { orderBy: { date: 'desc' }, take: 5 },
   stockUpdates: { orderBy: { date: 'desc' }, take: 5 },
-  user: { select: { email: true, isActive: true } },
+  user: { select: { email: true, isActive: true, routingDepartmentId: true, routingPhone: true, routingAliases: true } },
   _count: { select: { leads: true, invoices: true, customOrders: true } },
 }
 
@@ -66,6 +66,9 @@ const mapStaffForPortal = (s: any) => ({
   loginUsername: s.user?.email || null,
   hasLogin: !!s.user,
   loginActive: s.user?.isActive ?? false,
+  routingDepartmentId: s.user?.routingDepartmentId ?? null,
+  routingPhone: s.user?.routingPhone ?? null,
+  routingAliases: s.user?.routingAliases ?? [],
   status: s.status,
   joinDate: s.joinDate ? s.joinDate.toISOString().split('T')[0] : null,
   avatar: s.avatar,
@@ -218,6 +221,9 @@ export async function createStaff(data: unknown) {
           hashedPassword,
           role: 'STAFF' as UserRole,
           staffId: createdStaff.id,
+          routingDepartmentId: parsed.data.routingDepartmentId || null,
+          routingPhone: parsed.data.routingPhone || null,
+          routingAliases: parsed.data.routingAliases || [],
         },
       })
     }
@@ -335,8 +341,18 @@ export async function updateStaffMember(data: unknown) {
     })
 
     if (existing.user) {
-      const userData: { name: string; email?: string; hashedPassword?: string } = {
+      const userData: { name: string; email?: string; hashedPassword?: string; routingDepartmentId?: number | null; routingPhone?: string | null; routingAliases?: string[] } = {
         name: parsed.data.name,
+      }
+
+      if (parsed.data.routingDepartmentId !== undefined) {
+        userData.routingDepartmentId = parsed.data.routingDepartmentId
+      }
+      if (parsed.data.routingPhone !== undefined) {
+        userData.routingPhone = parsed.data.routingPhone
+      }
+      if (parsed.data.routingAliases !== undefined) {
+        userData.routingAliases = parsed.data.routingAliases
       }
 
       if (loginUsername) userData.email = loginUsername
@@ -351,6 +367,9 @@ export async function updateStaffMember(data: unknown) {
           hashedPassword: await bcrypt.hash(loginPassword, 12),
           role: 'STAFF' as UserRole,
           staffId: parsed.data.id,
+          routingDepartmentId: parsed.data.routingDepartmentId || null,
+          routingPhone: parsed.data.routingPhone || null,
+          routingAliases: parsed.data.routingAliases || [],
         },
       })
     }

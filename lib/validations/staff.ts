@@ -23,6 +23,9 @@ export const createStaffSchema = z.object({
   joinDate: z.string(),
   loginUsername: loginUsernameSchema.optional(),
   loginPassword: z.union([z.literal(''), z.string().min(4)]).optional(),
+  routingDepartmentId: z.number().int().positive().nullable().optional(),
+  routingPhone: z.string().nullable().optional(),
+  routingAliases: z.array(z.string()).optional(),
 })
 
 export const updateStaffSchema = z.object({
@@ -35,6 +38,9 @@ export const updateStaffSchema = z.object({
   joinDate: z.string(),
   loginUsername: loginUsernameSchema.optional(),
   loginPassword: z.union([z.literal(''), z.string().min(4)]).optional(),
+  routingDepartmentId: z.number().int().positive().nullable().optional(),
+  routingPhone: z.string().nullable().optional(),
+  routingAliases: z.array(z.string()).optional(),
 })
 
 export const clockInSchema = z.object({

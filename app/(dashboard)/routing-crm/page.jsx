@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronLeft, Circle, Link2, Loader2, MessageSquare, Paperclip, RefreshCw, Send, UserCheck, Wifi, WifiOff, X } from 'lucide-react';
 import { useSession } from '@/components/AuthProvider';
+import { useSearchParams } from 'next/navigation';
 import { useRealtime } from '@/hooks/use-realtime';
 
 function formatTime(value) {
@@ -55,6 +56,8 @@ export default function RoutingCrmPage() {
   const [departments, setDepartments] = useState([]);
   const [transferDeptId, setTransferDeptId] = useState('');
   const [transferring, setTransferring] = useState(false);
+  const searchParams = useSearchParams();
+  const initialGroupId = searchParams ? searchParams.get('group_id') : null;
   const fileInputRef = useRef(null);
 
   const activeGroup = useMemo(() => groups.find((group) => group.id === activeGroupId) || null, [groups, activeGroupId]);
@@ -117,16 +120,26 @@ export default function RoutingCrmPage() {
     onMessageEvent: refreshFromRealtime,
   });
 
-  useEffect(() => {
+    useEffect(() => {
     if (status !== 'authenticated') return;
-    void loadGroups();
+    
+    // Parse the async groups result to set initial group id
+    loadGroups().then((loaded) => {
+      if (initialGroupId && !activeGroupId) {
+        const idNum = Number(initialGroupId);
+        if (!Number.isNaN(idNum) && loaded && loaded.some(g => g.id === idNum)) {
+          setActiveGroupId(idNum);
+        }
+      }
+    });
+
     void loadConnection();
     const timer = setInterval(() => {
       void loadGroups();
       void loadConnection();
     }, 30000);
     return () => clearInterval(timer);
-  }, [status, loadGroups, loadConnection]);
+  }, [status, loadGroups, loadConnection, initialGroupId, activeGroupId]);
 
   useEffect(() => {
     void loadMessages(activeGroupId);

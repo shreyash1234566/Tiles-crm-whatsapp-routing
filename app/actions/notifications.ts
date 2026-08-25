@@ -2,12 +2,12 @@
 
 import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
-import { requireRole } from '@/lib/auth-helpers'
+import { requireRole, getSession } from '@/lib/auth-helpers'
 import { notifyManagers } from '@/lib/notify'
 
 type NotificationItem = {
   id: string
-  type: 'conversation' | 'followup' | 'invoice' | 'stock_alert' | 'field_visit' | 'purchase_order' | 'financial_alert'
+  type: 'conversation' | 'followup' | 'invoice' | 'stock_alert' | 'field_visit' | 'purchase_order' | 'financial_alert' | 'whatsapp'
   title: string
   subtitle: string
   date: string
@@ -16,6 +16,11 @@ type NotificationItem = {
 }
 
 export async function getTopNotifications() {
+  const session = await getSession()
+  if (!session?.user) return { success: false, data: [] }
+  const uId = Number(session.user.id)
+  const notifWhere = { read: false, OR: [{ userId: null }, { userId: uId }] }
+
   const now = new Date()
   const followUpWhere = {
     sent: false,
@@ -77,11 +82,11 @@ export async function getTopNotifications() {
     prisma.followUp.count({ where: followUpWhere }),
     prisma.invoice.count({ where: overdueInvoiceWhere }),
     prisma.notification.findMany({
-      where: { read: false },
+      where: notifWhere,
       orderBy: { createdAt: 'desc' },
       take: 8,
     }),
-    prisma.notification.count({ where: { read: false } }),
+    prisma.notification.count({ where: notifWhere }),
   ])
 
   const conversationItems: NotificationItem[] = unreadConversations.map(c => ({
@@ -171,7 +176,7 @@ export async function markNotificationRead(notificationId: number) {
 
 export async function markAllAlertNotificationsRead() {
   await prisma.notification.updateMany({
-    where: { read: false },
+    where: notifWhere,
     data: { read: true },
   })
 
