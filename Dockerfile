@@ -7,6 +7,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma/
 COPY prisma.config.ts ./
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund --progress=false
 
 # ─── Stage 2: Builder ─────────────────────────────────
@@ -15,6 +16,7 @@ WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
 # Generate Prisma client
 ARG DATABASE_URL="postgresql://postgres:postgres@localhost:5432/furniturecrm"
@@ -36,7 +38,7 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Install curl (healthcheck), gosu (permissions), and libgomp1 (required by ONNX runtime)
-RUN apt-get update && apt-get install -y --no-install-recommends curl gosu libgomp1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl gosu libgomp1 openssl && rm -rf /var/lib/apt/lists/*
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs

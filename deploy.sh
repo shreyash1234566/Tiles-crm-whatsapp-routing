@@ -112,12 +112,16 @@ health_check() {
 
   check() {
     local label=$1 url=$2
-    if curl -fsS --max-time 10 "${url}" >/dev/null 2>&1; then
-      log "  ✓ ${label}"
-    else
-      log "  ✗ ${label}  (${url})"
-      ok=false
-    fi
+    local attempt
+    for attempt in $(seq 1 24); do
+      if curl -fsS --max-time 10 "${url}" >/dev/null 2>&1; then
+        log "  ✓ ${label}"
+        return
+      fi
+      [[ "${attempt}" -lt 24 ]] && sleep 5
+    done
+    log "  ✗ ${label}  (${url})"
+    ok=false
   }
 
   check "CRM app (localhost:4000)" "http://localhost:4000/api/auth/me"
