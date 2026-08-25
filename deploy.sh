@@ -20,8 +20,9 @@ COMPOSE_PROD="${REPO_DIR}/docker-compose.prod.yml"
 GIT_REMOTE="origin"
 GIT_BRANCH="main"
 GIT_REPO="https://github.com/shreyash1234566/Tiles-crm-whatsapp-routing.git"
+COMPOSE_PROJECT="repo"
 
-COMPOSE_CMD="docker compose -f ${COMPOSE_BASE} -f ${COMPOSE_PROD} --env-file ${ENV_FILE}"
+COMPOSE_CMD="docker compose --project-name ${COMPOSE_PROJECT} -f ${COMPOSE_BASE} -f ${COMPOSE_PROD} --env-file ${ENV_FILE}"
 CRM_APP_HOST_PORT=4000
 CRM_WS_HOST_PORT=4001
 
@@ -96,7 +97,11 @@ start_services() {
   # remains untouched.
   log "Removing previous containers and stale project network..."
   ${COMPOSE_CMD} down --remove-orphans --timeout 30 >/dev/null 2>&1 || true
-  docker network rm repo_internal >/dev/null 2>&1 || true
+  local network_labels
+  network_labels="$(docker network inspect repo_internal --format '{{.Labels}}' 2>/dev/null || true)"
+  if [[ "${network_labels}" == *"com.docker.compose.project:${COMPOSE_PROJECT}"* ]]; then
+    docker network rm repo_internal >/dev/null 2>&1 || true
+  fi
 
   log "Starting databases and Redis..."
   ${COMPOSE_CMD} up -d evolution-db evolution-redis db redis
