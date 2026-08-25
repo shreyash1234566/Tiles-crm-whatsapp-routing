@@ -30,17 +30,19 @@ services:
       NEXT_PUBLIC_WS_URL: "https://${DOMAIN}"
     networks:
       - internal
+      - edge
     depends_on:
       evolution:
         condition: service_healthy
 
-  # ── WebSocket gateway — internal only (Nginx proxies /socket.io/) ─────
+  # ── WebSocket gateway — internal services + host Nginx edge ───────────
   ws-server:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${CRM_WS_HOST_PORT:-4001}:3001"
     networks:
       - internal
+      - edge
 
   # ── CRM Postgres — internal ───────────────────────────────────────────
   db:
@@ -150,3 +152,7 @@ volumes:
 networks:
   internal:
     internal: true
+  # Host-published app/WebSocket ports must attach to a non-internal bridge.
+  # Databases, Redis, and Evolution remain isolated on `internal` only.
+  edge:
+    driver: bridge
