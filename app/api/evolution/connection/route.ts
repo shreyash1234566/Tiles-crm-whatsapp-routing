@@ -9,7 +9,7 @@ async function requireAdmin() {
 }
 
 export async function GET() {
-  if (!await requireAdmin()) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (!await getSession()) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   try {
     return NextResponse.json(await getEvolutionConnectionState())
   } catch (error) {
