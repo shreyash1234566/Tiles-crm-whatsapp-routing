@@ -71,7 +71,7 @@ services:
 
   # ── Evolution API ──────────────────────────────────────────────────────────
   evolution:
-    image: atendai/evolution-api:v2.2.3   # pin to a specific release
+    image: evoapicloud/evolution-api:v2.3.7   # pin to a specific release
     restart: unless-stopped
     expose:
       - "8080"
