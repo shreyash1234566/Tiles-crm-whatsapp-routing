@@ -79,6 +79,12 @@ run_migrations() {
 
 # ── Start services ───────────────────────────────────────────────────────────
 start_services() {
+  # The production overlay owns the internal Docker network. Remove only the
+  # old app-side containers first so Compose can safely recreate that network
+  # after a compose-file change; named database volumes remain untouched.
+  log "Removing previous app-side containers..."
+  ${COMPOSE_CMD} rm --stop --force app ws-server evolution >/dev/null 2>&1 || true
+
   log "Starting databases and Redis..."
   ${COMPOSE_CMD} up -d evolution-db evolution-redis db redis
 
