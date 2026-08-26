@@ -8,7 +8,7 @@
 -- Idempotent (IF NOT EXISTS / guarded constraints) so it is safe to apply on
 -- databases that were previously synced with `prisma db push`.
 
--- ── fb_config ───────────────────────────────────────────────────────────────
+-- -- fb_config ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "fb_config" (
   "id" TEXT NOT NULL,
   "user_id" TEXT NOT NULL,
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS "fb_config" (
 CREATE UNIQUE INDEX IF NOT EXISTS "fb_config_user_id_key"
   ON "fb_config" ("user_id");
 
--- ── ig_config ───────────────────────────────────────────────────────────────
+-- -- ig_config ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "ig_config" (
   "id" TEXT NOT NULL,
   "user_id" TEXT NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS "ig_config" (
 CREATE UNIQUE INDEX IF NOT EXISTS "ig_config_user_id_key"
   ON "ig_config" ("user_id");
 
--- ── social_contacts ─────────────────────────────────────────────────────────
+-- -- social_contacts ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "social_contacts" (
   "id" TEXT NOT NULL,
   "user_id" TEXT NOT NULL,
@@ -67,7 +67,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "social_contacts_user_id_platform_platform_id_
 CREATE INDEX IF NOT EXISTS "social_contacts_user_id_platform_idx"
   ON "social_contacts" ("user_id", "platform");
 
--- ── social_conversations ────────────────────────────────────────────────────
+-- -- social_conversations ----------------------------------------------------
 CREATE TABLE IF NOT EXISTS "social_conversations" (
   "id" TEXT NOT NULL,
   "user_id" TEXT NOT NULL,
@@ -108,7 +108,7 @@ BEGIN
   END IF;
 END $$;
 
--- ── social_messages ─────────────────────────────────────────────────────────
+-- -- social_messages ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "social_messages" (
   "id" TEXT NOT NULL,
   "conversation_id" TEXT NOT NULL,

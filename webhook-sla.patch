@@ -1,0 +1,29 @@
+--- app/api/evolution/webhook/route.ts
++++ app/api/evolution/webhook/route.ts
+@@ -2,6 +2,7 @@
+ import { prisma } from '@/lib/db'
+ import { downloadEvolutionMedia, isAuthorizedEvolutionWebhook, extractEvolutionMessages, getEvolutionGroupSubject, resolveDepartmentForMessage } from '@/lib/evolution-routing'
+ import { publishEvent } from '@/lib/redis'
++import { calculateSLADueDates } from '@/lib/routing/sla'
+ import { uploadFile } from '@/lib/r2'
+ 
+ const MAX_MEDIA_BYTES = 25 * 1024 * 1024
+@@ -87,6 +88,18 @@
+             update: { departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
+             create: { groupId: group.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
+           })
++          
++          if (routing.departmentId) {
++            const departmentSLA = await tx.departmentSLA.findUnique({ where: { departmentId: routing.departmentId } });
++            if (departmentSLA) {
++              const dueDates = calculateSLADueDates(departmentSLA, item.createdAt);
++              await tx.ticketSLA.upsert({
++                where: { ticketId: ticket.id },
++                update: { firstResponseDue: dueDates.firstResponseDue, resolutionDue: dueDates.resolutionDue },
++                create: { ticketId: ticket.id, firstResponseDue: dueDates.firstResponseDue, resolutionDue: dueDates.resolutionDue }
++              });
++            }
++          }
++
+           const message = await tx.evolutionGroupMessage.create({ data: { groupId: group.id, messageId: item.messageId, senderJid: item.senderJid, senderName: item.senderName, text: item.text, messageType: item.messageType, mediaUrl: storedMediaUrl, quotedMessageId: item.quotedMessageId, mentionedJids: item.mentionedJids, fromMe: false, status: 'received', createdAt: item.createdAt } })
+           const isHandoff = fromDepartmentId !== null && routing.departmentId !== null && fromDepartmentId !== routing.departmentId

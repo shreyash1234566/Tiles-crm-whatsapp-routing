@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db'
 import { downloadEvolutionMedia, isAuthorizedEvolutionWebhook, extractEvolutionMessages, getEvolutionGroupSubject, resolveDepartmentForMessage } from '@/lib/evolution-routing'
 import { publishEvent } from '@/lib/redis'
 import { uploadFile } from '@/lib/r2'
+import { calculateSLADueDates } from '@/lib/routing/sla'
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 
@@ -72,33 +73,65 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
             console.warn(`[evolution/media] inbound media exceeds ${MAX_MEDIA_BYTES} bytes; message ${item.messageId} kept without file`)
           }
         }
-        const previous = await prisma.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { departmentId: true } })
-        const routing = await resolveDepartmentForMessage({ groupJid: item.groupJid, subject, text: item.text, mentionedJids: item.mentionedJids, existingDepartmentId: previous?.departmentId })
+        const routingMatches = await resolveDepartmentForMessage({ groupJid: item.groupJid, subject, text: item.text, mentionedJids: item.mentionedJids })
         const result = await prisma.$transaction(async (tx) => {
-          const current = await tx.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { id: true, departmentId: true } })
-          const fromDepartmentId = current?.departmentId ?? null
           const group = await tx.evolutionGroup.upsert({
             where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
-            update: { subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
-            create: { userId: ownerUserId, groupJid: item.groupJid, subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
+            update: { subject, lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, lastInboundAt: item.createdAt, unreadCount: { increment: 1 } },
+            create: { userId: ownerUserId, groupJid: item.groupJid, subject, lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, lastInboundAt: item.createdAt, unreadCount: 1 },
           })
           const ticket = await tx.evolutionGroupTicket.upsert({
             where: { groupId: group.id },
-            update: { departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
-            create: { groupId: group.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
+            update: { status: 'open' },
+            create: { groupId: group.id, status: 'open' },
           })
+
+          for (const match of routingMatches) {
+            if (!match.departmentId) continue
+            
+            const workItem = await tx.departmentWorkItem.upsert({
+              where: { ticketId_departmentId_sourceMessageId: { ticketId: ticket.id, departmentId: match.departmentId, sourceMessageId: item.messageId } },
+              update: {},
+              create: {
+                ticketId: ticket.id,
+                departmentId: match.departmentId,
+                departmentName: match.departmentName,
+                assignedUserId: match.assignedUserId ?? null,
+                status: 'open',
+                routeType: match.routeType,
+                routingReason: match.routingReason,
+                confidence: match.confidence ?? null,
+                intent: match.intent ?? null,
+                mentionPriority: match.mentionPriority,
+                sourceMessageId: item.messageId,
+              }
+            })
+
+            const departmentSLA = await tx.departmentSLA.findUnique({ where: { departmentId: match.departmentId } });
+            if (departmentSLA) {
+              // @ts-ignore - calculateSLADueDates imported
+              const dueDates = calculateSLADueDates(departmentSLA, item.createdAt);
+              await tx.workItemSLA.upsert({
+                where: { workItemId: workItem.id },
+                update: { firstResponseDue: dueDates.firstResponseDue, resolutionDue: dueDates.resolutionDue },
+                create: { workItemId: workItem.id, firstResponseDue: dueDates.firstResponseDue, resolutionDue: dueDates.resolutionDue }
+              });
+            }
+            
+            await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: item.messageId, event: 'ROUTED_WORK_ITEM', routeType: match.routeType, toDepartmentId: match.departmentId, confidence: match.confidence ?? null, reason: match.routingReason } })
+          }
+
           const message = await tx.evolutionGroupMessage.create({ data: { groupId: group.id, messageId: item.messageId, senderJid: item.senderJid, senderName: item.senderName, text: item.text, messageType: item.messageType, mediaUrl: storedMediaUrl, quotedMessageId: item.quotedMessageId, mentionedJids: item.mentionedJids, fromMe: false, status: 'received', createdAt: item.createdAt } })
-          const isHandoff = fromDepartmentId !== null && routing.departmentId !== null && fromDepartmentId !== routing.departmentId
-          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, event: isHandoff ? 'HANDOFF' : 'ROUTED', routeType: routing.routeType, fromDepartmentId, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason } })
-          const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, lastInboundAt: item.createdAt, unreadCount: { increment: 1 } } })
-          return { message, group: updatedGroup }
+          return { message, group, routingMatches }
         })
+        
+        const departmentIds = result.routingMatches.map(m => m.departmentId).filter((id): id is number => id !== null)
         const recipients = await prisma.user.findMany({
           where: {
             isActive: true,
             OR: [
               { id: ownerUserId },
-              ...(result.group.departmentId ? [{ routingDepartmentId: result.group.departmentId }] : []),
+              ...(departmentIds.length > 0 ? [{ routingDepartmentId: { in: departmentIds } }] : []),
             ],
           },
           select: { id: true },

@@ -16,13 +16,16 @@ import Redis from 'ioredis'
 
 export interface ChatEvent {
   /** Discriminator — drives the switch in use-realtime.ts */
-  type: 'new_message' | 'message_status' | 'conversation_update' | 'new_conversation'
+  type: 'new_message' | 'message_status' | 'conversation_update' | 'new_conversation' | 'sla_breach' | 'kpi_update' | 'alert_triggered' | 'alert_resolved'
   /** Routing: ws-server emits only to `user:<userId>` rooms */
   userId: string
   /** Additional server-selected recipients for department-scoped events. */
   userIds?: string[]
   conversationId: string
   payload: Record<string, unknown>
+  ticketId?: string
+  departmentId?: number
+  message?: string
 }
 
 // ── Singleton ──────────────────────────────────────────────────────────────

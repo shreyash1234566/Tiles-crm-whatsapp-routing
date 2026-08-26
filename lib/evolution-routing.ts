@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import { prisma } from '@/lib/db'
+import { evaluateRoutingRules } from '@/lib/routing/rule-engine'
 
 export type EvolutionConfig = {
   baseUrl: string

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, ChevronLeft, Circle, Link2, Loader2, MessageSquare, Paperclip, RefreshCw, Send, UserCheck, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle, ChevronLeft, Circle, Link2, Loader2, MessageSquare, Paperclip, RefreshCw, Send, UserCheck, Wifi, WifiOff, X } from 'lucide-react';
 import { useSession } from '@/components/AuthProvider';
 import { useSearchParams } from 'next/navigation';
 import { useRealtime } from '@/hooks/use-realtime';
@@ -44,8 +44,8 @@ function RoutingCrmContent() {
   const [connection, setConnection] = useState({ configured: null, state: 'loading' });
   const [qr, setQr] = useState(null);
   const [qrLoading, setQrLoading] = useState(false);
-  const [groups, setGroups] = useState([]);
-  const [activeGroupId, setActiveGroupId] = useState(null);
+  const [workItems, setWorkItems] = useState([]);
+  const [activeWorkItemId, setActiveWorkItemId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -60,8 +60,9 @@ function RoutingCrmContent() {
   const initialGroupId = searchParams ? searchParams.get('group_id') : null;
   const fileInputRef = useRef(null);
 
-  const activeGroup = useMemo(() => groups.find((group) => group.id === activeGroupId) || null, [groups, activeGroupId]);
-  const claimedByCurrentUser = Boolean(activeGroup && Number(activeGroup.claimedByUserId) === Number(user?.id));
+  const activeWorkItem = useMemo(() => workItems.find((w) => w.workItemId === activeWorkItemId) || null, [workItems, activeWorkItemId]);
+  const activeGroupId = activeWorkItem?.id || null;
+  const claimedByCurrentUser = Boolean(activeWorkItem && Number(activeWorkItem.assignedUserId) === Number(user?.id));
 
   const loadConnection = useCallback(async () => {
     try {
@@ -75,18 +76,22 @@ function RoutingCrmContent() {
 
   const loadGroups = useCallback(async () => {
     try {
-      const response = await fetch('/api/evolution/groups', { cache: 'no-store' });
-      if (!response.ok) throw new Error('Unable to load groups');
+      const response = await fetch('/api/evolution/work-items', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Unable to load work items');
       const body = await response.json();
-      setGroups(body.data || []);
+      setWorkItems(body.data || []);
 
-      setActiveGroupId((current) => {
+      setActiveWorkItemId((current) => {
         const urlId = initialGroupId || null;
-        if (urlId && body.data?.some(g => g.id === urlId)) return urlId;
-        return current && (body.data || []).some((group) => group.id === current) ? current : (body.data?.[0]?.id || null);
+        if (urlId) {
+            // Find a work item that corresponds to this group ID
+            const match = (body.data || []).find(w => w.id === urlId);
+            if (match) return match.workItemId;
+        }
+        return current && (body.data || []).some((w) => w.workItemId === current) ? current : (body.data?.[0]?.workItemId || null);
       });
     } catch (error) {
-      setNotice(error.message || 'Unable to load groups');
+      setNotice(error.message || 'Unable to load work items');
     } finally {
       setLoadingGroups(false);
     }
@@ -103,7 +108,7 @@ function RoutingCrmContent() {
       if (!response.ok) throw new Error('Unable to load messages');
       const body = await response.json();
       setMessages(body.data || []);
-      setGroups((current) => current.map((group) => group.id === groupId ? { ...group, unreadCount: 0 } : group));
+      setWorkItems((current) => current.map((w) => w.id === groupId ? { ...w, unreadCount: 0 } : w));
     } catch (error) {
       setNotice(error.message || 'Unable to load messages');
     } finally {
@@ -130,11 +135,12 @@ function RoutingCrmContent() {
 
     if (initialGroupId) {
       const idNum = initialGroupId;
-      if (groups.some(g => g.id === idNum)) {
-        setActiveGroupId(idNum);
+      if (workItems.some(g => g.id === idNum)) {
+        const match = workItems.find(w => w.id === idNum);
+        if (match) setActiveWorkItemId(match.workItemId);
       }
     }
-  }, [initialGroupId, groups]);
+  }, [initialGroupId, workItems]);
 
   useEffect(() => {
     if (status !== 'authenticated') return;
@@ -193,56 +199,57 @@ function RoutingCrmContent() {
   }, [isAdmin, status]);
 
   async function transferGroup() {
-    if (!activeGroup || !transferDeptId || transferring) return;
+    if (!activeWorkItem || !transferDeptId || transferring) return;
     setTransferring(true);
     setNotice('');
     try {
-      const response = await fetch(`/api/evolution/groups/${activeGroup.id}`, {
+      // Use the work item API for transfer
+      const response = await fetch(`/api/evolution/work-items/${activeWorkItem.workItemId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'transfer', departmentId: Number(transferDeptId) })
       });
       const body = await response.json();
       if (!response.ok) {
-        setNotice(body.error || 'Unable to transfer group');
+        setNotice(body.error || 'Unable to transfer work item');
         return;
       }
-      setGroups((current) => current.map((group) => group.id === activeGroup.id ? body.data : group));
+      setWorkItems((current) => current.map((w) => w.workItemId === activeWorkItem.workItemId ? body.data : w));
       setTransferDeptId('');
     } catch (err) {
-      setNotice('Error transferring group');
+      setNotice('Error transferring work item');
     } finally {
       setTransferring(false);
     }
   }
 
   async function claimGroup(action = 'claim') {
-    if (!activeGroup) return;
-    const response = await fetch(`/api/evolution/groups/${activeGroup.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
+    if (!activeWorkItem) return;
+    const response = await fetch(`/api/evolution/work-items/${activeWorkItem.workItemId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
     const body = await response.json();
     if (!response.ok) {
       setNotice(body.error || 'Unable to update claim');
       return;
     }
-    setGroups((current) => current.map((group) => group.id === activeGroup.id ? body.data : group));
+    setWorkItems((current) => current.map((w) => w.workItemId === activeWorkItem.workItemId ? body.data : w));
   }
 
   async function sendMessage(event) {
     event.preventDefault();
     const text = draft.trim();
-    if ((!text && !attachment) || !activeGroup || sending) return;
+    if ((!text && !attachment) || !activeWorkItem || sending) return;
     setSending(true);
     setNotice('');
     try {
       const form = new FormData();
-      form.set('group_id', activeGroup.id);
+      form.set('group_id', activeWorkItem.id);
       form.set('text', text);
       if (attachment) form.set('file', attachment);
       const response = await fetch('/api/evolution/messages', { method: 'POST', body: form });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'Unable to send message');
       setMessages((current) => [...current, body.data.message]);
-      setGroups((current) => current.map((group) => group.id === activeGroup.id ? body.data.group : group));
+      setWorkItems((current) => current.map((w) => w.workItemId === activeWorkItem.workItemId ? body.data.group : w));
       setDraft('');
       setAttachment(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -279,27 +286,47 @@ function RoutingCrmContent() {
       {qr && !connected && <div className="flex shrink-0 items-center gap-5 border-b border-border bg-white px-5 py-4">{qr.image ? <img src={qr.image} alt="Evolution WhatsApp pairing QR code" className="h-44 w-44 rounded-lg border border-border p-2" /> : <pre className="max-w-md whitespace-pre-wrap rounded-lg bg-slate-100 p-3 text-xs">{qr.code}</pre>}<div className="text-sm text-muted"><p className="font-semibold text-foreground">Scan this code from the sender phone</p><p className="mt-1">Open WhatsApp, choose Linked devices, then Link a device. Keep this page open until the status changes to connected.</p></div></div>}
 
       <div className="flex min-h-0 flex-1">
-        <aside className={`w-full shrink-0 border-r border-border bg-slate-50/60 md:w-[320px] ${activeGroup ? 'hidden md:flex' : 'flex'} flex-col`}>
-          <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><p className="text-sm font-semibold text-foreground">Department groups</p><p className="text-xs text-muted">{groups.length} routed conversation{groups.length === 1 ? '' : 's'}</p></div><Circle className="h-3 w-3 fill-emerald-500 text-emerald-500" /></div>
+        <aside className={`w-full shrink-0 border-r border-border bg-slate-50/60 md:w-[320px] ${activeWorkItem ? 'hidden md:flex' : 'flex'} flex-col`}>
+          <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><p className="text-sm font-semibold text-foreground">Department Work Items</p><p className="text-xs text-muted">{workItems.length} active work item{workItems.length === 1 ? '' : 's'}</p></div><Circle className="h-3 w-3 fill-emerald-500 text-emerald-500" /></div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {loadingGroups ? <div className="flex justify-center p-8"><Loader2 className="h-5 w-5 animate-spin text-accent" /></div> : groups.length === 0 ? <div className="p-6 text-center text-sm text-muted"><MessageSquare className="mx-auto mb-3 h-8 w-8 opacity-40" /><p>No routed groups yet.</p><p className="mt-1 text-xs">Connect Evolution and let a second participant send a message in a test group.</p></div> : groups.map((group) => <button key={group.id} type="button" onClick={() => setActiveGroupId(group.id)} className={`mb-1 w-full rounded-xl p-3 text-left transition ${activeGroupId === group.id ? 'bg-accent/10 ring-1 ring-accent/30' : 'hover:bg-surface-hover'}`}><div className="flex items-start justify-between gap-2"><span className="truncate text-sm font-semibold text-foreground">{group.subject}</span>{group.mentionPriority && <span className="rounded-full bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">MENTION</span>}</div><div className="mt-1 flex items-center justify-between gap-2"><span className="text-xs text-muted">{group.departmentName || 'Admin review'} · {(group.routeType || 'DEFAULT').replace('_', ' ')}</span>{group.unreadCount > 0 && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">{group.unreadCount}</span>}</div><p className="mt-1 truncate text-xs text-muted">{group.lastMessageText || 'No messages yet'} <span className="ml-1">{formatTime(group.lastMessageAt)}</span></p></button>)}
+            {loadingGroups ? <div className="flex justify-center p-8"><Loader2 className="h-5 w-5 animate-spin text-accent" /></div> : workItems.length === 0 ? <div className="p-6 text-center text-sm text-muted"><MessageSquare className="mx-auto mb-3 h-8 w-8 opacity-40" /><p>No active work items yet.</p><p className="mt-1 text-xs">Connect Evolution and let a second participant send a message in a test group.</p></div> : workItems.map((item) => <button key={item.workItemId} type="button" onClick={() => setActiveWorkItemId(item.workItemId)} className={`mb-1 w-full rounded-xl p-3 text-left transition ${activeWorkItemId === item.workItemId ? 'bg-accent/10 ring-1 ring-accent/30' : 'hover:bg-surface-hover'}`}><div className="flex items-start justify-between gap-2"><span className="truncate text-sm font-semibold text-foreground">{item.subject}</span>{item.mentionPriority && <span className="rounded-full bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">MENTION</span>}</div><div className="mt-1 flex items-center justify-between gap-2"><span className="text-xs text-muted">{item.departmentName || 'Admin review'} · {(item.routeType || 'DEFAULT').replace('_', ' ')}</span>{item.unreadCount > 0 && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">{item.unreadCount}</span>}</div><p className="mt-1 truncate text-xs text-muted">{item.lastMessageText || 'No messages yet'} <span className="ml-1">{formatTime(item.lastMessageAt)}</span></p></button>)}
           </div>
         </aside>
 
-        <main className={`min-w-0 flex-1 ${activeGroup ? 'flex' : 'hidden md:flex'} flex-col bg-white`}>
-          {!activeGroup ? (
-            <div className="flex h-full items-center justify-center p-8 text-center text-muted"><div><MessageSquare className="mx-auto mb-3 h-10 w-10 opacity-30" /><p className="font-semibold text-foreground">Select a group to open the conversation</p><p className="mt-1 text-sm">Department tickets will appear here after Evolution sends a group event.</p></div></div>
+        <main className={`min-w-0 flex-1 ${activeWorkItem ? 'flex' : 'hidden md:flex'} flex-col bg-white`}>
+          {!activeWorkItem ? (
+            <div className="flex h-full items-center justify-center p-8 text-center text-muted"><div><MessageSquare className="mx-auto mb-3 h-10 w-10 opacity-30" /><p className="font-semibold text-foreground">Select a work item to open the conversation</p><p className="mt-1 text-sm">Department tickets will appear here after Evolution sends a group event.</p></div></div>
           ) : (
             <>
               <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <button type="button" onClick={() => setActiveGroupId(null)} className="rounded-lg p-1.5 text-muted hover:bg-surface-hover md:hidden"><ChevronLeft className="h-5 w-5" /></button>
+                  <button type="button" onClick={() => setActiveWorkItemId(null)} className="rounded-lg p-1.5 text-muted hover:bg-surface-hover md:hidden"><ChevronLeft className="h-5 w-5" /></button>
                   <div className="min-w-0">
-                    <h2 className="truncate text-sm font-bold text-foreground">{activeGroup.subject}</h2>
-                    <p className="text-xs text-muted">{activeGroup.departmentName || 'Admin review'} · {(activeGroup.routeType || 'DEFAULT').replace('_', ' ')}{activeGroup.confidence ? ` · ${Math.round(activeGroup.confidence * 100)}% confidence` : ''} · {activeGroup.groupJid}</p>
+                    <h2 className="truncate text-sm font-bold text-foreground">{activeWorkItem.subject}</h2>
+                    <p className="text-xs text-muted">{activeWorkItem.departmentName || 'Admin review'} · {(activeWorkItem.routeType || 'DEFAULT').replace('_', ' ')}{activeWorkItem.confidence ? ` · ${Math.round(activeWorkItem.confidence * 100)}% confidence` : ''} · {activeWorkItem.groupJid}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Done Custom Button */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!activeWorkItem) return;
+                      const response = await fetch(`/api/evolution/work-items/${activeWorkItem.workItemId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'done' }) });
+                      if (response.ok) {
+                         setWorkItems(prev => prev.filter(w => w.workItemId !== activeWorkItem.workItemId));
+                         setActiveWorkItemId(null);
+                      } else {
+                         const body = await response.json();
+                         setNotice(body.error || 'Unable to mark as done');
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 mr-2"
+                  >
+                    <CheckCircle className="h-3.5 w-3.5" />
+                    Done
+                  </button>
+
                   {isAdmin && (
                     <div className="flex items-center gap-1 mr-2 hidden md:flex">
                       <select
@@ -320,7 +347,7 @@ function RoutingCrmContent() {
                       </button>
                     </div>
                   )}
-                  <span className="hidden text-xs text-muted sm:inline">{activeGroup.claimedByUserId ? 'Claimed' : 'Unclaimed'}</span>
+                  <span className="hidden text-xs text-muted sm:inline">{activeWorkItem.assignedUserId ? 'Claimed' : 'Unclaimed'}</span>
                   <button type="button" onClick={() => { void claimGroup(claimedByCurrentUser ? 'release' : 'claim'); }} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-surface-hover"><UserCheck className="h-3.5 w-3.5" />{claimedByCurrentUser ? 'Release' : 'Claim'}</button>
                 </div>
               </div>

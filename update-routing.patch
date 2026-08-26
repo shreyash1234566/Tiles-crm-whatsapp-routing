@@ -1,0 +1,25 @@
+--- lib/evolution-routing.ts
++++ lib/evolution-routing.ts
+@@ -2,6 +2,7 @@
+ import { prisma } from '@/lib/db'
++import { evaluateRoutingRules } from '@/lib/routing/rule-engine'
+ 
+ export type EvolutionConfig = {
+@@ -321,6 +322,18 @@
+     }
+   }
+ 
++  // Check custom routing rules
++  const ruleContext = {
++    text: input.text || '',
++    subject: input.subject,
++    senderJid: input.mentionedJids.length > 0 ? input.mentionedJids[0] : ''
++  };
++  
++  const ruleMatch = await evaluateRoutingRules(ruleContext);
++  if (ruleMatch) {
++    return { departmentId: ruleMatch.departmentId, departmentName: departments.find(d => d.id === ruleMatch.departmentId)?.name || '', routingReason: `rule-${ruleMatch.id}`, routeType: 'KEYWORD', mentionPriority: businessMention, confidence: 1, intent: null };
++  }
++
+   // Human-readable department names and configured aliases are deterministic.
+   for (const department of departments) {

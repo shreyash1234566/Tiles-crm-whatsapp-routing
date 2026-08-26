@@ -5,7 +5,16 @@
       "Bash(vercel --version)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(xargs grep:*)",
-      "Bash(ls -laR \"/c/Users/divya/Desktop/Furzentic/app/\\(dashboard\\)\")"
+      "Bash(ls -laR \"/c/Users/divya/Desktop/Furzentic/app/\\(dashboard\\)\")",
+      "Bash(npx prisma *)",
+      "Bash(docker compose up *)",
+      "PowerShell(docker compose up *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(node mutate-routing.js)",
+      "Bash(python3 mutate-routing.py)",
+      "Bash(python *)"
     ]
   }
 }
