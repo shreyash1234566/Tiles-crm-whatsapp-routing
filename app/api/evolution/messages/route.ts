@@ -63,7 +63,10 @@ export async function GET(request: Request) {
     orderBy: { createdAt: 'asc' },
     select: { id: true, targetMessageId: true, senderJid: true, senderName: true, emoji: true, createdAt: true },
   })
-  return NextResponse.json({ data: group.messages, reactions })
+  // Old deployments could persist a reaction event as a pseudo message.
+  // Hide that corrupt presentation record; real reactions come from the
+  // dedicated reactions query above and render beneath their target message.
+  return NextResponse.json({ data: group.messages.filter((message) => message.messageType !== 'reactionMessage'), reactions })
 }
 
 export async function POST(request: Request) {

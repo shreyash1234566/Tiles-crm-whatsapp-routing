@@ -35,8 +35,17 @@ export type EvolutionInboundMessage = {
   fromMe: boolean
   createdAt: Date
   subject: string
+  isReaction: boolean
   reactionTargetMessageId: string | null
   reactionEmoji: string | null
+}
+
+export type EvolutionMessageStatusUpdate = {
+  messageId: string
+  groupJid: string | null
+  status: 'SENT' | 'DELIVERED' | 'READ'
+  fromMe: boolean
+  updatedAt: Date
 }
 
 export type DepartmentMatch = {
@@ -318,12 +327,25 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
       : objectValue(update.message)
     const message = unwrapMessage(rawMessage)
     const contextInfo = objectValue(objectValue(message.extendedTextMessage).contextInfo)
-    const reaction = objectValue(message.reactionMessage || update.reactionMessage)
+    const reactionCandidates = [
+      objectValue(message.reactionMessage),
+      objectValue(update.reactionMessage),
+      objectValue(data.reactionMessage),
+      objectValue(data.reaction),
+    ]
+    const reaction = reactionCandidates.find((candidate) => Object.keys(candidate).length > 0) || {}
     const reactionKey = objectValue(reaction.key)
-    if (event === 'MESSAGES_UPDATE' && Object.keys(reaction).length === 0) continue
+    const isReaction = Object.keys(reaction).length > 0 || String(data.messageType || data.type || Object.keys(message)[0] || '').toLowerCase().includes('reaction')
+    if (event === 'MESSAGES_UPDATE' && !isReaction) continue
     const groupJid = firstString(key.remoteJid, data.remoteJid, data.chatId, data.jid)
     const rawMessageId = firstString(key.id, data.messageId, data.id)
-    const reactionTargetMessageId = firstString(reactionKey.id, data.reactionMessageId)
+    const reactionTargetMessageId = firstString(
+      reactionKey.id,
+      data.reactionMessageId,
+      objectValue(data.reaction).messageId,
+      objectValue(data.reactionMessage).messageId,
+      update.reactionMessageId,
+    )
     const messageId = event === 'MESSAGES_UPDATE' && reactionTargetMessageId && rawMessageId === reactionTargetMessageId
       ? `reaction:${reactionTargetMessageId}:${firstString(key.participant, data.participant, data.sender, 'unknown')}:${firstString(reaction.text, data.reactionText, 'removed')}`
       : rawMessageId
@@ -345,7 +367,7 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
       messageId,
       senderJid: normalizeJid(senderJid),
       senderName: firstString(data.pushName, data.senderName, data.participantName),
-      text: Object.keys(reaction).length > 0 ? null : extractText(message, data),
+      text: isReaction ? null : extractText(message, data),
       messageType: extractMessageType(message, data),
       mediaType: info.type,
       mediaMimeType: info.mimeType,
@@ -357,6 +379,7 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
       fromMe,
       createdAt: Number.isNaN(createdAt.getTime()) ? new Date() : createdAt,
       subject: firstString(data.subject, data.groupName, data.chatName, root.subject, groupJid) || groupJid,
+      isReaction,
       reactionTargetMessageId,
       reactionEmoji: firstString(reaction.text, data.reactionText),
     })
@@ -515,6 +538,40 @@ export async function sendEvolutionGroupText(input: { groupJid: string; text: st
     // with: instance requires property "text".
     body: JSON.stringify({ number: input.groupJid, text: input.text, linkPreview: true, ...(quoted ? { quoted } : {}) }),
   })
+}
+
+/** Extract only delivery/read acknowledgements for messages sent by Evolution.
+ * MESSAGES_UPDATE also contains many unrelated updates, which deliberately do
+ * not enter the group-inquiry ingestion path. */
+export function extractEvolutionMessageStatusUpdates(body: unknown): EvolutionMessageStatusUpdate[] {
+  const root = objectValue(body)
+  const event = stringValue(root.event || root.type).toUpperCase().replace(/[.\-]/g, '_')
+  if (event !== 'MESSAGES_UPDATE') return []
+  const updates: EvolutionMessageStatusUpdate[] = []
+  for (const data of extractMessageItems(body)) {
+    const key = objectValue(data.key)
+    const update = objectValue(data.update)
+    const rawStatus = firstString(update.status, data.status)?.toUpperCase().replace(/[.\-\s]/g, '_')
+    const status = rawStatus === 'READ' || rawStatus === 'READ_ACK'
+      ? 'READ'
+      : rawStatus === 'DELIVERED' || rawStatus === 'DELIVERY_ACK'
+        ? 'DELIVERED'
+        : rawStatus === 'SENT' || rawStatus === 'SERVER_ACK'
+          ? 'SENT'
+          : null
+    const messageId = firstString(key.id, data.messageId, data.id)
+    if (!status || !messageId) continue
+    const timestamp = Number(update.timestamp || data.messageTimestamp || data.timestamp || Date.now() / 1000)
+    const updatedAt = new Date(timestamp > 10_000_000_000 ? timestamp : timestamp * 1000)
+    updates.push({
+      messageId,
+      groupJid: firstString(key.remoteJid, data.remoteJid, data.chatId, data.jid),
+      status,
+      fromMe: key.fromMe === true || data.fromMe === true,
+      updatedAt: Number.isNaN(updatedAt.getTime()) ? new Date() : updatedAt,
+    })
+  }
+  return updates
 }
 
 export async function sendEvolutionGroupMedia(input: {

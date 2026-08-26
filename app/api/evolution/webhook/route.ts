@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { downloadEvolutionMedia, isAuthorizedEvolutionWebhook, extractEvolutionMessages, getEvolutionGroupSubject, resolveDepartmentForMessage } from '@/lib/evolution-routing'
+import { downloadEvolutionMedia, isAuthorizedEvolutionWebhook, extractEvolutionMessages, extractEvolutionMessageStatusUpdates, getEvolutionGroupSubject, resolveDepartmentForMessage } from '@/lib/evolution-routing'
+import { randomUUID } from 'node:crypto'
 import { publishEvent } from '@/lib/redis'
 import { uploadFile } from '@/lib/r2'
 import { findDealerForEvolutionMessage } from '@/lib/evolution-operations'
@@ -43,7 +44,7 @@ async function withGroupLock<T>(key: string, work: () => Promise<T>): Promise<T>
   }
 }
 
-async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof extractEvolutionMessages>) {
+async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof extractEvolutionMessages>, correlationId: string) {
   for (const item of incoming) {
     // Evolution also sends MESSAGES_UPSERT for messages sent by the CRM.
     // They have already been stored by the outbound route and must never
@@ -51,14 +52,21 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
     // Do not route CRM-sent messages back in as enquiries. Reactions are the
     // exception: they are UI state on an existing message and should remain
     // visible whether a dealer or the connected WhatsApp account added them.
-    if (item.fromMe && !item.reactionTargetMessageId) continue
+    if (item.fromMe && !item.isReaction) continue
 
     try {
       await withGroupLock(`${ownerUserId}:${item.groupJid}`, async () => {
         // A WhatsApp reaction is an update to an existing provider message,
         // never a fresh dealer enquiry. Persist/update it separately so it is
         // visible in the inbox without changing routing, SLA, or unread state.
-        if (item.reactionTargetMessageId) {
+        if (item.isReaction) {
+          // A malformed provider reaction without an original message ID is
+          // deliberately ignored. It must never appear as a literal
+          // "[reactionMessage]" bubble or create/alter an inquiry.
+          if (!item.reactionTargetMessageId) {
+            console.warn(`[evolution/webhook] ignored reaction without target message id: ${item.messageId}`)
+            return
+          }
           const group = await prisma.evolutionGroup.findUnique({
             where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
             select: { id: true, departmentId: true },
@@ -175,7 +183,7 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
             })
           }
           const isHandoff = fromDepartmentId !== null && routing.departmentId !== null && fromDepartmentId !== routing.departmentId
-          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, inquiryId: inquiry.id, event: isHandoff ? 'HANDOFF' : 'ROUTED', routeType: routing.routeType, fromDepartmentId, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason, metadata: { dealerMatch: dealerMatch?.source ?? null } } })
+          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, inquiryId: inquiry.id, event: isHandoff ? 'HANDOFF' : 'ROUTED', routeType: routing.routeType, fromDepartmentId, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason, correlationId, metadata: { dealerMatch: dealerMatch?.source ?? null, webhookMessageId: item.messageId } } })
           const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, lastInboundAt: item.createdAt, unreadCount: { increment: 1 } } })
           return { message, group: updatedGroup, ticketId: ticket.id, inquiryId: inquiry.id }
         })
@@ -226,6 +234,31 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
     } catch (error: unknown) {
       if (error instanceof Error && error.message.includes('Unique constraint')) continue
       console.error('[evolution/webhook] message processing failed:', error)
+      await prisma.evolutionWebhookHealth.upsert({
+        where: { ownerUserId },
+        update: { lastErrorAt: new Date(), lastError: error instanceof Error ? error.message.slice(0, 2000) : 'Message processing failed' },
+        create: { ownerUserId, lastErrorAt: new Date(), lastError: error instanceof Error ? error.message.slice(0, 2000) : 'Message processing failed' },
+      }).catch(() => undefined)
+    }
+  }
+}
+
+async function processProviderStatusUpdates(ownerUserId: number, updates: ReturnType<typeof extractEvolutionMessageStatusUpdates>) {
+  for (const update of updates) {
+    if (!update.fromMe) continue
+    const recipient = await prisma.evolutionCampaignRecipient.findFirst({
+      where: {
+        providerMessageId: update.messageId,
+        campaign: { userId: ownerUserId },
+        ...(update.groupJid ? { groupJid: update.groupJid } : {}),
+      },
+      select: { id: true, status: true, deliveredAt: true, readAt: true },
+    })
+    if (!recipient) continue
+    if (update.status === 'READ') {
+      await prisma.evolutionCampaignRecipient.update({ where: { id: recipient.id }, data: { status: 'READ', deliveredAt: recipient.deliveredAt || update.updatedAt, readAt: recipient.readAt || update.updatedAt } })
+    } else if (update.status === 'DELIVERED' && recipient.status !== 'READ') {
+      await prisma.evolutionCampaignRecipient.update({ where: { id: recipient.id }, data: { status: 'DELIVERED', deliveredAt: recipient.deliveredAt || update.updatedAt } })
     }
   }
 }
@@ -236,7 +269,17 @@ export async function POST(request: Request) {
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }) }
   const ownerUserId = await getOwnerUserId()
   if (!ownerUserId) return NextResponse.json({ error: 'No active Admin owner configured' }, { status: 503 })
+  const correlationId = `evo-${randomUUID()}`
   const incoming = extractEvolutionMessages(body)
-  void processIncoming(ownerUserId, incoming).catch((error) => console.error('[evolution/webhook] processing failed:', error))
-  return NextResponse.json({ ok: true, received: incoming.length, accepted: 'processing' })
+  const statusUpdates = extractEvolutionMessageStatusUpdates(body)
+  const root = body && typeof body === 'object' ? body as Record<string, unknown> : {}
+  const event = typeof root.event === 'string' ? root.event : typeof root.type === 'string' ? root.type : 'unknown'
+  await prisma.evolutionWebhookHealth.upsert({
+    where: { ownerUserId },
+    update: { lastReceivedAt: new Date(), lastEvent: event, lastMessageId: incoming[0]?.messageId || statusUpdates[0]?.messageId || null, lastCorrelationId: correlationId, lastError: null },
+    create: { ownerUserId, lastReceivedAt: new Date(), lastEvent: event, lastMessageId: incoming[0]?.messageId || statusUpdates[0]?.messageId || null, lastCorrelationId: correlationId },
+  }).catch((error) => console.error('[evolution/webhook] heartbeat update failed:', error))
+  void processIncoming(ownerUserId, incoming, correlationId).catch((error) => console.error('[evolution/webhook] processing failed:', error))
+  void processProviderStatusUpdates(ownerUserId, statusUpdates).catch((error) => console.error('[evolution/webhook] campaign status processing failed:', error))
+  return NextResponse.json({ ok: true, received: incoming.length, statusUpdates: statusUpdates.length, correlationId, accepted: 'processing' })
 }

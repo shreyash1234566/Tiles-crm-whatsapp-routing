@@ -132,6 +132,11 @@ export function automaticEvolutionRepliesEnabled(): boolean {
   return process.env.EVOLUTION_AGENT_ALLOW_AUTOSEND?.trim().toLowerCase() === 'true'
 }
 
+/** Live RAG is deliberately released through one named group at a time. */
+export function hasSafeLiveEvolutionRollout(enabled: boolean, draftOnly: boolean, allowedGroupJids: string[]): boolean {
+  return !enabled || draftOnly || allowedGroupJids.length === 1
+}
+
 export function newIdempotencyKey(prefix: string, stableValue: string): string {
   return `${prefix}:${stableValue || randomUUID()}`
 }

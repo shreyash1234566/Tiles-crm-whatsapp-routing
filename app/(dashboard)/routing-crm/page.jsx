@@ -56,6 +56,7 @@ function RoutingCrmContent() {
   const [nextStage, setNextStage] = useState('');
   const [stageReason, setStageReason] = useState('');
   const [updatingStage, setUpdatingStage] = useState(false);
+  const [convertingOrder, setConvertingOrder] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [draft, setDraft] = useState('');
@@ -309,6 +310,23 @@ function RoutingCrmContent() {
     }
   }
 
+  async function convertToDealerOrder() {
+    if (!activeGroup || convertingOrder) return;
+    setConvertingOrder(true);
+    setNotice('');
+    try {
+      const response = await fetch(`/api/evolution/groups/${activeGroup.id}/convert`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: 'Created from Group Inbox' }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Unable to create dealer order');
+      setNotice(`Dealer order ${body.data.order.displayId} created. Add material lines, billing and dispatch from Dealers & Partners.`);
+      await loadGroups();
+    } catch (error) {
+      setNotice(error.message || 'Unable to create dealer order');
+    } finally {
+      setConvertingOrder(false);
+    }
+  }
+
   async function sendMessage(event) {
     event.preventDefault();
     const text = draft.trim();
@@ -372,7 +390,7 @@ function RoutingCrmContent() {
         <aside className={`w-full shrink-0 border-r border-border bg-slate-50/60 md:w-[320px] ${activeGroup ? 'hidden md:flex' : 'flex'} flex-col`}>
           <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><p className="text-sm font-semibold text-foreground">Department groups</p><p className="text-xs text-muted">{groups.length} routed conversation{groups.length === 1 ? '' : 's'}</p></div><Circle className="h-3 w-3 fill-emerald-500 text-emerald-500" /></div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {loadingGroups ? <div className="flex justify-center p-8"><Loader2 className="h-5 w-5 animate-spin text-accent" /></div> : groups.length === 0 ? <div className="p-6 text-center text-sm text-muted"><MessageSquare className="mx-auto mb-3 h-8 w-8 opacity-40" /><p>No routed groups yet.</p><p className="mt-1 text-xs">Connect Evolution and let a second participant send a message in a test group.</p></div> : groups.map((group) => <button key={group.id} type="button" onClick={() => setActiveGroupId(group.id)} className={`mb-1 w-full rounded-xl p-3 text-left transition ${activeGroupId === group.id ? 'bg-accent/10 ring-1 ring-accent/30' : 'hover:bg-surface-hover'}`}><div className="flex items-start justify-between gap-2"><span className="truncate text-sm font-semibold text-foreground">{group.subject}</span>{group.mentionPriority && <span className="rounded-full bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">MENTION</span>}</div><div className="mt-1 flex items-center justify-between gap-2"><span className="text-xs text-muted">{group.departmentName || 'Admin review'} · {(group.routeType || 'DEFAULT').replace('_', ' ')}</span>{group.unreadCount > 0 && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">{group.unreadCount}</span>}</div><p className="mt-1 truncate text-xs text-muted">{group.lastMessageText || 'No messages yet'} <span className="ml-1">{formatTime(group.lastMessageAt)}</span></p></button>)}
+            {loadingGroups ? <div className="flex justify-center p-8"><Loader2 className="h-5 w-5 animate-spin text-accent" /></div> : groups.length === 0 ? <div className="p-6 text-center text-sm text-muted"><MessageSquare className="mx-auto mb-3 h-8 w-8 opacity-40" /><p>No routed groups yet.</p><p className="mt-1 text-xs">Connect Evolution and let a second participant send a message in a test group.</p></div> : groups.map((group) => <button key={group.id} type="button" onClick={() => setActiveGroupId(group.id)} className={`mb-1 w-full rounded-xl p-3 text-left transition ${activeGroupId === group.id ? 'bg-accent/10 ring-1 ring-accent/30' : 'hover:bg-surface-hover'}`}><div className="flex items-start justify-between gap-2"><span className="truncate text-sm font-semibold text-foreground">{group.subject}</span>{group.mentionPriority && <span className="rounded-full bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">MENTION</span>}</div><div className="mt-1 flex items-center justify-between gap-2"><span className="text-xs text-muted">{group.departmentName || 'Admin review'} · {(group.routeType || 'DEFAULT').replace('_', ' ')}</span>{group.unreadCount > 0 && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">{group.unreadCount}</span>}</div><p className="mt-1 truncate text-xs text-muted">{group.lastMessageText === '[reactionMessage]' ? 'Reaction updated' : (group.lastMessageText || 'No messages yet')} <span className="ml-1">{formatTime(group.lastMessageAt)}</span></p></button>)}
           </div>
         </aside>
 
@@ -453,9 +471,11 @@ function RoutingCrmContent() {
               ))}
               <details className="shrink-0 border-t border-border bg-slate-50 px-4 py-2">
                 <summary className="cursor-pointer text-xs font-semibold text-foreground">Ticket operations</summary>
-                <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                <div className="mt-2 grid gap-2 lg:grid-cols-3">
                   <div className="rounded-lg border border-border bg-white p-2"><p className="mb-1 text-[11px] font-medium text-muted">Schedule a WhatsApp follow-up</p><textarea value={followUpMessage} onChange={(event) => setFollowUpMessage(event.target.value)} rows={2} placeholder="Follow-up message" className="mb-1 w-full resize-none rounded border border-border px-2 py-1 text-xs outline-none focus:border-accent" /><div className="flex gap-1"><input value={followUpFor} onChange={(event) => setFollowUpFor(event.target.value)} type="datetime-local" className="min-w-0 flex-1 rounded border border-border px-2 py-1 text-xs" /><button type="button" onClick={scheduleFollowUp} disabled={schedulingFollowUp || !followUpMessage.trim() || !followUpFor} className="rounded bg-accent px-2 py-1 text-xs font-semibold text-white disabled:opacity-50">Schedule</button></div></div>
                   <div className="rounded-lg border border-border bg-white p-2"><p className="mb-1 text-[11px] font-medium text-muted">Move inquiry lifecycle</p><div className="flex gap-1"><select value={nextStage || activeGroup.ticket?.stage || 'NEW'} onChange={(event) => setNextStage(event.target.value)} className="min-w-0 flex-1 rounded border border-border px-2 py-1 text-xs"><option value="NEW">New</option><option value="TRIAGED">Triaged</option><option value="WORKING">Working</option><option value="QUOTATION">Quotation</option><option value="WAITING_FOR_DEALER">Waiting for dealer</option><option value="CONFIRMED">Confirmed</option><option value="PAYMENT_PENDING">Payment pending</option><option value="ALLOCATED">Allocated</option><option value="DISPATCH_PENDING">Dispatch pending</option><option value="DISPATCHED">Dispatched</option><option value="DELIVERED">Delivered</option><option value="CLOSED">Closed</option><option value="ON_HOLD">On hold</option><option value="ESCALATED">Escalated</option><option value="LOST">Lost</option><option value="CANCELLED">Cancelled</option></select><button type="button" onClick={updateStage} disabled={updatingStage || !stageReason.trim()} className="rounded bg-slate-800 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50">Update</button></div><input value={stageReason} onChange={(event) => setStageReason(event.target.value)} placeholder="Reason for this stage change" className="mt-1 w-full rounded border border-border px-2 py-1 text-xs outline-none focus:border-accent" /></div>
+                  <div className="rounded-lg border border-border bg-white p-2"><p className="mb-1 text-[11px] font-medium text-muted">Move inquiry lifecycle</p><div className="flex gap-1"><select value={nextStage || activeGroup.ticket?.stage || 'NEW'} onChange={(event) => setNextStage(event.target.value)} className="min-w-0 flex-1 rounded border border-border px-2 py-1 text-xs"><option value="NEW">New</option><option value="TRIAGED">Triaged</option><option value="WORKING">Working</option><option value="QUOTATION">Quotation</option><option value="WAITING_FOR_DEALER">Waiting for dealer</option><option value="CONFIRMED">Confirmed</option><option value="PAYMENT_PENDING">Payment pending</option><option value="ALLOCATED">Allocated</option><option value="DISPATCH_PENDING">Dispatch pending</option><option value="DISPATCHED">Dispatched</option><option value="DELIVERED">Delivered</option><option value="CLOSED">Closed</option><option value="ON_HOLD">On hold</option><option value="ESCALATED">Escalated</option><option value="LOST">Lost</option><option value="CANCELLED">Cancelled</option></select><button type="button" onClick={updateStage} disabled={updatingStage || !stageReason.trim()} className="rounded bg-slate-800 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50">Update</button></div><input value={stageReason} onChange={(event) => setStageReason(event.target.value)} placeholder="Reason for this stage change" className="mt-1 w-full rounded border border-border px-2 py-1 text-xs outline-none focus:border-accent" /></div>
+                  <div className="rounded-lg border border-border bg-white p-2"><p className="mb-1 text-[11px] font-medium text-muted">Convert to dealer order</p>{activeGroup.inquiry?.convertedOrderId ? <p className="text-xs text-emerald-700">Linked order #{activeGroup.inquiry.convertedOrderId}. Manage items, billing and dispatch in Dealers &amp; Partners.</p> : <><p className="mb-2 text-xs text-muted">Requires a linked dealer. Creates an auditable B2B order without inventing material lines.</p><button type="button" onClick={convertToDealerOrder} disabled={convertingOrder || !activeGroup.inquiry?.dealerId} className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50">{convertingOrder ? 'Creating…' : 'Create dealer order'}</button></>}</div>
                 </div>
               </details>
               <form onSubmit={sendMessage} className="shrink-0 border-t border-border bg-white p-3">

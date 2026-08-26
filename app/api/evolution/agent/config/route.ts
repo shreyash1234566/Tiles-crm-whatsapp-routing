@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { getSession } from '@/lib/auth-helpers'
 import { getEvolutionOwnerUserId, isGroupJid, normalizeJid } from '@/lib/evolution-routing'
+import { hasSafeLiveEvolutionRollout } from '@/lib/evolution-operations'
 
 async function access() {
   const session = await getSession()
@@ -49,9 +50,14 @@ export async function PUT(request: Request) {
   if (!Number.isInteger(maxResponseTokens) || maxResponseTokens < 32 || maxResponseTokens > 500) return NextResponse.json({ error: 'maxResponseTokens must be an integer between 32 and 500' }, { status: 400 })
   if (!Number.isInteger(responseDelayMs) || responseDelayMs < 0 || responseDelayMs > 10_000) return NextResponse.json({ error: 'responseDelayMs must be an integer between 0 and 10000' }, { status: 400 })
 
-  // An empty allowlist deliberately means all owner groups/departments; live
-  // sending still needs this config's draftOnly=false, enabled=true, and the
-  // server-only EVOLUTION_AGENT_ALLOW_AUTOSEND=true flag.
+  // Live replies are deliberately a narrow, named test-group rollout. The
+  // environment switch remains a second server-only approval boundary.
+  if (!hasSafeLiveEvolutionRollout(enabled, draftOnly, groups)) {
+    return NextResponse.json({ error: 'Live Evolution replies require exactly one explicitly allowlisted test group. Keep draft mode on for broader review.' }, { status: 400 })
+  }
+
+  // Drafts may use broad review queues. Live sending always needs the single
+  // named test group above plus EVOLUTION_AGENT_ALLOW_AUTOSEND=true.
   const data = await prisma.evolutionAgentConfig.upsert({
     where: { userId: resolved.ownerId },
     update: { enabled, draftOnly, allowedGroupJids: [...new Set(groups)], allowedDepartmentIds: [...new Set(departments)], confidenceThreshold, maxResponseTokens, responseDelayMs },

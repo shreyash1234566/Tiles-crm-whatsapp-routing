@@ -2841,6 +2841,7 @@ model DealerOrder {
   items    DealerOrderItem[]
   payments DealerPayment[]
   claims   DealerClaim[]
+  evolutionInquiries EvolutionDealerInquiry[] @relation("EvolutionInquiryConvertedOrder")
 
   @@index([dealerId, status])
   @@index([orderDate])
@@ -3064,6 +3065,7 @@ model EvolutionRoutingAudit {
   reason             String?
   inquiryId          String?
   actorUserId        Int?
+  correlationId      String?
   metadata           Json?
   createdAt          DateTime @default(now())
 
@@ -3072,6 +3074,7 @@ model EvolutionRoutingAudit {
 
   @@index([ticketId, createdAt])
   @@index([event, createdAt])
+  @@index([correlationId])
   @@map("evolution_routing_audits")
 }
 
@@ -3141,6 +3144,7 @@ model EvolutionDealerInquiry {
 
   group             EvolutionGroup       @relation(fields: [groupId], references: [id], onDelete: Cascade)
   dealer            Dealer?               @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  convertedOrder    DealerOrder?          @relation("EvolutionInquiryConvertedOrder", fields: [convertedOrderId], references: [id], onDelete: SetNull)
   ticket            EvolutionGroupTicket?
   followUps         EvolutionTicketFollowUp[]
   audits            EvolutionRoutingAudit[]
@@ -3149,6 +3153,7 @@ model EvolutionDealerInquiry {
   @@index([dealerId, stage])
   @@index([departmentId, stage])
   @@index([nextFollowUpAt])
+  @@index([convertedOrderId])
   @@map("evolution_dealer_inquiries")
 }
 
@@ -3258,4 +3263,23 @@ model EvolutionCampaignRecipient {
   @@index([dealerId])
   @@index([groupJid])
   @@map("evolution_campaign_recipients")
+}
+
+// Per-owner webhook heartbeat. It is intentionally separate from message
+// history so Operators can detect a disconnected Evolution webhook even when
+// no dealer happens to message during the alert window.
+model EvolutionWebhookHealth {
+  id               String   @id @default(cuid())
+  ownerUserId      Int      @unique
+  lastReceivedAt   DateTime?
+  lastEvent        String?
+  lastMessageId    String?
+  lastCorrelationId String?
+  lastErrorAt      DateTime?
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([lastReceivedAt])
+  @@map("evolution_webhook_health")
 }

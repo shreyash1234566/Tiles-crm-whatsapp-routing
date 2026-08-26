@@ -28,8 +28,33 @@ const routePermissions: Record<string, string[]> = {
   '/email-marketing': ['ADMIN', 'MANAGER'],
 }
 
+// The Tiles deployment uses Evolution group routing. Legacy Meta/social
+// endpoints are retained in the repository only for a separately configured
+// compatibility deployment; they must never accept traffic by accident here.
+const legacyMetaPrefixes = [
+  '/api/whatsapp',
+  '/api/social',
+  '/api/webhooks/facebook',
+  '/api/webhooks/instagram',
+  '/facebook-inbox',
+  '/instagram-inbox',
+  '/whatsapp-marketing',
+]
+
+function legacyMetaIsDisabled(): boolean {
+  return process.env.NEXT_PUBLIC_BUSINESS_TYPE === 'tiles'
+    && process.env.LEGACY_META_COMPATIBILITY?.trim().toLowerCase() !== 'true'
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
+
+  if (legacyMetaIsDisabled() && legacyMetaPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Legacy Meta/WhatsApp endpoints are disabled for the Tiles Evolution deployment.' }, { status: 410 })
+    }
+    return NextResponse.redirect(new URL('/routing-crm', req.url))
+  }
 
   // Allow public paths
   if (publicPaths.some(path => pathname.startsWith(path)) || pathname === '/api/evolution/webhook') {

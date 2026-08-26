@@ -37,7 +37,7 @@ export async function GET(request: Request) {
     openedAt: { gte: from, lte: until },
   }
 
-  const [inquiries, overdueFollowUps, campaignRecipients] = await Promise.all([
+  const [inquiries, overdueFollowUps, campaignRecipients, routingAudits, agentRuns] = await Promise.all([
     prisma.evolutionDealerInquiry.findMany({
       where: inquiryWhere,
       select: {
@@ -55,6 +55,16 @@ export async function GET(request: Request) {
     prisma.evolutionCampaignRecipient.findMany({
       where: { campaign: { userId: ownerUserId }, createdAt: { gte: from, lte: until } },
       select: { status: true, sentAt: true, deliveredAt: true, readAt: true, repliedAt: true },
+      take: 10_000,
+    }),
+    prisma.evolutionRoutingAudit.findMany({
+      where: { ticket: { group: { userId: ownerUserId } }, createdAt: { gte: from, lte: until } },
+      select: { routeType: true, confidence: true, event: true },
+      take: 10_000,
+    }),
+    prisma.evolutionAgentRun.findMany({
+      where: { ticket: { is: { group: { is: { userId: ownerUserId } } } }, createdAt: { gte: from, lte: until } },
+      select: { status: true, confidence: true, handoff: true },
       take: 10_000,
     }),
   ])
@@ -86,6 +96,10 @@ export async function GET(request: Request) {
   const delivered = campaignRecipients.filter((recipient) => Boolean(recipient.deliveredAt)).length
   const read = campaignRecipients.filter((recipient) => Boolean(recipient.readAt)).length
   const replied = campaignRecipients.filter((recipient) => Boolean(recipient.repliedAt)).length
+  const routingFallbacks = routingAudits.filter((audit) => audit.routeType.toUpperCase() === 'DEFAULT').length
+  const routingConfidence = routingAudits.filter((audit) => typeof audit.confidence === 'number').map((audit) => audit.confidence as number)
+  const handoffs = agentRuns.filter((run) => run.handoff || run.status === 'HANDOFF').length
+  const agentFailures = agentRuns.filter((run) => run.status === 'FAILED').length
 
   return NextResponse.json({
     data: {
@@ -107,6 +121,18 @@ export async function GET(request: Request) {
         deliveryRate: sent ? Number(((delivered / sent) * 100).toFixed(2)) : 0,
         readRate: delivered ? Number(((read / delivered) * 100).toFixed(2)) : 0,
         responseRate: sent ? Number(((replied / sent) * 100).toFixed(2)) : 0,
+      },
+      routing: {
+        auditedEvents: routingAudits.length,
+        fallbackCount: routingFallbacks,
+        fallbackRate: routingAudits.length ? Number(((routingFallbacks / routingAudits.length) * 100).toFixed(2)) : 0,
+        averageConfidence: routingConfidence.length ? Number((routingConfidence.reduce((sum, value) => sum + value, 0) / routingConfidence.length).toFixed(3)) : null,
+      },
+      rag: {
+        runs: agentRuns.length,
+        handoffs,
+        handoffRate: agentRuns.length ? Number(((handoffs / agentRuns.length) * 100).toFixed(2)) : 0,
+        failures: agentFailures,
       },
     },
   })

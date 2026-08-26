@@ -5,6 +5,7 @@ import {
   isClosedInquiryStage,
   isEvolutionInquiryStage,
   isValidEvolutionStageTransition,
+  hasSafeLiveEvolutionRollout,
   normalizeEvolutionPhone,
 } from './evolution-operations'
 
@@ -29,5 +30,13 @@ describe('Evolution dealer operations guards', () => {
     expect(isValidEvolutionStageTransition('DELIVERED', 'CLOSED')).toBe(true)
     expect(isClosedInquiryStage('LOST')).toBe(true)
     expect(isClosedInquiryStage('WORKING')).toBe(false)
+  })
+
+  it('permits automatic replies only for one named test group', () => {
+    expect(hasSafeLiveEvolutionRollout(false, false, [])).toBe(true)
+    expect(hasSafeLiveEvolutionRollout(true, true, [])).toBe(true)
+    expect(hasSafeLiveEvolutionRollout(true, false, ['120363123@g.us'])).toBe(true)
+    expect(hasSafeLiveEvolutionRollout(true, false, [])).toBe(false)
+    expect(hasSafeLiveEvolutionRollout(true, false, ['a@g.us', 'b@g.us'])).toBe(false)
   })
 })
