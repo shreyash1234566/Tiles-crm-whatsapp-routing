@@ -130,9 +130,6 @@ ALTER TABLE "evolution_routing_audits"
   ADD COLUMN IF NOT EXISTS "actorUserId" INTEGER,
   ADD COLUMN IF NOT EXISTS "metadata" JSONB;
 
-ALTER TABLE "evolution_dealer_inquiries"
-  ADD COLUMN IF NOT EXISTS "dealerPhone" TEXT;
-
 -- Move data written by the original PascalCase migration only when it exists.
 DO $$
 BEGIN
@@ -229,6 +226,11 @@ CREATE TABLE IF NOT EXISTS "evolution_dealer_inquiries" (
   "updatedAt" TIMESTAMP(3) NOT NULL,
   CONSTRAINT "evolution_dealer_inquiries_pkey" PRIMARY KEY ("id")
 );
+
+-- Existing installations can have this table from an earlier manual schema
+-- push. Run this only after CREATE TABLE IF NOT EXISTS above.
+ALTER TABLE "evolution_dealer_inquiries"
+  ADD COLUMN IF NOT EXISTS "dealerPhone" TEXT;
 
 CREATE TABLE IF NOT EXISTS "evolution_ticket_follow_ups" (
   "id" TEXT NOT NULL,
