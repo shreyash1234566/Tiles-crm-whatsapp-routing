@@ -15,11 +15,11 @@ export async function GET() {
   const current = await access()
   if (!current) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { user, ownerId } = current
+  // Staff inbox access is exclusively work-item scoped. The legacy group list
+  // has no message-level department boundary, so returning it could leak a
+  // shared group transcript through a stale/mutable group department field.
+  if (user.role === 'STAFF') return NextResponse.json({ data: [] })
   const where: { userId: number; status: string; departmentId?: number | null } = { userId: ownerId, status: 'open' }
-  if (user.role === 'STAFF') {
-    if (!user.routingDepartmentId) return NextResponse.json({ data: [] })
-    where.departmentId = user.routingDepartmentId
-  }
   const groups = await prisma.evolutionGroup.findMany({
     where,
     orderBy: [{ mentionPriority: 'desc' }, { unreadCount: 'desc' }, { lastMessageAt: 'desc' }, { createdAt: 'desc' }],

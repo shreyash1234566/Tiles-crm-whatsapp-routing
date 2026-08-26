@@ -576,7 +576,7 @@ export function extractEvolutionMessageStatusUpdates(body: unknown): EvolutionMe
 
 export async function sendEvolutionGroupMedia(input: {
   groupJid: string
-  mediaUrl: string
+  media: string
   mediaType: 'image' | 'document' | 'audio' | 'video'
   mimeType: string
   fileName: string
@@ -585,6 +585,9 @@ export async function sendEvolutionGroupMedia(input: {
 }) {
   const config = getEvolutionConfig()
   if (!config) throw new Error('Evolution API is not configured')
+  if (!input.media || !isEvolutionBase64(input.media)) {
+    throw new Error('Attachment could not be prepared for Evolution')
+  }
   const quoted = input.quoted?.id
     ? { key: { id: input.quoted.id, remoteJid: input.groupJid, fromMe: false }, message: { conversation: input.quoted.text || '' } }
     : undefined
@@ -592,14 +595,35 @@ export async function sendEvolutionGroupMedia(input: {
   if (input.mediaType === 'audio') {
     return evolutionRequest<unknown>(`/message/sendWhatsAppAudio/${encodeURIComponent(config.instanceName)}`, {
       method: 'POST',
-      body: JSON.stringify({ number: input.groupJid, audio: input.mediaUrl, mimetype: input.mimeType, ...(quoted ? { quoted } : {}) }),
+      // v2.3.7 accepts a raw, complete base64 value at top-level `audio`.
+      // Avoid an internal Docker URL here: its hostname (`app`) fails the
+      // provider's URL validator before Evolution can fetch the file.
+      body: JSON.stringify({ number: input.groupJid, audio: input.media, mimetype: input.mimeType, ...(quoted ? { quoted } : {}) }),
     }, 30000)
   }
 
   return evolutionRequest<unknown>(`/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
-    // v2.3.7 accepts filename for images but fileName for documents. Sending
-    // both keeps the request compatible with that API version.
-    body: JSON.stringify({ number: input.groupJid, mediatype: input.mediaType, media: input.mediaUrl, mimetype: input.mimeType, fileName: input.fileName, filename: input.fileName, ...(input.caption ? { caption: input.caption } : {}), ...(quoted ? { quoted } : {}) }),
+    // v2.3.7 accepts raw base64 in top-level `media`; documents require
+    // fileName. Keep filename too for the image/document compatibility path.
+    body: JSON.stringify({ number: input.groupJid, mediatype: input.mediaType, media: input.media, mimetype: input.mimeType, fileName: input.fileName, filename: input.fileName, ...(input.caption ? { caption: input.caption } : {}), ...(quoted ? { quoted } : {}) }),
   }, 30000)
+}
+
+/**
+ * Evolution v2.3.7 validates raw base64 with class-validator before sending.
+ * This rejects empty/truncated buffers in the CRM before a provider request is
+ * made; do not pass a data URI or an internal Docker URL to this adapter.
+ */
+export function encodeEvolutionMedia(buffer: Buffer): string {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new Error('Attachment is empty')
+  const encoded = buffer.toString('base64')
+  if (!isEvolutionBase64(encoded) || Buffer.from(encoded, 'base64').length !== buffer.length) {
+    throw new Error('Attachment could not be prepared for Evolution')
+  }
+  return encoded
+}
+
+function isEvolutionBase64(value: string): boolean {
+  return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { classifyIntent, extractEvolutionMessages, extractEvolutionMessageStatusUpdates, getEvolutionConfig, isGroupJid, normalizePhoneJid, sendEvolutionGroupMedia, sendEvolutionGroupText } from './evolution-routing'
+import { classifyIntent, encodeEvolutionMedia, extractEvolutionMessages, extractEvolutionMessageStatusUpdates, getEvolutionConfig, isGroupJid, normalizePhoneJid, sendEvolutionGroupMedia, sendEvolutionGroupText } from './evolution-routing'
 
 afterEach(() => {
   delete process.env.EVOLUTION_API_URL
@@ -103,12 +103,19 @@ describe('Evolution group routing adapter', () => {
     const fetchMock = vi.fn().mockImplementation(() => new Response(JSON.stringify({ key: { id: 'sent' } }), { status: 201 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', mediaUrl: 'http://app:3000/api/uploads/a.ogg', mediaType: 'audio', mimeType: 'audio/ogg', fileName: 'voice.ogg' })
+    await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', media: 'QUJDRA==', mediaType: 'audio', mimeType: 'audio/ogg', fileName: 'voice.ogg' })
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/message/sendWhatsAppAudio/tiles')
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain('"audio":"QUJDRA=="')
 
-    await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', mediaUrl: 'http://app:3000/api/uploads/a.pdf', mediaType: 'document', mimeType: 'application/pdf', fileName: 'invoice.pdf' })
+    await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', media: 'QUJDRA==', mediaType: 'document', mimeType: 'application/pdf', fileName: 'invoice.pdf' })
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/message/sendMedia/tiles')
     expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"fileName":"invoice.pdf"')
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"media":"QUJDRA=="')
+  })
+
+  it('encodes complete media buffers and rejects an empty attachment before Evolution is called', () => {
+    expect(encodeEvolutionMedia(Buffer.from('tile sample'))).toBe(Buffer.from('tile sample').toString('base64'))
+    expect(() => encodeEvolutionMedia(Buffer.alloc(0))).toThrow('Attachment is empty')
   })
 
   it('extracts a group reaction without treating it as a text inquiry', () => {

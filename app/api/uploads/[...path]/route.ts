@@ -13,6 +13,20 @@ const MIME_TYPES: Record<string, string> = {
   gif: 'image/gif',
   svg: 'image/svg+xml',
   pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv',
+  txt: 'text/plain; charset=utf-8',
+  zip: 'application/zip',
+  mp3: 'audio/mpeg',
+  ogg: 'audio/ogg',
+  wav: 'audio/wav',
+  m4a: 'audio/mp4',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
 }
 
 // In standalone Next.js builds, process.cwd() ≠ /app — use UPLOAD_DIR env var

@@ -6,6 +6,7 @@ import { publishEvent } from '@/lib/redis'
 import { uploadFile } from '@/lib/r2'
 import { findDealerForEvolutionMessage } from '@/lib/evolution-operations'
 import { getEvolutionAgentQueue } from '@/lib/queues/jobs'
+import { workItemRecipientIds } from '@/lib/evolution-work-items'
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 
@@ -69,7 +70,7 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           }
           const group = await prisma.evolutionGroup.findUnique({
             where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
-            select: { id: true, departmentId: true },
+            select: { id: true },
           })
           if (!group) return
           if (item.reactionEmoji) {
@@ -81,13 +82,18 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           } else {
             await prisma.evolutionGroupReaction.deleteMany({ where: { groupId: group.id, targetMessageId: item.reactionTargetMessageId, senderJid: item.senderJid } })
           }
-          const recipients = await prisma.user.findMany({
-            where: { isActive: true, OR: [{ id: ownerUserId }, ...(group.departmentId ? [{ routingDepartmentId: group.departmentId }] : [])] },
-            select: { id: true },
+          const itemScopes = await prisma.evolutionDepartmentWorkItem.findMany({
+            where: { groupId: group.id, messages: { some: { message: { messageId: item.reactionTargetMessageId } } } },
+            select: { id: true, departmentId: true, assignedUserId: true },
           })
+          const eligibleUsers = await prisma.user.findMany({ where: { isActive: true }, select: { id: true, role: true, routingDepartmentId: true } })
+          const recipientIds = new Set<number>()
+          for (const scope of itemScopes) {
+            for (const id of workItemRecipientIds(eligibleUsers, scope.departmentId, scope.assignedUserId)) recipientIds.add(id)
+          }
           void publishEvent('chat_events', {
-            type: 'reaction_update', userId: String(ownerUserId), userIds: recipients.map((user) => String(user.id)), conversationId: group.id,
-            payload: { targetMessageId: item.reactionTargetMessageId, emoji: item.reactionEmoji, senderJid: item.senderJid },
+            type: 'reaction_update', userId: String(ownerUserId), userIds: [...recipientIds].map(String), conversationId: group.id,
+            payload: { targetMessageId: item.reactionTargetMessageId, emoji: item.reactionEmoji, senderJid: item.senderJid, workItemIds: itemScopes.map((scope) => scope.id) },
           })
           return
         }
@@ -125,11 +131,12 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           senderJid: item.senderJid,
         })
         const result = await prisma.$transaction(async (tx) => {
-          const current = await tx.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { id: true, departmentId: true, assignedUserId: true } })
-          const fromDepartmentId = current?.departmentId ?? null
           const group = await tx.evolutionGroup.upsert({
             where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
-            update: { subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? current?.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
+            // The parent group is retained for compatibility and global group
+            // metadata only. Its department is deliberately not overwritten:
+            // each routed responsibility belongs to a separate work item.
+            update: { subject, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
             create: { userId: ownerUserId, groupJid: item.groupJid, subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
           })
           if (dealerMatch) {
@@ -143,8 +150,6 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
             where: { groupId: group.id },
             update: {
               ...(dealerMatch ? { dealerId: dealerMatch.dealerId, dealerPhone: dealerMatch.matchedPhone } : {}),
-              departmentId: routing.departmentId,
-              assignedUserId: routing.assignedUserId ?? current?.assignedUserId ?? undefined,
               title: subject,
               lastActivityAt: item.createdAt,
             },
@@ -162,10 +167,58 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           })
           const ticket = await tx.evolutionGroupTicket.upsert({
             where: { groupId: group.id },
-            update: { inquiryId: inquiry.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? current?.assignedUserId ?? undefined, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null },
+            update: { inquiryId: inquiry.id },
             create: { groupId: group.id, inquiryId: inquiry.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, assignedAt: routing.assignedUserId ? item.createdAt : null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
           })
           const message = await tx.evolutionGroupMessage.create({ data: { groupId: group.id, messageId: item.messageId, senderJid: item.senderJid, senderName: item.senderName, text: item.text, messageType: item.messageType, mediaUrl: storedMediaUrl, quotedMessageId: item.quotedMessageId, mentionedJids: item.mentionedJids, fromMe: false, status: 'received', createdAt: item.createdAt } })
+          const existingWorkItem = await tx.evolutionDepartmentWorkItem.findFirst({
+            where: { ticketId: ticket.id, departmentId: routing.departmentId, status: 'ACTIVE' },
+            orderBy: { updatedAt: 'desc' },
+          })
+          const workItem = existingWorkItem
+            ? await tx.evolutionDepartmentWorkItem.update({
+              where: { id: existingWorkItem.id },
+              data: {
+                ...(routing.assignedUserId ? { assignedUserId: routing.assignedUserId } : {}),
+                routingReason: routing.routingReason,
+                routeType: routing.routeType,
+                intent: routing.intent ?? null,
+                confidence: routing.confidence ?? null,
+                mentionPriority: routing.mentionPriority,
+                lastMessageText: item.text || `[${item.messageType}]`,
+                lastMessageAt: item.createdAt,
+                unreadCount: { increment: 1 },
+                version: { increment: 1 },
+              },
+            })
+            : await tx.evolutionDepartmentWorkItem.create({
+              data: {
+                groupId: group.id,
+                ticketId: ticket.id,
+                departmentId: routing.departmentId,
+                departmentName: routing.departmentName,
+                assignedUserId: routing.assignedUserId ?? null,
+                routingReason: routing.routingReason,
+                routeType: routing.routeType,
+                intent: routing.intent ?? null,
+                confidence: routing.confidence ?? null,
+                mentionPriority: routing.mentionPriority,
+                lastMessageText: item.text || `[${item.messageType}]`,
+                lastMessageAt: item.createdAt,
+                unreadCount: 1,
+              },
+            })
+          await tx.evolutionDepartmentWorkItemMessage.create({ data: { workItemId: workItem.id, messageId: message.id, createdAt: item.createdAt } })
+          await tx.evolutionDepartmentWorkItemAudit.create({
+            data: {
+              workItemId: workItem.id,
+              messageId: message.id,
+              event: existingWorkItem ? 'MESSAGE_ROUTED' : 'CREATED',
+              toDepartmentId: routing.departmentId,
+              reason: routing.routingReason,
+              metadata: { routeType: routing.routeType, webhookMessageId: item.messageId, correlationId },
+            },
+          })
           const campaignRecipient = await tx.evolutionCampaignRecipient.findFirst({
             where: {
               groupJid: item.groupJid,
@@ -182,27 +235,18 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
               data: { status: 'REPLIED', repliedAt: item.createdAt, responseMessageId: message.id },
             })
           }
-          const isHandoff = fromDepartmentId !== null && routing.departmentId !== null && fromDepartmentId !== routing.departmentId
-          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, inquiryId: inquiry.id, event: isHandoff ? 'HANDOFF' : 'ROUTED', routeType: routing.routeType, fromDepartmentId, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason, correlationId, metadata: { dealerMatch: dealerMatch?.source ?? null, webhookMessageId: item.messageId } } })
+          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, inquiryId: inquiry.id, event: 'ROUTED', routeType: routing.routeType, fromDepartmentId: null, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason, correlationId, metadata: { dealerMatch: dealerMatch?.source ?? null, webhookMessageId: item.messageId, workItemId: workItem.id } } })
           const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, lastInboundAt: item.createdAt, unreadCount: { increment: 1 } } })
-          return { message, group: updatedGroup, ticketId: ticket.id, inquiryId: inquiry.id }
+          return { message, group: updatedGroup, ticketId: ticket.id, inquiryId: inquiry.id, workItem }
         })
-        const recipients = await prisma.user.findMany({
-          where: {
-            isActive: true,
-            OR: [
-              { id: ownerUserId },
-              ...(result.group.departmentId ? [{ routingDepartmentId: result.group.departmentId }] : []),
-            ],
-          },
-          select: { id: true },
-        })
+        const eligibleUsers = await prisma.user.findMany({ where: { isActive: true }, select: { id: true, role: true, routingDepartmentId: true } })
+        const recipientIds = workItemRecipientIds(eligibleUsers, result.workItem.departmentId, result.workItem.assignedUserId)
         void publishEvent('chat_events', {
           type: 'new_message',
           userId: String(ownerUserId),
-          userIds: recipients.map((user) => String(user.id)),
-          conversationId: result.group.id,
-          payload: result,
+          userIds: recipientIds.map(String),
+          conversationId: result.workItem.id,
+          payload: { ...result, workItemId: result.workItem.id, departmentId: result.workItem.departmentId },
         })
 
         // Queue RAG after persistence so an Evolution retry cannot create a
@@ -217,7 +261,6 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
         })
 
         // Create user-scoped notifications for each recipient locally since recipients and result exist now
-        const recipientIds = recipients.map((r) => r.id);
         await Promise.all(recipientIds.map((uId) =>
           prisma.notification.create({
             data: {
@@ -225,7 +268,7 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
               type: 'whatsapp',
               title: item.senderName || item.senderJid.split('@')[0] || 'WhatsApp Group',
               subtitle: item.text ? (item.text.length > 50 ? item.text.substring(0, 50) + '...' : item.text) : 'New message in Group',
-              href: '/routing-crm?group_id=' + result.group.id,
+              href: '/routing-crm?work_item_id=' + result.workItem.id,
               sourceId: item.messageId,
             }
           })

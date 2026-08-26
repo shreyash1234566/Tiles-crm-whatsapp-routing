@@ -2990,6 +2990,7 @@ model EvolutionGroup {
   reactions          EvolutionGroupReaction[]
   ticket             EvolutionGroupTicket?
   inquiry            EvolutionDealerInquiry?
+  workItems          EvolutionDepartmentWorkItem[]
 
   @@unique([userId, groupJid])
   @@index([userId, departmentId, status])
@@ -3014,6 +3015,7 @@ model EvolutionGroupMessage {
   createdAt       DateTime @default(now())
 
   group           EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  workItemMessages EvolutionDepartmentWorkItemMessage[]
 
   @@unique([groupId, messageId])
   @@index([groupId, createdAt])
@@ -3047,6 +3049,7 @@ model EvolutionGroupTicket {
   audits          EvolutionRoutingAudit[]
   followUps       EvolutionTicketFollowUp[]
   agentRuns       EvolutionAgentRun[]
+  workItems       EvolutionDepartmentWorkItem[]
 
   @@index([departmentId, status])
   @@index([routeType, createdAt])
@@ -3097,6 +3100,83 @@ model EvolutionGroupReaction {
   @@unique([groupId, targetMessageId, senderJid])
   @@index([groupId, targetMessageId])
   @@map("evolution_group_reactions")
+}
+
+// A WhatsApp group is the shared external conversation. A work item is the
+// internal, department-scoped responsibility created from one or more routed
+// messages. Do not use EvolutionGroup.departmentId as an authorization source:
+// that legacy field is only a compatibility/default-routing hint.
+model EvolutionDepartmentWorkItem {
+  id                String   @id @default(cuid())
+  groupId           String
+  ticketId          String
+  departmentId      Int?
+  departmentName    String?
+  status            String   @default("ACTIVE")
+  assignedUserId    Int?
+  claimedByUserId   Int?
+  claimedAt         DateTime?
+  routingReason     String?
+  routeType         String   @default("DEFAULT")
+  intent            String?
+  confidence        Float?
+  mentionPriority   Boolean  @default(false)
+  lastMessageText   String?
+  lastMessageAt     DateTime?
+  unreadCount       Int      @default(0)
+  doneAt            DateTime?
+  doneByUserId      Int?
+  version           Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  group             EvolutionGroup                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  ticket            EvolutionGroupTicket           @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  messages          EvolutionDepartmentWorkItemMessage[]
+  audits            EvolutionDepartmentWorkItemAudit[]
+
+  @@index([groupId, status])
+  @@index([ticketId, departmentId, status])
+  @@index([departmentId, status, lastMessageAt])
+  @@index([assignedUserId, status])
+  @@map("evolution_department_work_items")
+}
+
+// Only messages deliberately routed to (or sent from) a work item are visible
+// in that department's inbox. This prevents a staff member from reading the
+// full cross-department WhatsApp transcript through a shared parent group.
+model EvolutionDepartmentWorkItemMessage {
+  id          String   @id @default(cuid())
+  workItemId  String
+  messageId   String
+  createdAt   DateTime @default(now())
+
+  workItem    EvolutionDepartmentWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  message     EvolutionGroupMessage       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([workItemId, messageId])
+  @@index([messageId])
+  @@map("evolution_department_work_item_messages")
+}
+
+// Immutable per-work-item audit trail for routing, claims, transfers and Done.
+model EvolutionDepartmentWorkItemAudit {
+  id                String   @id @default(cuid())
+  workItemId        String
+  messageId         String?
+  actorUserId       Int?
+  event             String
+  fromDepartmentId  Int?
+  toDepartmentId    Int?
+  reason            String?
+  metadata          Json?
+  createdAt         DateTime @default(now())
+
+  workItem          EvolutionDepartmentWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+
+  @@index([workItemId, createdAt])
+  @@index([event, createdAt])
+  @@map("evolution_department_work_item_audits")
 }
 
 // ─── Evolution dealer operations (additive Phase 1) ───────────────────────

@@ -7,12 +7,13 @@ import { isClosedInquiryStage, isEvolutionInquiryStage, isValidEvolutionStageTra
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const session = await getSession()
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (session.user.role === 'STAFF') return NextResponse.json({ error: 'Lifecycle changes require manager access' }, { status: 403 })
   const actorUserId = Number(session.user.id)
   const ownerUserId = await getEvolutionOwnerUserId()
   if (!ownerUserId) return NextResponse.json({ error: 'No active Admin owner configured' }, { status: 503 })
   const { id } = await context.params
   const group = await prisma.evolutionGroup.findFirst({ where: { id, userId: ownerUserId }, include: { ticket: true, inquiry: true } })
-  if (!group || (session.user.role === 'STAFF' && group.departmentId !== session.user.routingDepartmentId)) return NextResponse.json({ error: 'Group not found' }, { status: 404 })
+  if (!group) return NextResponse.json({ error: 'Group not found' }, { status: 404 })
   if (!group.ticket || !group.inquiry) return NextResponse.json({ error: 'An inquiry and ticket are required before changing lifecycle stage' }, { status: 409 })
   const body = await request.json().catch(() => ({})) as { stage?: string; reason?: string; expectedVersion?: number; lostReason?: string }
   const stage = String(body.stage || '').trim().toUpperCase()

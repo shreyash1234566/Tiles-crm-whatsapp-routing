@@ -9,6 +9,7 @@ type GroupAction = 'claim' | 'release' | 'transfer'
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const session = await getSession()
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (session.user.role === 'STAFF') return NextResponse.json({ error: 'Use department work-item actions for staff inbox work' }, { status: 403 })
   const actorUserId = Number(session.user.id)
   if (!Number.isInteger(actorUserId) || actorUserId <= 0) return NextResponse.json({ error: 'Invalid user session' }, { status: 401 })
 
@@ -19,7 +20,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     where: { id, userId: ownerId },
     include: { ticket: true, inquiry: true },
   })
-  if (!group || (session.user.role === 'STAFF' && group.departmentId !== session.user.routingDepartmentId)) {
+  if (!group) {
     return NextResponse.json({ error: 'Group not found' }, { status: 404 })
   }
 

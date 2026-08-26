@@ -8,10 +8,11 @@ import { getEvolutionFollowUpQueue } from '@/lib/queues/jobs'
 async function resolveGroup(id: string) {
   const session = await getSession()
   if (!session?.user) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
+  if (session.user.role === 'STAFF') return { error: NextResponse.json({ error: 'Follow-ups require manager access' }, { status: 403 }) }
   const ownerId = await getEvolutionOwnerUserId()
   if (!ownerId) return { error: NextResponse.json({ error: 'No active Admin owner configured' }, { status: 503 }) }
   const group = await prisma.evolutionGroup.findFirst({ where: { id, userId: ownerId }, include: { ticket: true, inquiry: true } })
-  if (!group || (session.user.role === 'STAFF' && group.departmentId !== session.user.routingDepartmentId)) {
+  if (!group) {
     return { error: NextResponse.json({ error: 'Group not found' }, { status: 404 }) }
   }
   if (!group.ticket) return { error: NextResponse.json({ error: 'This group has no ticket yet' }, { status: 409 }) }
