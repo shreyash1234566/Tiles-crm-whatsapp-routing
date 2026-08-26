@@ -54,6 +54,8 @@ export const QUEUE_AUTOMATION = 'automation-queue'
 export const QUEUE_BROADCAST_STATUS = 'broadcast-status-queue'
 export const QUEUE_MESSAGE_DELIVERY = 'message-delivery-queue'
 export const QUEUE_AI_AGENT = 'wa-ai-agent'
+export const QUEUE_EVOLUTION_AGENT = 'evolution-agent'
+export const QUEUE_EVOLUTION_FOLLOW_UP = 'evolution-follow-up'
 
 // ── Typed job data shapes ──────────────────────────────────────────────────
 
@@ -96,6 +98,16 @@ export interface AiAgentJobData {
   channel?: 'whatsapp' | 'facebook' | 'instagram'
   socialPageAccessToken?: string  // encrypted Page Access Token for Messenger API
   socialRecipientId?: string      // PSID or IGSID to reply to
+}
+
+export interface EvolutionAgentJobData {
+  ownerUserId: number
+  groupId: string
+  inboundMessageId: string
+}
+
+export interface EvolutionFollowUpJobData {
+  followUpId: string
 }
 
 // ── Queue instances (Lazy Loaded) ──────────────────────────────────────────
@@ -169,6 +181,37 @@ export function getAiAgentQueue() {
   return _aiAgentQueue
 }
 
+let _evolutionAgentQueue: Queue<EvolutionAgentJobData> | undefined
+export function getEvolutionAgentQueue() {
+  if (!_evolutionAgentQueue) {
+    _evolutionAgentQueue = new Queue<EvolutionAgentJobData>(QUEUE_EVOLUTION_AGENT, {
+      connection,
+      defaultJobOptions: {
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 10_000 },
+        removeOnComplete: { count: 300 },
+        removeOnFail: { count: 500 },
+      },
+    })
+  }
+  return _evolutionAgentQueue
+}
+
+let _evolutionFollowUpQueue: Queue<EvolutionFollowUpJobData> | undefined
+export function getEvolutionFollowUpQueue() {
+  if (!_evolutionFollowUpQueue) {
+    _evolutionFollowUpQueue = new Queue<EvolutionFollowUpJobData>(QUEUE_EVOLUTION_FOLLOW_UP, {
+      connection,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: { count: 1_000 },
+        removeOnFail: { count: 1_000 },
+      },
+    })
+  }
+  return _evolutionFollowUpQueue
+}
+
 // ── Worker factory ─────────────────────────────────────────────────────────
 // Workers are created lazily so importing this module in the Next.js
 // process (which runs in both server and edge contexts) doesn't accidentally
@@ -206,6 +249,24 @@ export function createAiAgentWorker(
 ): Worker {
   // concurrency = 2 caps concurrent Gemini API calls (prevents rate limits)
   return new Worker<AiAgentJobData>(QUEUE_AI_AGENT, handler, {
+    connection,
+    concurrency: 2,
+  })
+}
+
+export function createEvolutionAgentWorker(
+  handler: WorkerHandler<EvolutionAgentJobData>,
+): Worker {
+  return new Worker<EvolutionAgentJobData>(QUEUE_EVOLUTION_AGENT, handler, {
+    connection,
+    concurrency: 2,
+  })
+}
+
+export function createEvolutionFollowUpWorker(
+  handler: WorkerHandler<EvolutionFollowUpJobData>,
+): Worker {
+  return new Worker<EvolutionFollowUpJobData>(QUEUE_EVOLUTION_FOLLOW_UP, handler, {
     connection,
     concurrency: 2,
   })

@@ -247,7 +247,7 @@ export async function configureEvolutionWebhook(webhookUrl: string) {
         webhookByEvents: false,
         base64: true,
         headers: { Authorization: `Bearer ${config.webhookSecret}` },
-        events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED', 'GROUPS_UPSERT', 'GROUP_PARTICIPANTS_UPDATE'],
+        events: ['MESSAGES_UPSERT', 'SEND_MESSAGE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED', 'GROUPS_UPSERT', 'GROUP_PARTICIPANTS_UPDATE'],
       },
     }),
   })
@@ -302,7 +302,10 @@ function extractMessageItems(body: unknown): Record<string, unknown>[] {
 export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage[] {
   const root = objectValue(body)
   const event = stringValue(root.event || root.type).toUpperCase().replace(/[.\-]/g, '_')
-  if (event && !event.includes('MESSAGE') && event !== 'MESSAGES_UPSERT') return []
+  // Only an UPSERT represents a newly received message. Status updates and
+  // outbound SEND_MESSAGE events can contain a message-shaped payload too,
+  // but treating either as inbound would duplicate tickets and replies.
+  if (event && event !== 'MESSAGES_UPSERT') return []
 
   const messages: EvolutionInboundMessage[] = []
   for (const data of extractMessageItems(body)) {

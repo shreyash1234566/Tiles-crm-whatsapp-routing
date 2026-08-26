@@ -1,8 +1,9 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
 import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, ChevronLeft, Circle, Link2, Loader2, MessageSquare, Paperclip, RefreshCw, Send, UserCheck, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Check, ChevronLeft, Circle, Link2, Loader2, MessageSquare, Paperclip, RefreshCw, Send, UserCheck, Wifi, WifiOff, X } from 'lucide-react';
 import { useSession } from '@/components/AuthProvider';
 import { useSearchParams } from 'next/navigation';
 import { useRealtime } from '@/hooks/use-realtime';
@@ -47,6 +48,13 @@ function RoutingCrmContent() {
   const [groups, setGroups] = useState([]);
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [agentRuns, setAgentRuns] = useState([]);
+  const [followUpMessage, setFollowUpMessage] = useState('');
+  const [followUpFor, setFollowUpFor] = useState('');
+  const [schedulingFollowUp, setSchedulingFollowUp] = useState(false);
+  const [nextStage, setNextStage] = useState('');
+  const [stageReason, setStageReason] = useState('');
+  const [updatingStage, setUpdatingStage] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [draft, setDraft] = useState('');
@@ -54,6 +62,7 @@ function RoutingCrmContent() {
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
   const [departments, setDepartments] = useState([]);
+  const [metrics, setMetrics] = useState(null);
   const [transferDeptId, setTransferDeptId] = useState('');
   const [transferring, setTransferring] = useState(false);
   const searchParams = useSearchParams();
@@ -92,17 +101,38 @@ function RoutingCrmContent() {
     }
   }, [initialGroupId]);
 
+  const loadMetrics = useCallback(async () => {
+    try {
+      const response = await fetch('/api/evolution/metrics', { cache: 'no-store' });
+      if (!response.ok) return;
+      const body = await response.json();
+      setMetrics(body.data || null);
+    } catch {
+      // The inbox remains usable if reporting is temporarily unavailable.
+    }
+  }, []);
+
   const loadMessages = useCallback(async (groupId) => {
     if (!groupId) {
       setMessages([]);
+      setAgentRuns([]);
       return;
     }
     setLoadingMessages(true);
     try {
-      const response = await fetch(`/api/evolution/messages?group_id=${encodeURIComponent(groupId)}`, { cache: 'no-store' });
+      const [response, agentResponse] = await Promise.all([
+        fetch(`/api/evolution/messages?group_id=${encodeURIComponent(groupId)}`, { cache: 'no-store' }),
+        fetch(`/api/evolution/groups/${encodeURIComponent(groupId)}/agent-runs`, { cache: 'no-store' }),
+      ]);
       if (!response.ok) throw new Error('Unable to load messages');
       const body = await response.json();
       setMessages(body.data || []);
+      if (agentResponse.ok) {
+        const agentBody = await agentResponse.json();
+        setAgentRuns(agentBody.data || []);
+      } else {
+        setAgentRuns([]);
+      }
       setGroups((current) => current.map((group) => group.id === groupId ? { ...group, unreadCount: 0 } : group));
     } catch (error) {
       setNotice(error.message || 'Unable to load messages');
@@ -128,29 +158,26 @@ function RoutingCrmContent() {
   useEffect(() => {
     if (status !== 'authenticated') return;
 
-    if (initialGroupId) {
-      const idNum = initialGroupId;
-      if (groups.some(g => g.id === idNum)) {
-        setActiveGroupId(idNum);
-      }
-    }
-  }, [initialGroupId, groups]);
-
-  useEffect(() => {
-    if (status !== 'authenticated') return;
-
-    void loadGroups();
-    void loadConnection();
+    const initialLoad = window.setTimeout(() => {
+      void loadGroups();
+      void loadMetrics();
+      void loadConnection();
+    }, 0);
 
     const timer = setInterval(() => {
       void loadGroups();
+      void loadMetrics();
       void loadConnection();
     }, 30000);
-    return () => clearInterval(timer);
-  }, [status, loadGroups, loadConnection]);
+    return () => {
+      window.clearTimeout(initialLoad);
+      clearInterval(timer);
+    };
+  }, [status, loadGroups, loadMetrics, loadConnection]);
 
   useEffect(() => {
-    void loadMessages(activeGroupId);
+    const load = window.setTimeout(() => { void loadMessages(activeGroupId); }, 0);
+    return () => window.clearTimeout(load);
   }, [activeGroupId, loadMessages]);
 
   async function configureWebhook() {
@@ -227,6 +254,51 @@ function RoutingCrmContent() {
     setGroups((current) => current.map((group) => group.id === activeGroup.id ? body.data : group));
   }
 
+  async function scheduleFollowUp() {
+    if (!activeGroup || !followUpMessage.trim() || !followUpFor || schedulingFollowUp) return;
+    setSchedulingFollowUp(true);
+    setNotice('');
+    try {
+      const response = await fetch(`/api/evolution/groups/${activeGroup.id}/follow-ups`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: followUpMessage.trim(), scheduledFor: new Date(followUpFor).toISOString(), idempotencyKey: `${activeGroup.id}:${followUpFor}:${followUpMessage.trim()}` }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Unable to schedule follow-up');
+      setFollowUpMessage('');
+      setFollowUpFor('');
+      setNotice(body.warning || 'Follow-up scheduled.');
+      void loadGroups();
+    } catch (error) {
+      setNotice(error.message || 'Unable to schedule follow-up');
+    } finally {
+      setSchedulingFollowUp(false);
+    }
+  }
+
+  async function updateStage() {
+    const stage = nextStage || activeGroup?.ticket?.stage;
+    if (!activeGroup || !stage || !stageReason.trim() || updatingStage) return;
+    setUpdatingStage(true);
+    setNotice('');
+    try {
+      const response = await fetch(`/api/evolution/groups/${activeGroup.id}/stage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage, reason: stageReason.trim(), expectedVersion: activeGroup.ticket?.version }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Unable to update ticket stage');
+      setStageReason('');
+      setNextStage('');
+      setNotice(`Ticket moved to ${stage}.`);
+      void loadGroups();
+    } catch (error) {
+      setNotice(error.message || 'Unable to update ticket stage');
+    } finally {
+      setUpdatingStage(false);
+    }
+  }
+
   async function sendMessage(event) {
     event.preventDefault();
     const text = draft.trim();
@@ -268,11 +340,19 @@ function RoutingCrmContent() {
           <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${connected ? 'bg-emerald-500/10 text-emerald-700' : 'bg-amber-500/10 text-amber-700'}`}>
             {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />} {connected ? 'WhatsApp connected' : connection.state === 'not_configured' ? 'Evolution not configured' : 'WhatsApp not connected'}
           </span>
-          <button type="button" onClick={() => { void loadGroups(); void loadConnection(); }} className="rounded-lg border border-border p-2 text-muted hover:bg-surface-hover" title="Refresh"><RefreshCw className="h-4 w-4" /></button>
+          <button type="button" onClick={() => { void loadGroups(); void loadMetrics(); void loadConnection(); }} className="rounded-lg border border-border p-2 text-muted hover:bg-surface-hover" title="Refresh"><RefreshCw className="h-4 w-4" /></button>
         </div>
       </div>
 
       {notice && <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-5 py-2 text-xs text-amber-800"><AlertTriangle className="h-4 w-4" />{notice}</div>}
+
+      {metrics && <div className="grid shrink-0 grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-5">
+        <div className="bg-white px-4 py-2.5"><div className="flex items-center gap-1 text-[11px] font-medium text-muted"><BarChart3 className="h-3.5 w-3.5" />Group inquiries</div><p className="mt-0.5 text-sm font-bold text-foreground">{metrics.inquiries?.total || 0}</p></div>
+        <div className="bg-white px-4 py-2.5"><p className="text-[11px] font-medium text-muted">Open / unassigned</p><p className="mt-0.5 text-sm font-bold text-foreground">{metrics.inquiries?.open || 0} <span className="font-normal text-muted">/ {metrics.inquiries?.unassigned || 0}</span></p></div>
+        <div className="bg-white px-4 py-2.5"><p className="text-[11px] font-medium text-muted">Overdue follow-ups</p><p className="mt-0.5 text-sm font-bold text-amber-700">{metrics.inquiries?.overdueFollowUps || 0}</p></div>
+        <div className="bg-white px-4 py-2.5"><p className="text-[11px] font-medium text-muted">Median first reply</p><p className="mt-0.5 text-sm font-bold text-foreground">{metrics.response?.medianFirstResponseMinutes == null ? '—' : `${metrics.response.medianFirstResponseMinutes}m`}</p></div>
+        <div className="bg-white px-4 py-2.5"><p className="text-[11px] font-medium text-muted">Inquiry conversion</p><p className="mt-0.5 text-sm font-bold text-foreground">{metrics.inquiries?.conversionRate || 0}%</p></div>
+      </div>}
 
       {!connected && isAdmin && <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-accent/20 bg-accent/5 px-5 py-3"><div><p className="text-sm font-semibold text-foreground">Connect the WhatsApp sender</p><p className="text-xs text-muted">Request a QR from Evolution, then scan it on WhatsApp → Linked devices.</p></div><div className="flex items-center gap-2"><button type="button" onClick={connectWhatsApp} disabled={qrLoading} className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">{qrLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />} Show QR</button><button type="button" onClick={configureWebhook} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-foreground">Register webhook</button><Link href="/settings" className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-foreground">Configure</Link></div></div>}
 
@@ -296,7 +376,7 @@ function RoutingCrmContent() {
                   <button type="button" onClick={() => setActiveGroupId(null)} className="rounded-lg p-1.5 text-muted hover:bg-surface-hover md:hidden"><ChevronLeft className="h-5 w-5" /></button>
                   <div className="min-w-0">
                     <h2 className="truncate text-sm font-bold text-foreground">{activeGroup.subject}</h2>
-                    <p className="text-xs text-muted">{activeGroup.departmentName || 'Admin review'} · {(activeGroup.routeType || 'DEFAULT').replace('_', ' ')}{activeGroup.confidence ? ` · ${Math.round(activeGroup.confidence * 100)}% confidence` : ''} · {activeGroup.groupJid}</p>
+                    <p className="text-xs text-muted">{activeGroup.departmentName || 'Admin review'} · {activeGroup.ticket?.stage || 'NEW'} · {(activeGroup.routeType || 'DEFAULT').replace('_', ' ')}{activeGroup.confidence ? ` · ${Math.round(activeGroup.confidence * 100)}% confidence` : ''} · {activeGroup.groupJid}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -351,6 +431,18 @@ function RoutingCrmContent() {
                   )}
                 </div>
               </div>
+              {agentRuns.filter((run) => run.status === 'DRAFTED' && run.responseText).slice(0, 1).map((run) => (
+                <div key={run.id} className="shrink-0 border-t border-violet-200 bg-violet-50 px-4 py-2.5">
+                  <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold text-violet-900">Grounded RAG draft — review before sending</p><p className="mt-1 max-w-3xl whitespace-pre-wrap text-xs text-violet-800">{run.responseText}</p><p className="mt-1 text-[10px] text-violet-700">{run.retrievalIds?.length || 0} knowledge reference{run.retrievalIds?.length === 1 ? '' : 's'} · {formatTime(run.createdAt)}</p></div><button type="button" onClick={() => setDraft(String(run.responseText || '').replace(/\n\n\[Knowledge refs:.*$/s, ''))} className="shrink-0 rounded-lg border border-violet-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-100">Use draft</button></div>
+                </div>
+              ))}
+              <details className="shrink-0 border-t border-border bg-slate-50 px-4 py-2">
+                <summary className="cursor-pointer text-xs font-semibold text-foreground">Ticket operations</summary>
+                <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                  <div className="rounded-lg border border-border bg-white p-2"><p className="mb-1 text-[11px] font-medium text-muted">Schedule a WhatsApp follow-up</p><textarea value={followUpMessage} onChange={(event) => setFollowUpMessage(event.target.value)} rows={2} placeholder="Follow-up message" className="mb-1 w-full resize-none rounded border border-border px-2 py-1 text-xs outline-none focus:border-accent" /><div className="flex gap-1"><input value={followUpFor} onChange={(event) => setFollowUpFor(event.target.value)} type="datetime-local" className="min-w-0 flex-1 rounded border border-border px-2 py-1 text-xs" /><button type="button" onClick={scheduleFollowUp} disabled={schedulingFollowUp || !followUpMessage.trim() || !followUpFor} className="rounded bg-accent px-2 py-1 text-xs font-semibold text-white disabled:opacity-50">Schedule</button></div></div>
+                  <div className="rounded-lg border border-border bg-white p-2"><p className="mb-1 text-[11px] font-medium text-muted">Move inquiry lifecycle</p><div className="flex gap-1"><select value={nextStage || activeGroup.ticket?.stage || 'NEW'} onChange={(event) => setNextStage(event.target.value)} className="min-w-0 flex-1 rounded border border-border px-2 py-1 text-xs"><option value="NEW">New</option><option value="TRIAGED">Triaged</option><option value="WORKING">Working</option><option value="QUOTATION">Quotation</option><option value="WAITING_FOR_DEALER">Waiting for dealer</option><option value="CONFIRMED">Confirmed</option><option value="PAYMENT_PENDING">Payment pending</option><option value="ALLOCATED">Allocated</option><option value="DISPATCH_PENDING">Dispatch pending</option><option value="DISPATCHED">Dispatched</option><option value="DELIVERED">Delivered</option><option value="CLOSED">Closed</option><option value="ON_HOLD">On hold</option><option value="ESCALATED">Escalated</option><option value="LOST">Lost</option><option value="CANCELLED">Cancelled</option></select><button type="button" onClick={updateStage} disabled={updatingStage || !stageReason.trim()} className="rounded bg-slate-800 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50">Update</button></div><input value={stageReason} onChange={(event) => setStageReason(event.target.value)} placeholder="Reason for this stage change" className="mt-1 w-full rounded border border-border px-2 py-1 text-xs outline-none focus:border-accent" /></div>
+                </div>
+              </details>
               <form onSubmit={sendMessage} className="shrink-0 border-t border-border bg-white p-3">
                 {attachment && (
                   <div className="mb-2 flex items-center justify-between rounded-lg bg-slate-100 px-3 py-2 text-xs text-foreground">

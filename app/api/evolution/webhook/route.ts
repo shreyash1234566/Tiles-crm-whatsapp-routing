@@ -3,6 +3,8 @@ import { prisma } from '@/lib/db'
 import { downloadEvolutionMedia, isAuthorizedEvolutionWebhook, extractEvolutionMessages, getEvolutionGroupSubject, resolveDepartmentForMessage } from '@/lib/evolution-routing'
 import { publishEvent } from '@/lib/redis'
 import { uploadFile } from '@/lib/r2'
+import { findDealerForEvolutionMessage } from '@/lib/evolution-operations'
+import { getEvolutionAgentQueue } from '@/lib/queues/jobs'
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 
@@ -74,24 +76,76 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
         }
         const previous = await prisma.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { departmentId: true } })
         const routing = await resolveDepartmentForMessage({ groupJid: item.groupJid, subject, text: item.text, mentionedJids: item.mentionedJids, existingDepartmentId: previous?.departmentId })
+        // This is intentionally an explicit identity or an unambiguous CRM
+        // dealer-phone match. Unknown WhatsApp participants never become
+        // customer records automatically in this dealer-only CRM.
+        const dealerMatch = await findDealerForEvolutionMessage({
+          userId: ownerUserId,
+          groupJid: item.groupJid,
+          senderJid: item.senderJid,
+        })
         const result = await prisma.$transaction(async (tx) => {
-          const current = await tx.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { id: true, departmentId: true } })
+          const current = await tx.evolutionGroup.findUnique({ where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } }, select: { id: true, departmentId: true, assignedUserId: true } })
           const fromDepartmentId = current?.departmentId ?? null
           const group = await tx.evolutionGroup.upsert({
             where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
-            update: { subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
+            update: { subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? current?.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
             create: { userId: ownerUserId, groupJid: item.groupJid, subject, departmentId: routing.departmentId, departmentName: routing.departmentName, routingReason: routing.routingReason, routeType: routing.routeType, intent: routing.intent ?? null, confidence: routing.confidence ?? null, assignedUserId: routing.assignedUserId ?? null, mentionPriority: routing.mentionPriority, ...(routing.mentionPriority ? { lastMentionAt: item.createdAt } : {}) },
+          })
+          if (dealerMatch) {
+            await tx.dealerEvolutionIdentity.upsert({
+              where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
+              update: { dealerId: dealerMatch.dealerId, phone: dealerMatch.matchedPhone, lastSeenAt: item.createdAt },
+              create: { userId: ownerUserId, dealerId: dealerMatch.dealerId, groupJid: item.groupJid, phone: dealerMatch.matchedPhone, lastSeenAt: item.createdAt },
+            })
+          }
+          const inquiry = await tx.evolutionDealerInquiry.upsert({
+            where: { groupId: group.id },
+            update: {
+              ...(dealerMatch ? { dealerId: dealerMatch.dealerId, dealerPhone: dealerMatch.matchedPhone } : {}),
+              departmentId: routing.departmentId,
+              assignedUserId: routing.assignedUserId ?? current?.assignedUserId ?? undefined,
+              title: subject,
+              lastActivityAt: item.createdAt,
+            },
+            create: {
+              groupId: group.id,
+              dealerId: dealerMatch?.dealerId ?? null,
+              dealerPhone: dealerMatch?.matchedPhone ?? null,
+              ownerUserId,
+              departmentId: routing.departmentId,
+              assignedUserId: routing.assignedUserId ?? null,
+              title: subject,
+              openedAt: item.createdAt,
+              lastActivityAt: item.createdAt,
+            },
           })
           const ticket = await tx.evolutionGroupTicket.upsert({
             where: { groupId: group.id },
-            update: { departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
-            create: { groupId: group.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
+            update: { inquiryId: inquiry.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? current?.assignedUserId ?? undefined, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null },
+            create: { groupId: group.id, inquiryId: inquiry.id, departmentId: routing.departmentId, departmentName: routing.departmentName, assignedUserId: routing.assignedUserId ?? null, assignedAt: routing.assignedUserId ? item.createdAt : null, routeType: routing.routeType, lastIntent: routing.intent ?? null, confidence: routing.confidence ?? null, status: 'open' },
           })
           const message = await tx.evolutionGroupMessage.create({ data: { groupId: group.id, messageId: item.messageId, senderJid: item.senderJid, senderName: item.senderName, text: item.text, messageType: item.messageType, mediaUrl: storedMediaUrl, quotedMessageId: item.quotedMessageId, mentionedJids: item.mentionedJids, fromMe: false, status: 'received', createdAt: item.createdAt } })
+          const campaignRecipient = await tx.evolutionCampaignRecipient.findFirst({
+            where: {
+              groupJid: item.groupJid,
+              campaign: { userId: ownerUserId },
+              repliedAt: null,
+              status: { in: ['SENT', 'DELIVERED', 'READ'] },
+            },
+            orderBy: { sentAt: 'desc' },
+            select: { id: true },
+          })
+          if (campaignRecipient) {
+            await tx.evolutionCampaignRecipient.update({
+              where: { id: campaignRecipient.id },
+              data: { status: 'REPLIED', repliedAt: item.createdAt, responseMessageId: message.id },
+            })
+          }
           const isHandoff = fromDepartmentId !== null && routing.departmentId !== null && fromDepartmentId !== routing.departmentId
-          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, event: isHandoff ? 'HANDOFF' : 'ROUTED', routeType: routing.routeType, fromDepartmentId, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason } })
+          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, inquiryId: inquiry.id, event: isHandoff ? 'HANDOFF' : 'ROUTED', routeType: routing.routeType, fromDepartmentId, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason, metadata: { dealerMatch: dealerMatch?.source ?? null } } })
           const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, lastInboundAt: item.createdAt, unreadCount: { increment: 1 } } })
-          return { message, group: updatedGroup }
+          return { message, group: updatedGroup, ticketId: ticket.id, inquiryId: inquiry.id }
         })
         const recipients = await prisma.user.findMany({
           where: {
@@ -109,6 +163,17 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           userIds: recipients.map((user) => String(user.id)),
           conversationId: result.group.id,
           payload: result,
+        })
+
+        // Queue RAG after persistence so an Evolution retry cannot create a
+        // second CRM record. The worker is disabled/draft-only unless an admin
+        // opts in, so a routing webhook can never surprise-send a dealer.
+        void getEvolutionAgentQueue().add('grounded-group-reply', {
+          ownerUserId,
+          groupId: result.group.id,
+          inboundMessageId: result.message.id,
+        }, { jobId: `evolution-agent:${result.message.id}` }).catch((error) => {
+          console.error('[evolution/webhook] unable to enqueue RAG draft:', error)
         })
 
         // Create user-scoped notifications for each recipient locally since recipients and result exist now

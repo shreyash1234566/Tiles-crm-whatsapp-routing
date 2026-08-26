@@ -703,9 +703,13 @@ async function seedTiles() {
 // ─── ENTRY POINT: route by BUSINESS_TYPE ──────────────
 async function main() {
   // Resolve via the canonical Brand_Config resolver so the seed branches on
-  // the same Active_Vertical as the rest of the app: `tiles` only on an exact
-  // (trimmed, lowercased) match, otherwise `furniture` (unset/empty/unknown).
+  // the same Active_Vertical as the rest of the app. This tiles repository
+  // resolves to tiles unless furniture is explicitly selected for a separate
+  // compatibility deployment.
   const vertical = resolveVertical(process.env.BUSINESS_TYPE)
+  if (process.env.REQUIRE_TILES_VERTICAL?.trim().toLowerCase() === 'true' && vertical !== 'tiles') {
+    throw new Error('Tiles deployment seed refused: BUSINESS_TYPE must resolve to tiles.')
+  }
   console.log(`🏷️  Seeding vertical: ${vertical}\n`)
 
   if (vertical === 'furniture') {

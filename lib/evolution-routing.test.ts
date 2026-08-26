@@ -111,6 +111,12 @@ describe('Evolution group routing adapter', () => {
     expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"fileName":"invoice.pdf"')
   })
 
+  it('does not treat status updates or outbound events as new inbound messages', () => {
+    const data = { key: { remoteJid: '120363123@g.us', id: 'STATUS-1', participant: '919999999999@s.whatsapp.net' }, message: { conversation: 'hello' } }
+    expect(extractEvolutionMessages({ event: 'MESSAGES_UPDATE', data })).toEqual([])
+    expect(extractEvolutionMessages({ event: 'SEND_MESSAGE', data })).toEqual([])
+  })
+
   it('sends text in the top-level field required by Evolution v2.3.7', async () => {
     process.env.EVOLUTION_API_URL = 'http://evolution:8080'
     process.env.EVOLUTION_API_KEY = 'key'

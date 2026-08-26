@@ -1,6 +1,6 @@
 # Production Deployment Guide
 
-This document outlines the steps to deploy the Furniture CRM to a VPS using Docker Compose, Nginx as a reverse proxy, and system cron for automated tasks.
+This document outlines the steps to deploy the Tiles, Granite & Marble CRM to a VPS using Docker Compose, Nginx as a reverse proxy, and system cron for automated tasks. It is isolated from any furniture CRM deployment: use its own Compose project, database volume, ports 4000/4001, and `BUSINESS_TYPE=tiles`.
 
 ## 1. Environment Variables
 
@@ -10,7 +10,12 @@ Create a `.env` file in the root directory with the following variables:
 # Database
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your_secure_password
-POSTGRES_DB=furniturecrm
+POSTGRES_DB=tiles_crm
+
+# Safety boundary: refuse to start or seed a furniture vertical in this deployment.
+BUSINESS_TYPE=tiles
+NEXT_PUBLIC_BUSINESS_TYPE=tiles
+REQUIRE_TILES_VERTICAL=true
 
 # Auth
 NEXTAUTH_SECRET=your_nextauth_secret
@@ -25,7 +30,7 @@ CRM_WS_HOST_PORT=4001
 R2_ACCOUNT_ID=your_account_id
 R2_ACCESS_KEY_ID=your_access_key
 R2_SECRET_ACCESS_KEY=your_secret_key
-R2_BUCKET_NAME=furniture-crm
+R2_BUCKET_NAME=tiles-crm
 R2_PUBLIC_URL=https://pub-your-id.r2.dev
 
 # AI / voice agent
