@@ -14,6 +14,9 @@ export async function register() {
   // Only start the worker in the Node.js runtime, not in the edge runtime
   // (which doesn't support ioredis / worker_threads).
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { assertTilesDeployment } = await import('./lib/deployment-guard')
+    assertTilesDeployment()
+
     if (process.env.ENABLE_BACKGROUND_WORKERS === 'false') {
       console.warn('[queues] background workers disabled by ENABLE_BACKGROUND_WORKERS=false')
       return
@@ -51,5 +54,11 @@ export async function register() {
 
     const { startAiAgentWorker } = await import('./lib/queues/ai-agent-worker')
     startAiAgentWorker()
+
+    const { startEvolutionAgentWorker } = await import('./lib/queues/evolution-agent-worker')
+    startEvolutionAgentWorker()
+
+    const { startEvolutionFollowUpWorker } = await import('./lib/queues/evolution-follow-up-worker')
+    startEvolutionFollowUpWorker()
   }
 }

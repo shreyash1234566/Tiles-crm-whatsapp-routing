@@ -19,7 +19,7 @@ COPY . .
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
 # Generate Prisma client
-ARG DATABASE_URL="postgresql://postgres:postgres@localhost:5432/furniturecrm"
+ARG DATABASE_URL="postgresql://postgres:postgres@localhost:5432/tiles_crm"
 ENV DATABASE_URL=$DATABASE_URL
 RUN --mount=type=cache,target=/root/.npm npx prisma generate
 

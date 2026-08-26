@@ -2710,11 +2710,50 @@ model Dealer {
   activities      DealerActivity[]
   priceLists      DealerPriceList[]
   teamAssignments DealerStaffAssignment[]
+  evolutionIdentities DealerEvolutionIdentity[]
+  evolutionInquiries  EvolutionDealerInquiry[]
 
   @@index([status])
   @@index([assignedStaffId])
   @@index([territory])
   @@index([phone])
+}
+
+enum EvolutionInquiryStage {
+  NEW
+  TRIAGED
+  WORKING
+  QUOTATION
+  WAITING_FOR_DEALER
+  CONFIRMED
+  PAYMENT_PENDING
+  ALLOCATED
+  DISPATCH_PENDING
+  DISPATCHED
+  DELIVERED
+  CLOSED
+  ON_HOLD
+  ESCALATED
+  LOST
+  CANCELLED
+}
+
+enum EvolutionFollowUpStatus {
+  PENDING
+  PROCESSING
+  SENT
+  SKIPPED
+  CANCELLED
+  FAILED
+}
+
+enum EvolutionAgentRunStatus {
+  QUEUED
+  DRAFTED
+  SENT
+  SKIPPED
+  HANDOFF
+  FAILED
 }
 
 model DealerStaffAssignment {
@@ -2814,6 +2853,7 @@ model DealerOrder {
   items    DealerOrderItem[]
   payments DealerPayment[]
   claims   DealerClaim[]
+  evolutionInquiries EvolutionDealerInquiry[] @relation("EvolutionInquiryConvertedOrder")
 
   @@index([dealerId, status])
   @@index([orderDate])
@@ -2958,8 +2998,10 @@ model EvolutionGroup {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  messages EvolutionGroupMessage[]
-  ticket   EvolutionGroupTicket?
+  messages           EvolutionGroupMessage[]
+  reactions          EvolutionGroupReaction[]
+  ticket             EvolutionGroupTicket?
+  inquiry            EvolutionDealerInquiry?
 
   @@unique([userId, groupJid])
   @@index([userId, departmentId, status])
@@ -2992,24 +3034,37 @@ model EvolutionGroupMessage {
 }
 
 model EvolutionGroupTicket {
-  id             String   @id @default(cuid())
-  groupId        String   @unique
-  departmentId   Int?
-  departmentName String?
-  assignedUserId Int?
-  status         String   @default("open")
-  routeType      String   @default("default")
-  lastIntent     String?
-  confidence     Float?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String   @id @default(cuid())
+  groupId         String   @unique
+  departmentId    Int?
+  departmentName  String?
+  assignedUserId  Int?
+  status          String   @default("open")
+  routeType       String   @default("default")
+  lastIntent      String?
+  confidence      Float?
+  inquiryId       String?  @unique
+  stage           EvolutionInquiryStage @default(NEW)
+  assignedAt      DateTime?
+  firstResponseAt DateTime?
+  lastResponseAt  DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  group         EvolutionGroup          @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  audits        EvolutionRoutingAudit[]
-  notes         EvolutionGroupNote[]
-  sla           TicketSLA?
-  csatResponses CSATResponse?
-  workItems     DepartmentWorkItem[]
+  group           EvolutionGroup            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  inquiry         EvolutionDealerInquiry?   @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
+  audits          EvolutionRoutingAudit[]
+  followUps       EvolutionTicketFollowUp[]
+  agentRuns       EvolutionAgentRun[]
+
+  // From our local branch
+  notes           EvolutionGroupNote[]
+  sla             TicketSLA?
+  csatResponses   CSATResponse?
+  workItems       DepartmentWorkItem[]
 
   @@index([departmentId, status])
   @@index([routeType, createdAt])
@@ -3069,21 +3124,27 @@ model WorkItemSLA {
 }
 
 model EvolutionRoutingAudit {
-  id               String   @id @default(cuid())
-  ticketId         String
-  messageId        String?
-  event            String
-  routeType        String
-  fromDepartmentId Int?
-  toDepartmentId   Int?
-  confidence       Float?
-  reason           String?
-  createdAt        DateTime @default(now())
+  id                 String   @id @default(cuid())
+  ticketId           String
+  messageId          String?
+  event              String
+  routeType          String
+  fromDepartmentId   Int?
+  toDepartmentId     Int?
+  confidence         Float?
+  reason             String?
+  inquiryId          String?
+  actorUserId        Int?
+  correlationId      String?
+  metadata           Json?
+  createdAt          DateTime @default(now())
 
-  ticket EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticket             EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  inquiry            EvolutionDealerInquiry? @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
 
   @@index([ticketId, createdAt])
   @@index([event, createdAt])
+  @@index([correlationId])
   @@map("evolution_routing_audits")
 }
 
@@ -3378,3 +3439,209 @@ model AutomationDeadLetter {
 // Extend existing WaAutomationStep with new fields (additive)
 // Note: These fields are added to the existing WaAutomationStep model
 // retryPolicy, timeoutMs, continueOnError
+
+// WhatsApp reactions arrive as a reactionMessage whose key points to the
+// original provider message ID. They are intentionally stored separately so
+// they never create a new dealer inquiry or a duplicate chat message.
+model EvolutionGroupReaction {
+  id                String   @id @default(cuid())
+  groupId           String
+  reactionMessageId String   @unique
+  targetMessageId   String
+  senderJid         String
+  senderName        String?
+  emoji             String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  group             EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, targetMessageId, senderJid])
+  @@index([groupId, targetMessageId])
+  @@map("evolution_group_reactions")
+}
+
+// ─── Evolution dealer operations (additive Phase 1) ───────────────────────
+
+model DealerEvolutionIdentity {
+  id          String   @id @default(cuid())
+  userId      Int
+  dealerId    Int
+  groupJid    String?
+  phone       String?
+  verifiedAt  DateTime?
+  lastSeenAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  dealer      Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupJid])
+  @@index([userId, phone])
+  @@index([dealerId])
+  @@map("dealer_evolution_identities")
+}
+
+model EvolutionDealerInquiry {
+  id                String                @id @default(cuid())
+  groupId           String                @unique
+  dealerId          Int?
+  dealerPhone       String?
+  ownerUserId       Int
+  departmentId      Int?
+  assignedUserId    Int?
+  source            String                @default("EVOLUTION_GROUP")
+  title             String?
+  stage             EvolutionInquiryStage @default(NEW)
+  priority          String                @default("NORMAL")
+  openedAt          DateTime              @default(now())
+  lastActivityAt    DateTime              @default(now())
+  slaDueAt          DateTime?
+  nextFollowUpAt    DateTime?
+  closedAt          DateTime?
+  lostReason        String?
+  convertedOrderId  Int?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  group             EvolutionGroup       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  dealer            Dealer?               @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  convertedOrder    DealerOrder?          @relation("EvolutionInquiryConvertedOrder", fields: [convertedOrderId], references: [id], onDelete: SetNull)
+  ticket            EvolutionGroupTicket?
+  followUps         EvolutionTicketFollowUp[]
+  audits            EvolutionRoutingAudit[]
+
+  @@index([ownerUserId, stage, lastActivityAt])
+  @@index([dealerId, stage])
+  @@index([departmentId, stage])
+  @@index([nextFollowUpAt])
+  @@index([convertedOrderId])
+  @@map("evolution_dealer_inquiries")
+}
+
+model EvolutionTicketFollowUp {
+  id                String                  @id @default(cuid())
+  ticketId          String
+  inquiryId         String?
+  assignedUserId    Int?
+  departmentId      Int?
+  channel           String                  @default("EVOLUTION_GROUP")
+  message           String
+  status            EvolutionFollowUpStatus @default(PENDING)
+  scheduledFor      DateTime
+  sentAt            DateTime?
+  cancelledAt       DateTime?
+  attemptCount      Int                     @default(0)
+  providerMessageId String?
+  error             String?
+  idempotencyKey    String                  @unique
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  ticket            EvolutionGroupTicket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  inquiry           EvolutionDealerInquiry? @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
+
+  @@index([status, scheduledFor])
+  @@index([assignedUserId, scheduledFor])
+  @@index([departmentId, scheduledFor])
+  @@map("evolution_ticket_follow_ups")
+}
+
+model EvolutionAgentConfig {
+  id                   String   @id @default(cuid())
+  userId               Int      @unique
+  enabled              Boolean  @default(false)
+  draftOnly            Boolean  @default(true)
+  allowedGroupJids     String[] @default([])
+  allowedDepartmentIds Int[]    @default([])
+  confidenceThreshold  Float    @default(0.45)
+  maxResponseTokens    Int      @default(300)
+  responseDelayMs      Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("evolution_agent_configs")
+}
+
+model EvolutionAgentRun {
+  id                String                  @id @default(cuid())
+  ticketId          String?
+  groupId           String
+  inboundMessageId  String
+  status            EvolutionAgentRunStatus @default(QUEUED)
+  mode              String                  @default("DRAFT")
+  model             String?
+  responseText      String?
+  confidence        Float?
+  handoff           Boolean                 @default(false)
+  retrievalIds      String[]                @default([])
+  providerMessageId String?
+  error             String?
+  idempotencyKey    String                  @unique
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  ticket            EvolutionGroupTicket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@index([groupId, createdAt])
+  @@index([ticketId, createdAt])
+  @@index([status, createdAt])
+  @@map("evolution_agent_runs")
+}
+
+model EvolutionCampaign {
+  id          String   @id @default(cuid())
+  userId      Int
+  name        String
+  status      String   @default("DRAFT")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recipients  EvolutionCampaignRecipient[]
+
+  @@index([userId, status])
+  @@index([createdAt])
+  @@map("evolution_campaigns")
+}
+
+model EvolutionCampaignRecipient {
+  id                 String   @id @default(cuid())
+  campaignId         String
+  dealerId           Int?
+  groupJid           String
+  providerMessageId  String?  @unique
+  responseMessageId  String?
+  status             String   @default("PENDING")
+  sentAt             DateTime?
+  deliveredAt        DateTime?
+  readAt             DateTime?
+  repliedAt          DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  campaign           EvolutionCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@index([dealerId])
+  @@index([groupJid])
+  @@map("evolution_campaign_recipients")
+}
+
+// Per-owner webhook heartbeat. It is intentionally separate from message
+// history so Operators can detect a disconnected Evolution webhook even when
+// no dealer happens to message during the alert window.
+model EvolutionWebhookHealth {
+  id               String   @id @default(cuid())
+  ownerUserId      Int      @unique
+  lastReceivedAt   DateTime?
+  lastEvent        String?
+  lastMessageId    String?
+  lastCorrelationId String?
+  lastErrorAt      DateTime?
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([lastReceivedAt])
+  @@map("evolution_webhook_health")
+}

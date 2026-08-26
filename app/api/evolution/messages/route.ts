@@ -34,7 +34,10 @@ async function access() {
 }
 
 async function visibleGroup(groupId: string, user: NonNullable<Awaited<ReturnType<typeof access>>>['user'], ownerId: number) {
-  const group = await prisma.evolutionGroup.findFirst({ where: { id: groupId, userId: ownerId }, include: { messages: { orderBy: { createdAt: 'asc' } } } })
+  const group = await prisma.evolutionGroup.findFirst({
+    where: { id: groupId, userId: ownerId },
+    include: { messages: { orderBy: { createdAt: 'asc' } }, ticket: true, inquiry: true },
+  })
   if (!group) return null
   if (user.role === 'STAFF' && group.departmentId !== user.routingDepartmentId) return null
   return group
@@ -55,7 +58,15 @@ export async function GET(request: Request) {
   const group = await visibleGroup(groupId, current.user, current.ownerId)
   if (!group) return NextResponse.json({ error: 'Group not found' }, { status: 404 })
   await prisma.evolutionGroup.update({ where: { id: group.id }, data: { unreadCount: 0 } })
-  return NextResponse.json({ data: group.messages })
+  const reactions = await prisma.evolutionGroupReaction.findMany({
+    where: { groupId: group.id },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, targetMessageId: true, senderJid: true, senderName: true, emoji: true, createdAt: true },
+  })
+  // Old deployments could persist a reaction event as a pseudo message.
+  // Hide that corrupt presentation record; real reactions come from the
+  // dedicated reactions query above and render beneath their target message.
+  return NextResponse.json({ data: group.messages.filter((message) => message.messageType !== 'reactionMessage'), reactions })
 }
 
 export async function POST(request: Request) {
@@ -109,21 +120,43 @@ export async function POST(request: Request) {
       response = await sendEvolutionGroupText({ groupJid: group.groupJid, text, quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined })
     }
 
-    const message = await prisma.evolutionGroupMessage.create({
-      data: {
-        groupId: group.id,
-        messageId: sentMessageId(response),
-        senderJid: 'me',
-        senderName: current.user.name || 'CRM user',
-        text: text || null,
-        messageType,
-        mediaUrl,
-        fromMe: true,
-        status: 'sent',
-        quotedMessageId: quoted?.messageId || null,
-      },
+    const sentAt = new Date()
+    const { message, updatedGroup } = await prisma.$transaction(async (tx) => {
+      const message = await tx.evolutionGroupMessage.create({
+        data: {
+          groupId: group.id,
+          messageId: sentMessageId(response),
+          senderJid: 'me',
+          senderName: current.user.name || 'CRM user',
+          text: text || null,
+          messageType,
+          mediaUrl,
+          fromMe: true,
+          status: 'sent',
+          quotedMessageId: quoted?.messageId || null,
+        },
+      })
+      const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: text || `[${messageType}]`, lastMessageAt: sentAt } })
+      if (group.ticket) {
+        await tx.evolutionGroupTicket.update({
+          where: { id: group.ticket.id },
+          data: { firstResponseAt: group.ticket.firstResponseAt || sentAt, lastResponseAt: sentAt, version: { increment: 1 } },
+        })
+        await tx.evolutionRoutingAudit.create({
+          data: {
+            ticketId: group.ticket.id,
+            messageId: message.id,
+            inquiryId: group.inquiry?.id || null,
+            actorUserId: Number(current.user.id) || null,
+            event: 'MANUAL_REPLY',
+            routeType: 'MANUAL',
+            reason: 'Team member sent a group message',
+          },
+        })
+      }
+      if (group.inquiry) await tx.evolutionDealerInquiry.update({ where: { id: group.inquiry.id }, data: { lastActivityAt: sentAt } })
+      return { message, updatedGroup }
     })
-    const updatedGroup = await prisma.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: text || `[${messageType}]`, lastMessageAt: new Date() } })
     return NextResponse.json({ data: { message, group: updatedGroup } })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to send group message' }, { status: 502 })

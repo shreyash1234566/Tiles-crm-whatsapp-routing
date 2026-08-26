@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { classifyIntent, extractEvolutionMessages, getEvolutionConfig, isGroupJid, normalizePhoneJid, sendEvolutionGroupMedia, sendEvolutionGroupText } from './evolution-routing'
+import { classifyIntent, extractEvolutionMessages, extractEvolutionMessageStatusUpdates, getEvolutionConfig, isGroupJid, normalizePhoneJid, sendEvolutionGroupMedia, sendEvolutionGroupText } from './evolution-routing'
 
 afterEach(() => {
   delete process.env.EVOLUTION_API_URL
@@ -109,6 +109,73 @@ describe('Evolution group routing adapter', () => {
     await sendEvolutionGroupMedia({ groupJid: '120363123@g.us', mediaUrl: 'http://app:3000/api/uploads/a.pdf', mediaType: 'document', mimeType: 'application/pdf', fileName: 'invoice.pdf' })
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/message/sendMedia/tiles')
     expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"fileName":"invoice.pdf"')
+  })
+
+  it('extracts a group reaction without treating it as a text inquiry', () => {
+    const [reaction] = extractEvolutionMessages({
+      event: 'MESSAGES_UPSERT',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'REACTION-EVENT-1', participant: '919999999999@s.whatsapp.net' },
+        pushName: 'Dealer',
+        message: { reactionMessage: { key: { id: 'ORIGINAL-MESSAGE-1' }, text: '👍' } },
+      },
+    })
+    expect(reaction).toMatchObject({
+      messageId: 'REACTION-EVENT-1',
+      messageType: 'reactionMessage',
+      text: null,
+      reactionTargetMessageId: 'ORIGINAL-MESSAGE-1',
+      reactionEmoji: '👍',
+      isReaction: true,
+    })
+  })
+
+  it('marks a target-less reaction as non-message input so the webhook can safely ignore it', () => {
+    const [reaction] = extractEvolutionMessages({
+      event: 'MESSAGES_UPSERT',
+      data: { key: { remoteJid: '120363123@g.us', id: 'REACTION-WITHOUT-TARGET', participant: '919999999999@s.whatsapp.net' }, message: { reactionMessage: { text: '👍' } } },
+    })
+    expect(reaction).toMatchObject({ isReaction: true, text: null, reactionTargetMessageId: null })
+  })
+
+  it('normalizes Evolution dotted webhook event names for group reactions', () => {
+    const [reaction] = extractEvolutionMessages({
+      event: 'messages.upsert',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'REACTION-EVENT-2', participant: '919999999999@s.whatsapp.net' },
+        message: { reactionMessage: { key: { id: 'ORIGINAL-MESSAGE-2' }, text: '✅' } },
+      },
+    })
+    expect(reaction).toMatchObject({ reactionTargetMessageId: 'ORIGINAL-MESSAGE-2', reactionEmoji: '✅' })
+  })
+
+  it('accepts only reaction payloads from MESSAGES_UPDATE', () => {
+    const [reaction] = extractEvolutionMessages({
+      event: 'MESSAGES_UPDATE',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'ORIGINAL-MESSAGE-3', participant: '919999999999@s.whatsapp.net' },
+        update: { reactionMessage: { key: { id: 'ORIGINAL-MESSAGE-3' }, text: '❤️' } },
+      },
+    })
+    expect(reaction).toMatchObject({ reactionTargetMessageId: 'ORIGINAL-MESSAGE-3', reactionEmoji: '❤️' })
+    expect(reaction?.messageId).toContain('reaction:ORIGINAL-MESSAGE-3:')
+  })
+
+  it('does not treat status updates or outbound events as new inbound messages', () => {
+    const data = { key: { remoteJid: '120363123@g.us', id: 'STATUS-1', participant: '919999999999@s.whatsapp.net' }, message: { conversation: 'hello' } }
+    expect(extractEvolutionMessages({ event: 'MESSAGES_UPDATE', data })).toEqual([])
+    expect(extractEvolutionMessages({ event: 'SEND_MESSAGE', data })).toEqual([])
+  })
+
+  it('extracts only sent delivery/read acknowledgements from MESSAGES_UPDATE', () => {
+    expect(extractEvolutionMessageStatusUpdates({
+      event: 'messages.update',
+      data: { key: { remoteJid: '120363123@g.us', id: 'CAMPAIGN-1', fromMe: true }, update: { status: 'DELIVERY_ACK' } },
+    })).toEqual([expect.objectContaining({ messageId: 'CAMPAIGN-1', groupJid: '120363123@g.us', status: 'DELIVERED', fromMe: true })])
+    expect(extractEvolutionMessageStatusUpdates({
+      event: 'MESSAGES_UPDATE',
+      data: { key: { id: 'IGNORED', fromMe: true }, update: { status: 'PENDING' } },
+    })).toEqual([])
   })
 
   it('sends text in the top-level field required by Evolution v2.3.7', async () => {

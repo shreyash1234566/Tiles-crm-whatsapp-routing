@@ -47,6 +47,18 @@ load_host_ports() {
   fi
 }
 
+require_tiles_boundary() {
+  local business_type public_business_type strict_vertical database_name
+  business_type="$(awk -F= '$1 == "BUSINESS_TYPE" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print tolower($2); exit}' "${ENV_FILE}")"
+  public_business_type="$(awk -F= '$1 == "NEXT_PUBLIC_BUSINESS_TYPE" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print tolower($2); exit}' "${ENV_FILE}")"
+  strict_vertical="$(awk -F= '$1 == "REQUIRE_TILES_VERTICAL" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print tolower($2); exit}' "${ENV_FILE}")"
+  database_name="$(awk -F= '$1 == "POSTGRES_DB" {gsub(/^[ \t"]+|[ \t"]+$/, "", $2); print tolower($2); exit}' "${ENV_FILE}")"
+  [[ "${business_type}" == "tiles" ]] || die "BUSINESS_TYPE=tiles is required for this deployment."
+  [[ "${public_business_type}" == "tiles" ]] || die "NEXT_PUBLIC_BUSINESS_TYPE=tiles is required for this deployment."
+  [[ "${strict_vertical}" == "true" ]] || die "REQUIRE_TILES_VERTICAL=true is required for this deployment."
+  [[ -n "${database_name}" && "${database_name}" != *"furniture"* ]] || die "POSTGRES_DB must be a dedicated non-furniture Tiles database."
+}
+
 # ── First-time setup ──────────────────────────────────────────────────────────
 setup() {
   log "Running first-time setup..."
@@ -188,6 +200,7 @@ main() {
   [[ "${DO_SETUP}" == "true" ]] && { setup; exit 0; }
 
   require_env_file
+  require_tiles_boundary
   load_host_ports
 
   hr

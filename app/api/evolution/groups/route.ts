@@ -26,7 +26,9 @@ export async function GET() {
     select: {
       id: true, groupJid: true, subject: true, departmentId: true, departmentName: true,
       routingReason: true, routeType: true, intent: true, confidence: true, assignedUserId: true, mentionPriority: true, lastMentionAt: true, lastMessageText: true,
-      lastMessageAt: true, unreadCount: true, claimedByUserId: true, claimedAt: true, status: true, ticket: { select: { id: true, status: true, routeType: true, lastIntent: true, confidence: true, assignedUserId: true } },
+      lastMessageAt: true, unreadCount: true, claimedByUserId: true, claimedAt: true, status: true,
+      ticket: { select: { id: true, status: true, stage: true, routeType: true, lastIntent: true, confidence: true, assignedUserId: true, assignedAt: true, firstResponseAt: true, lastResponseAt: true, version: true } },
+      inquiry: { select: { id: true, dealerId: true, convertedOrderId: true, stage: true, priority: true, slaDueAt: true, nextFollowUpAt: true, lastActivityAt: true, dealer: { select: { id: true, businessName: true, contactPerson: true, phone: true, whatsappNumber: true } } } },
     },
   })
   return NextResponse.json({ data: groups })

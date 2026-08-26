@@ -8,6 +8,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { getDashboardStats } from '@/app/actions/dashboard';
 import { getExpenseSummary } from '@/app/actions/expenses';
 import { getActiveVertical } from '@/lib/brand';
+import WhatsAppDashboardCard from '@/components/WhatsAppDashboardCard';
 
 const IS_TGM = getActiveVertical() === 'tiles';
 
@@ -195,6 +196,8 @@ export default function Dashboard() {
         </div>}
         </>
       )}
+
+      {IS_TGM && <WhatsAppDashboardCard />}
 
       {/* Expense Analytics */}
       <div className="space-y-4">
