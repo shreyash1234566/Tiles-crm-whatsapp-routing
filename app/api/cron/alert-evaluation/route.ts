@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       where: { isActive: true }
     })
 
-    const results = []
+    const results: any[] = []
 
     for (const rule of rules) {
       try {
@@ -49,6 +49,7 @@ export async function GET(request: Request) {
           // Publish real-time event
           await publishEvent('chat_events', {
             type: 'alert_triggered',
+            userId: 'system',
             userIds: ['admin'], // Will be refined to notify managers
             conversationId: `alert-${alert.id}`,
             payload: alert
@@ -65,6 +66,7 @@ export async function GET(request: Request) {
           // Publish real-time event
           await publishEvent('chat_events', {
             type: 'alert_resolved',
+            userId: 'system',
             userIds: ['admin'],
             conversationId: `alert-${existingAlert.id}`,
             payload: { id: existingAlert.id, ruleId: rule.id }
@@ -128,7 +130,7 @@ async function evaluateMetric(
           _sum: { balanceDue: true }
         }),
         prisma.purchaseOrder.aggregate({
-          where: { status: 'PENDING' },
+          where: { status: 'APPROVED' },
           _sum: { total: true }
         })
       ])
@@ -138,7 +140,7 @@ async function evaluateMetric(
       const [breached, total] = await Promise.all([
         prisma.ticketSLA.count({
           where: {
-            breached: true,
+            OR: [{ breachedFirstResponse: true }, { breachedResolution: true }],
             createdAt: { gte: start, lte: end }
           }
         }),

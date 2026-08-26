@@ -57,7 +57,7 @@ export async function GET() {
   })
 
   // Also sort by last message date since it might be more useful
-  mapped.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
+  mapped.sort((a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime());
 
   return NextResponse.json({ data: mapped })
 }

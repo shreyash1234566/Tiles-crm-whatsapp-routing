@@ -23,12 +23,24 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 // @ts-ignore
-import { Responsive, WidthProvider } from 'react-grid-layout'
+
 type CoreLayout = any
 import { Plus, Minus, GripVertical, X, Settings, Save, RotateCcw } from 'lucide-react'
 
 // Use the responsive width provider
-const ResponsiveGridLayout = WidthProvider(Responsive)
+
+
+import dynamic from 'next/dynamic';
+const ResponsiveGridLayout = dynamic<any>(
+  () => import('react-grid-layout').then((mod: any) => {
+    const Responsive = mod.Responsive || mod.default?.Responsive;
+    const WidthProvider = mod.WidthProvider || mod.default?.WidthProvider;
+    return WidthProvider(Responsive);
+  }),
+  { ssr: false }
+);
+
+
 
 interface WidgetConfig {
   key: string
