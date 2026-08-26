@@ -44,6 +44,8 @@ interface UseRealtimeOptions {
   channelName: string;
   onMessageEvent?: (event: RealtimeEvent<Message>) => void;
   onConversationEvent?: (event: RealtimeEvent<Conversation>) => void;
+  /** App-specific events that don't map to the legacy message tables. */
+  onRoutingEvent?: (event: { type: "reaction_update"; conversationId?: string; [key: string]: unknown }) => void;
   enabled?: boolean;
 }
 
@@ -56,6 +58,7 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "";
 export function useRealtime({
   onMessageEvent,
   onConversationEvent,
+  onRoutingEvent,
   enabled = true,
 }: UseRealtimeOptions) {
   const socketRef = useRef<Socket | null>(null);
@@ -65,9 +68,11 @@ export function useRealtime({
   // go stale when parent re-renders change the callback references.
   const onMessageRef = useRef(onMessageEvent);
   const onConversationRef = useRef(onConversationEvent);
+  const onRoutingRef = useRef(onRoutingEvent);
   useEffect(() => {
     onMessageRef.current = onMessageEvent;
     onConversationRef.current = onConversationEvent;
+    onRoutingRef.current = onRoutingEvent;
   });
 
   useEffect(() => {
@@ -205,6 +210,15 @@ export function useRealtime({
             } as Message,
             old: {},
           });
+        }
+      );
+
+      // Evolution reactions are stored separately from chat messages, so
+      // consumers can refresh their reaction state without faking a message.
+      socket.on(
+        "reaction_update",
+        (data: { conversationId?: string } & Record<string, unknown>) => {
+          onRoutingRef.current?.({ type: "reaction_update", ...data });
         }
       );
     }

@@ -48,6 +48,7 @@ function RoutingCrmContent() {
   const [groups, setGroups] = useState([]);
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [reactions, setReactions] = useState([]);
   const [agentRuns, setAgentRuns] = useState([]);
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [followUpFor, setFollowUpFor] = useState('');
@@ -70,6 +71,12 @@ function RoutingCrmContent() {
   const fileInputRef = useRef(null);
 
   const activeGroup = useMemo(() => groups.find((group) => group.id === activeGroupId) || null, [groups, activeGroupId]);
+  const reactionsByMessage = useMemo(() => reactions.reduce((index, reaction) => {
+    const current = index[reaction.targetMessageId] || [];
+    current.push(reaction);
+    index[reaction.targetMessageId] = current;
+    return index;
+  }, {}), [reactions]);
   const claimedByCurrentUser = Boolean(activeGroup && Number(activeGroup.claimedByUserId) === Number(user?.id));
 
   const loadConnection = useCallback(async () => {
@@ -115,6 +122,7 @@ function RoutingCrmContent() {
   const loadMessages = useCallback(async (groupId) => {
     if (!groupId) {
       setMessages([]);
+      setReactions([]);
       setAgentRuns([]);
       return;
     }
@@ -127,6 +135,7 @@ function RoutingCrmContent() {
       if (!response.ok) throw new Error('Unable to load messages');
       const body = await response.json();
       setMessages(body.data || []);
+      setReactions(body.reactions || []);
       if (agentResponse.ok) {
         const agentBody = await agentResponse.json();
         setAgentRuns(agentBody.data || []);
@@ -153,6 +162,7 @@ function RoutingCrmContent() {
     channelName: 'evolution-group-routing',
     enabled: status === 'authenticated',
     onMessageEvent: refreshFromRealtime,
+    onRoutingEvent: refreshFromRealtime,
   });
 
   useEffect(() => {
@@ -423,6 +433,11 @@ function RoutingCrmContent() {
                             <p className="whitespace-pre-wrap break-words text-sm text-foreground">{message.text}</p>
                           ) : !message.mediaUrl && (
                             <p className="whitespace-pre-wrap break-words text-sm text-foreground">[{message.messageType}]</p>
+                          )}
+                          {reactionsByMessage[message.messageId]?.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {reactionsByMessage[message.messageId].map((reaction) => <span key={reaction.id} title={reaction.senderName || reaction.senderJid} className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-xs leading-none">{reaction.emoji}</span>)}
+                            </div>
                           )}
                           <p className="mt-1 text-right text-[10px] text-muted">{formatTime(message.createdAt)} {message.fromMe && <Check className="ml-1 inline h-3 w-3" />}</p>
                         </div>

@@ -16,7 +16,7 @@ import Redis from 'ioredis'
 
 export interface ChatEvent {
   /** Discriminator — drives the switch in use-realtime.ts */
-  type: 'new_message' | 'message_status' | 'conversation_update' | 'new_conversation'
+  type: 'new_message' | 'message_status' | 'conversation_update' | 'new_conversation' | 'reaction_update'
   /** Routing: ws-server emits only to `user:<userId>` rooms */
   userId: string
   /** Additional server-selected recipients for department-scoped events. */
@@ -27,7 +27,6 @@ export interface ChatEvent {
 
 // ── Singleton ──────────────────────────────────────────────────────────────
 declare global {
-  // eslint-disable-next-line no-var
   var _redisClient: Redis | undefined
 }
 

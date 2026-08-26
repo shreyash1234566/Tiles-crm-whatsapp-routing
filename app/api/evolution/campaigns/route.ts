@@ -29,7 +29,7 @@ export async function GET() {
     where: { userId: resolved.ownerUserId },
     orderBy: { createdAt: 'desc' },
     take: 100,
-    include: { _count: { select: { recipients: true } } },
+    include: { recipients: { select: { id: true, groupJid: true, status: true, providerMessageId: true, responseMessageId: true, sentAt: true, deliveredAt: true, readAt: true, repliedAt: true } } },
   })
   return NextResponse.json({ data })
 }

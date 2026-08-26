@@ -35,6 +35,8 @@ export type EvolutionInboundMessage = {
   fromMe: boolean
   createdAt: Date
   subject: string
+  reactionTargetMessageId: string | null
+  reactionEmoji: string | null
 }
 
 export type DepartmentMatch = {
@@ -247,7 +249,7 @@ export async function configureEvolutionWebhook(webhookUrl: string) {
         webhookByEvents: false,
         base64: true,
         headers: { Authorization: `Bearer ${config.webhookSecret}` },
-        events: ['MESSAGES_UPSERT', 'SEND_MESSAGE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED', 'GROUPS_UPSERT', 'GROUP_PARTICIPANTS_UPDATE'],
+        events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'SEND_MESSAGE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED', 'GROUPS_UPSERT', 'GROUP_PARTICIPANTS_UPDATE'],
       },
     }),
   })
@@ -302,19 +304,29 @@ function extractMessageItems(body: unknown): Record<string, unknown>[] {
 export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage[] {
   const root = objectValue(body)
   const event = stringValue(root.event || root.type).toUpperCase().replace(/[.\-]/g, '_')
-  // Only an UPSERT represents a newly received message. Status updates and
-  // outbound SEND_MESSAGE events can contain a message-shaped payload too,
-  // but treating either as inbound would duplicate tickets and replies.
-  if (event && event !== 'MESSAGES_UPSERT') return []
+  // UPSERT is the normal inbound event. Some Evolution/Baileys versions emit
+  // a reaction as a MESSAGES_UPDATE instead, so allow that event only when it
+  // actually contains a reaction. All other status updates stay ignored.
+  if (event && event !== 'MESSAGES_UPSERT' && event !== 'MESSAGES_UPDATE') return []
 
   const messages: EvolutionInboundMessage[] = []
   for (const data of extractMessageItems(body)) {
     const key = objectValue(data.key)
-    const rawMessage = objectValue(data.message)
+    const update = objectValue(data.update)
+    const rawMessage = Object.keys(objectValue(data.message)).length > 0
+      ? objectValue(data.message)
+      : objectValue(update.message)
     const message = unwrapMessage(rawMessage)
     const contextInfo = objectValue(objectValue(message.extendedTextMessage).contextInfo)
+    const reaction = objectValue(message.reactionMessage || update.reactionMessage)
+    const reactionKey = objectValue(reaction.key)
+    if (event === 'MESSAGES_UPDATE' && Object.keys(reaction).length === 0) continue
     const groupJid = firstString(key.remoteJid, data.remoteJid, data.chatId, data.jid)
-    const messageId = firstString(key.id, data.messageId, data.id)
+    const rawMessageId = firstString(key.id, data.messageId, data.id)
+    const reactionTargetMessageId = firstString(reactionKey.id, data.reactionMessageId)
+    const messageId = event === 'MESSAGES_UPDATE' && reactionTargetMessageId && rawMessageId === reactionTargetMessageId
+      ? `reaction:${reactionTargetMessageId}:${firstString(key.participant, data.participant, data.sender, 'unknown')}:${firstString(reaction.text, data.reactionText, 'removed')}`
+      : rawMessageId
     if (!groupJid || !isGroupJid(groupJid) || !messageId) continue
 
     const fromMe = key.fromMe === true || data.fromMe === true
@@ -333,7 +345,7 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
       messageId,
       senderJid: normalizeJid(senderJid),
       senderName: firstString(data.pushName, data.senderName, data.participantName),
-      text: extractText(message, data),
+      text: Object.keys(reaction).length > 0 ? null : extractText(message, data),
       messageType: extractMessageType(message, data),
       mediaType: info.type,
       mediaMimeType: info.mimeType,
@@ -345,6 +357,8 @@ export function extractEvolutionMessages(body: unknown): EvolutionInboundMessage
       fromMe,
       createdAt: Number.isNaN(createdAt.getTime()) ? new Date() : createdAt,
       subject: firstString(data.subject, data.groupName, data.chatName, root.subject, groupJid) || groupJid,
+      reactionTargetMessageId,
+      reactionEmoji: firstString(reaction.text, data.reactionText),
     })
   }
   return messages

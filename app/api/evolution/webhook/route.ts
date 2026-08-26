@@ -48,10 +48,42 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
     // Evolution also sends MESSAGES_UPSERT for messages sent by the CRM.
     // They have already been stored by the outbound route and must never
     // trigger a fresh routing decision or a department handoff.
-    if (item.fromMe) continue
+    // Do not route CRM-sent messages back in as enquiries. Reactions are the
+    // exception: they are UI state on an existing message and should remain
+    // visible whether a dealer or the connected WhatsApp account added them.
+    if (item.fromMe && !item.reactionTargetMessageId) continue
 
     try {
       await withGroupLock(`${ownerUserId}:${item.groupJid}`, async () => {
+        // A WhatsApp reaction is an update to an existing provider message,
+        // never a fresh dealer enquiry. Persist/update it separately so it is
+        // visible in the inbox without changing routing, SLA, or unread state.
+        if (item.reactionTargetMessageId) {
+          const group = await prisma.evolutionGroup.findUnique({
+            where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
+            select: { id: true, departmentId: true },
+          })
+          if (!group) return
+          if (item.reactionEmoji) {
+            await prisma.evolutionGroupReaction.upsert({
+              where: { groupId_targetMessageId_senderJid: { groupId: group.id, targetMessageId: item.reactionTargetMessageId, senderJid: item.senderJid } },
+              update: { reactionMessageId: item.messageId, senderName: item.senderName, emoji: item.reactionEmoji },
+              create: { groupId: group.id, reactionMessageId: item.messageId, targetMessageId: item.reactionTargetMessageId, senderJid: item.senderJid, senderName: item.senderName, emoji: item.reactionEmoji, createdAt: item.createdAt },
+            })
+          } else {
+            await prisma.evolutionGroupReaction.deleteMany({ where: { groupId: group.id, targetMessageId: item.reactionTargetMessageId, senderJid: item.senderJid } })
+          }
+          const recipients = await prisma.user.findMany({
+            where: { isActive: true, OR: [{ id: ownerUserId }, ...(group.departmentId ? [{ routingDepartmentId: group.departmentId }] : [])] },
+            select: { id: true },
+          })
+          void publishEvent('chat_events', {
+            type: 'reaction_update', userId: String(ownerUserId), userIds: recipients.map((user) => String(user.id)), conversationId: group.id,
+            payload: { targetMessageId: item.reactionTargetMessageId, emoji: item.reactionEmoji, senderJid: item.senderJid },
+          })
+          return
+        }
+
         const duplicate = await prisma.evolutionGroupMessage.findFirst({
           where: { messageId: item.messageId, group: { is: { userId: ownerUserId, groupJid: item.groupJid } } },
           select: { id: true },

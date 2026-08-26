@@ -58,7 +58,12 @@ export async function GET(request: Request) {
   const group = await visibleGroup(groupId, current.user, current.ownerId)
   if (!group) return NextResponse.json({ error: 'Group not found' }, { status: 404 })
   await prisma.evolutionGroup.update({ where: { id: group.id }, data: { unreadCount: 0 } })
-  return NextResponse.json({ data: group.messages })
+  const reactions = await prisma.evolutionGroupReaction.findMany({
+    where: { groupId: group.id },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, targetMessageId: true, senderJid: true, senderName: true, emoji: true, createdAt: true },
+  })
+  return NextResponse.json({ data: group.messages, reactions })
 }
 
 export async function POST(request: Request) {

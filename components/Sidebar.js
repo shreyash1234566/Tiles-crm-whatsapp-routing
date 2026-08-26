@@ -67,6 +67,8 @@ const navItems = [
   { href: '/drafts', label: 'Drafts', icon: Trash2, roles: ['ADMIN', 'MANAGER'] },
   { href: '/email-marketing', label: 'Email Marketing', icon: MailPlus, roles: ['ADMIN', 'MANAGER'] },
   { href: '/routing-crm', label: 'Group Inbox', icon: MessageSquare },
+  { href: '/routing-crm/operations', label: 'Routing Operations', icon: BarChart3, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/routing-crm/campaigns', label: 'Dealer Broadcasts', icon: Megaphone, roles: ['ADMIN', 'MANAGER'] },
   { href: '/calls', label: 'Call Center', icon: Headphones },
   { href: '/gst', label: 'GST Compliance', icon: FileSpreadsheet, roles: ['ADMIN', 'MANAGER'] },
   { href: '/expenses', label: 'Expenses', icon: Calculator, roles: ['ADMIN', 'MANAGER', 'STAFF'] },

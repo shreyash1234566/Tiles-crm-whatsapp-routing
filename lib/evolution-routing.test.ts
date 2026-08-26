@@ -111,6 +111,47 @@ describe('Evolution group routing adapter', () => {
     expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain('"fileName":"invoice.pdf"')
   })
 
+  it('extracts a group reaction without treating it as a text inquiry', () => {
+    const [reaction] = extractEvolutionMessages({
+      event: 'MESSAGES_UPSERT',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'REACTION-EVENT-1', participant: '919999999999@s.whatsapp.net' },
+        pushName: 'Dealer',
+        message: { reactionMessage: { key: { id: 'ORIGINAL-MESSAGE-1' }, text: '👍' } },
+      },
+    })
+    expect(reaction).toMatchObject({
+      messageId: 'REACTION-EVENT-1',
+      messageType: 'reactionMessage',
+      text: null,
+      reactionTargetMessageId: 'ORIGINAL-MESSAGE-1',
+      reactionEmoji: '👍',
+    })
+  })
+
+  it('normalizes Evolution dotted webhook event names for group reactions', () => {
+    const [reaction] = extractEvolutionMessages({
+      event: 'messages.upsert',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'REACTION-EVENT-2', participant: '919999999999@s.whatsapp.net' },
+        message: { reactionMessage: { key: { id: 'ORIGINAL-MESSAGE-2' }, text: '✅' } },
+      },
+    })
+    expect(reaction).toMatchObject({ reactionTargetMessageId: 'ORIGINAL-MESSAGE-2', reactionEmoji: '✅' })
+  })
+
+  it('accepts only reaction payloads from MESSAGES_UPDATE', () => {
+    const [reaction] = extractEvolutionMessages({
+      event: 'MESSAGES_UPDATE',
+      data: {
+        key: { remoteJid: '120363123@g.us', id: 'ORIGINAL-MESSAGE-3', participant: '919999999999@s.whatsapp.net' },
+        update: { reactionMessage: { key: { id: 'ORIGINAL-MESSAGE-3' }, text: '❤️' } },
+      },
+    })
+    expect(reaction).toMatchObject({ reactionTargetMessageId: 'ORIGINAL-MESSAGE-3', reactionEmoji: '❤️' })
+    expect(reaction?.messageId).toContain('reaction:ORIGINAL-MESSAGE-3:')
+  })
+
   it('does not treat status updates or outbound events as new inbound messages', () => {
     const data = { key: { remoteJid: '120363123@g.us', id: 'STATUS-1', participant: '919999999999@s.whatsapp.net' }, message: { conversation: 'hello' } }
     expect(extractEvolutionMessages({ event: 'MESSAGES_UPDATE', data })).toEqual([])

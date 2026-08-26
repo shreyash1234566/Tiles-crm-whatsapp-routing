@@ -2986,6 +2986,7 @@ model EvolutionGroup {
   updatedAt          DateTime @updatedAt
 
   messages           EvolutionGroupMessage[]
+  reactions          EvolutionGroupReaction[]
   ticket             EvolutionGroupTicket?
   inquiry            EvolutionDealerInquiry?
 
@@ -3072,6 +3073,27 @@ model EvolutionRoutingAudit {
   @@index([ticketId, createdAt])
   @@index([event, createdAt])
   @@map("evolution_routing_audits")
+}
+
+// WhatsApp reactions arrive as a reactionMessage whose key points to the
+// original provider message ID. They are intentionally stored separately so
+// they never create a new dealer inquiry or a duplicate chat message.
+model EvolutionGroupReaction {
+  id                String   @id @default(cuid())
+  groupId           String
+  reactionMessageId String   @unique
+  targetMessageId   String
+  senderJid         String
+  senderName        String?
+  emoji             String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  group             EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, targetMessageId, senderJid])
+  @@index([groupId, targetMessageId])
+  @@map("evolution_group_reactions")
 }
 
 // ─── Evolution dealer operations (additive Phase 1) ───────────────────────
