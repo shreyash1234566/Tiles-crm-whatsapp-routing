@@ -16,7 +16,7 @@ export default function DealerBroadcastsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [groupsResponse, campaignsResponse] = await Promise.all([fetch('/api/evolution/groups', { cache: 'no-store' }), fetch('/api/evolution/campaigns', { cache: 'no-store' })]);
+      const [groupsResponse, campaignsResponse] = await Promise.all([fetch('/api/evolution/work-items', { cache: 'no-store' }), fetch('/api/evolution/campaigns', { cache: 'no-store' })]);
       const [groupsBody, campaignsBody] = await Promise.all([groupsResponse.json(), campaignsResponse.json()]);
       if (!groupsResponse.ok) throw new Error(groupsBody.error || 'Unable to load dealer groups');
       if (!campaignsResponse.ok) throw new Error(campaignsBody.error || 'Unable to load broadcasts');

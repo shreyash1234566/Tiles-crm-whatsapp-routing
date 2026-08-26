@@ -21,7 +21,7 @@ export default function EvolutionRagControlsPage() {
     try {
       const [configResponse, groupsResponse, departmentsResponse] = await Promise.all([
         fetch('/api/evolution/agent/config', { cache: 'no-store' }),
-        fetch('/api/evolution/groups', { cache: 'no-store' }),
+        fetch('/api/evolution/work-items', { cache: 'no-store' }),
         fetch('/api/routing/users', { cache: 'no-store' }),
       ]);
       const [configBody, groupsBody, departmentsBody] = await Promise.all([configResponse.json(), groupsResponse.json(), departmentsResponse.json()]);
