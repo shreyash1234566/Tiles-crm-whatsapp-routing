@@ -18,33 +18,42 @@ enum UserRole {
 }
 
 model User {
-  id             Int      @id @default(autoincrement())
-  email          String   @unique
-  name           String
-  hashedPassword String
-  role           UserRole @default(STAFF)
-  isActive       Boolean  @default(true)
-  staffId        Int?     @unique
-  staff          Staff?   @relation(fields: [staffId], references: [id])
+  id                  Int                @id @default(autoincrement())
+  email               String             @unique
+  name                String
+  hashedPassword      String
+  role                UserRole           @default(STAFF)
+  isActive            Boolean            @default(true)
+  staffId             Int?               @unique
+  staff               Staff?             @relation(fields: [staffId], references: [id])
   routingDepartmentId Int?
   routingDepartment   RoutingDepartment? @relation(fields: [routingDepartmentId], references: [id])
-  routingPhone        String? @unique
-  routingAliases      String[] @default([])
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  routingPhone        String?            @unique
+  routingAliases      String[]           @default([])
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
-  accounts Account[]
-  sessions Session[]
-  notifications Notification[] @relation("UserNotifications")
+  accounts                 Account[]
+  sessions                 Session[]
+  notifications            Notification[]       @relation("UserNotifications")
+  dashboardWidgets         DashboardWidget[]
+  evolutionGroupNotes      EvolutionGroupNote[]
+  departmentSlaEscalations DepartmentSLA[]      @relation("DepartmentSlaEscalation")
+  macrosCreated            Macro[]              @relation("MacroCreatedBy")
+  assignedWorkItems        DepartmentWorkItem[] @relation("WorkItemAssignedUser")
 }
 
 model RoutingDepartment {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  isActive  Boolean  @default(true)
-  users     User[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  Int                  @id @default(autoincrement())
+  name                String               @unique
+  isActive            Boolean              @default(true)
+  users               User[]
+  departmentSla       DepartmentSLA?
+  macros              Macro[]
+  routingRules        RoutingRule[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  departmentWorkItems DepartmentWorkItem[]
 }
 
 model Account {
@@ -126,22 +135,22 @@ enum LeadStatus {
 }
 
 model Lead {
-  id           Int        @id @default(autoincrement())
-  contactId    Int
-  contact      Contact    @relation(fields: [contactId], references: [id])
-  interest     String
+  id               Int        @id @default(autoincrement())
+  contactId        Int
+  contact          Contact    @relation(fields: [contactId], references: [id])
+  interest         String
   materialCategory String?
   applicationArea  String?
   areaSqft         Float?
-  budget       String?
-  status       LeadStatus @default(NEW)
-  source       String?
-  date         DateTime   @default(now())
-  notes        String?
-  assignedToId Int?
-  assignedTo   Staff?     @relation(fields: [assignedToId], references: [id])
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  budget           String?
+  status           LeadStatus @default(NEW)
+  source           String?
+  date             DateTime   @default(now())
+  notes            String?
+  assignedToId     Int?
+  assignedTo       Staff?     @relation(fields: [assignedToId], references: [id])
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   followUps     FollowUp[]
   indiaMartLead IndiaMartLead?
@@ -482,43 +491,43 @@ enum InvoiceStatus {
 }
 
 model Invoice {
-  id            Int           @id @default(autoincrement())
-  displayId     String        @unique
-  contactId     Int
-  contact       Contact       @relation(fields: [contactId], references: [id])
-  subtotal      Int
-  discount      Int           @default(0)
-  discountType  String        @default("none")
-  gst           Int           @default(0)
-  cgst          Int           @default(0)
-  sgst          Int           @default(0)
-  igst          Int           @default(0) // Interstate GST
-  cess          Int           @default(0) // Cess on applicable goods
-  total         Int
-  amountPaid    Int           @default(0)
-  balanceDue    Int           @default(0)
-  paymentMethod String // primary payment method
-  paymentStatus PaymentStatus @default(PENDING)
-  invoiceStatus InvoiceStatus @default(ACTIVE)
-    transportCost Int           @default(0) // Transportation/freight cost added to invoice
-    freightCharge Int           @default(0)
-    loadingCharge Int           @default(0)
-    installationCharge Int      @default(0)
-    roadPermit    String?
-  godownId      Int?
-  godown        Godown?       @relation(fields: [godownId], references: [id], onDelete: SetNull)
-  supplyType    String        @default("INTRASTATE") // INTRASTATE | INTERSTATE | EXPORT | EXEMPT | NIL_RATED
-  placeOfSupply String? // State name, e.g. "Maharashtra"
-  isRCM         Boolean       @default(false) // Reverse Charge Mechanism
-  date          DateTime
-  time          String?
-  dueDate       DateTime?
-  salespersonId Int?
-  salesperson   Staff?        @relation(fields: [salespersonId], references: [id])
-  notes         String?
-  heldAt        DateTime? // non-null = parked/held bill
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id                 Int           @id @default(autoincrement())
+  displayId          String        @unique
+  contactId          Int
+  contact            Contact       @relation(fields: [contactId], references: [id])
+  subtotal           Int
+  discount           Int           @default(0)
+  discountType       String        @default("none")
+  gst                Int           @default(0)
+  cgst               Int           @default(0)
+  sgst               Int           @default(0)
+  igst               Int           @default(0) // Interstate GST
+  cess               Int           @default(0) // Cess on applicable goods
+  total              Int
+  amountPaid         Int           @default(0)
+  balanceDue         Int           @default(0)
+  paymentMethod      String // primary payment method
+  paymentStatus      PaymentStatus @default(PENDING)
+  invoiceStatus      InvoiceStatus @default(ACTIVE)
+  transportCost      Int           @default(0) // Transportation/freight cost added to invoice
+  freightCharge      Int           @default(0)
+  loadingCharge      Int           @default(0)
+  installationCharge Int           @default(0)
+  roadPermit         String?
+  godownId           Int?
+  godown             Godown?       @relation(fields: [godownId], references: [id], onDelete: SetNull)
+  supplyType         String        @default("INTRASTATE") // INTRASTATE | INTERSTATE | EXPORT | EXEMPT | NIL_RATED
+  placeOfSupply      String? // State name, e.g. "Maharashtra"
+  isRCM              Boolean       @default(false) // Reverse Charge Mechanism
+  date               DateTime
+  time               String?
+  dueDate            DateTime?
+  salespersonId      Int?
+  salesperson        Staff?        @relation(fields: [salespersonId], references: [id])
+  notes              String?
+  heldAt             DateTime? // non-null = parked/held bill
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
   items         InvoiceItem[]
   payments      Payment[]
@@ -668,25 +677,25 @@ enum WalkinStatus {
 }
 
 model Walkin {
-  id            Int          @id @default(autoincrement())
-  contactId     Int
-  contact       Contact      @relation(fields: [contactId], references: [id])
-  requirement   String
-  roomType      String?
+  id               Int          @id @default(autoincrement())
+  contactId        Int
+  contact          Contact      @relation(fields: [contactId], references: [id])
+  requirement      String
+  roomType         String?
   materialCategory String?
   applicationArea  String?
-  areaSqft      Float?
-  assignedToId  Int?
-  assignedTo    Staff?       @relation("WalkinAssigned", fields: [assignedToId], references: [id])
-  date          DateTime
-  time          String
-  status        WalkinStatus @default(BROWSING)
-  budget        String?
-  notes         String?
-  source        String       @default("Walk-in")
-  visitDuration String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  areaSqft         Float?
+  assignedToId     Int?
+  assignedTo       Staff?       @relation("WalkinAssigned", fields: [assignedToId], references: [id])
+  date             DateTime
+  time             String
+  status           WalkinStatus @default(BROWSING)
+  budget           String?
+  notes            String?
+  source           String       @default("Walk-in")
+  visitDuration    String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@index([date])
   @@index([status])
@@ -724,25 +733,25 @@ model Staff {
   professionalTaxState String  @default("Maharashtra")
   tdsMonthly           Int     @default(0) // fixed monthly TDS amount
 
-  user             User?
-  leads            Lead[]
-  invoices         Invoice[]
-  customOrders     CustomOrder[]
-  walkins          Walkin[]          @relation("WalkinAssigned")
-  attendance       Attendance[]
-  activities       StaffActivity[]
-  fieldVisits      FieldVisit[]
-  stockUpdates     StockUpdate[]
-  payslips         Payslip[]
-  loans            StaffLoan[]
-  expenses         Expense[]         @relation("StaffExpenses")
-  productionOrders ProductionOrder[] @relation("ProductionOrderAssignedStaff")
-  receivedPayments DailyPayment[]
-  dealersAssigned  Dealer[]          @relation("DealerAssigned")
-  dealerTasks      DealerTask[]      @relation("DealerTaskAssigned")
-  dealerVisits     DealerVisit[]     @relation("DealerVisitStaff")
-  dealerOrders     DealerOrder[]     @relation("DealerOrderSalesperson")
-  dealerClaims     DealerClaim[]     @relation("DealerClaimAssigned")
+  user                  User?
+  leads                 Lead[]
+  invoices              Invoice[]
+  customOrders          CustomOrder[]
+  walkins               Walkin[]                @relation("WalkinAssigned")
+  attendance            Attendance[]
+  activities            StaffActivity[]
+  fieldVisits           FieldVisit[]
+  stockUpdates          StockUpdate[]
+  payslips              Payslip[]
+  loans                 StaffLoan[]
+  expenses              Expense[]               @relation("StaffExpenses")
+  productionOrders      ProductionOrder[]       @relation("ProductionOrderAssignedStaff")
+  receivedPayments      DailyPayment[]
+  dealersAssigned       Dealer[]                @relation("DealerAssigned")
+  dealerTasks           DealerTask[]            @relation("DealerTaskAssigned")
+  dealerVisits          DealerVisit[]           @relation("DealerVisitStaff")
+  dealerOrders          DealerOrder[]           @relation("DealerOrderSalesperson")
+  dealerClaims          DealerClaim[]           @relation("DealerClaimAssigned")
   dealerTeamAssignments DealerStaffAssignment[] @relation("DealerTeamAssignments")
 
   @@index([email])
@@ -1017,15 +1026,14 @@ model Notification {
   read      Boolean  @default(false)
   metadata  Json? // extra data (productId, visitId, etc.)
   createdAt DateTime @default(now())
+  sourceId  String?
 
+  @@unique([userId, type, sourceId])
   @@index([read])
   @@index([type])
   @@index([userId])
   @@index([userId, read])
-  sourceId  String?
-  
   @@index([read, createdAt]) // fetch unread notifications sorted newest-first
-  @@unique([userId, type, sourceId])
 }
 
 // ─── STORE CAMPAIGNS (QR Codes) ──────────────────────
@@ -2369,14 +2377,18 @@ model WaAutomation {
 }
 
 model WaAutomationStep {
-  id             String   @id @default(cuid())
-  automation_id  String
-  parent_step_id String?
-  branch         String?
-  step_type      String
-  step_config    Json     @default("{}")
-  position       Int
-  created_at     DateTime @default(now())
+  id              String   @id @default(cuid())
+  automation_id   String
+  parent_step_id  String?
+  branch          String?
+  step_type       String
+  step_config     Json     @default("{}")
+  position        Int
+  retryPolicy     Json?
+  timeoutMs       Int?
+  continueOnError Boolean  @default(false)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
 
   automation       WaAutomation                   @relation(fields: [automation_id], references: [id], onDelete: Cascade)
   parent_step      WaAutomationStep?              @relation("WaAutomationStepHierarchy", fields: [parent_step_id], references: [id], onDelete: Cascade)
@@ -2690,13 +2702,13 @@ model Dealer {
   createdAt                DateTime     @default(now())
   updatedAt                DateTime     @updatedAt
 
-  tasks      DealerTask[]
-  orders     DealerOrder[]
-  payments   DealerPayment[]
-  visits     DealerVisit[]
-  claims     DealerClaim[]
-  activities DealerActivity[]
-  priceLists DealerPriceList[]
+  tasks           DealerTask[]
+  orders          DealerOrder[]
+  payments        DealerPayment[]
+  visits          DealerVisit[]
+  claims          DealerClaim[]
+  activities      DealerActivity[]
+  priceLists      DealerPriceList[]
   teamAssignments DealerStaffAssignment[]
 
   @@index([status])
@@ -2711,7 +2723,7 @@ model DealerStaffAssignment {
   dealer    Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
   staffId   Int
   staff     Staff    @relation("DealerTeamAssignments", fields: [staffId], references: [id], onDelete: Cascade)
-  role      String   // OWNER | SALESPERSON | REGIONAL_MANAGER | COLLECTION_EXECUTIVE | SUPPORT_PERSON
+  role      String // OWNER | SALESPERSON | REGIONAL_MANAGER | COLLECTION_EXECUTIVE | SUPPORT_PERSON
   createdAt DateTime @default(now())
 
   @@unique([dealerId, staffId, role])
@@ -2720,22 +2732,22 @@ model DealerStaffAssignment {
 }
 
 model DealerTask {
-  id             Int              @id @default(autoincrement())
-  dealerId       Int
-  dealer         Dealer           @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  id              Int              @id @default(autoincrement())
+  dealerId        Int
+  dealer          Dealer           @relation(fields: [dealerId], references: [id], onDelete: Cascade)
   assignedStaffId Int?
   assignedStaff   Staff?           @relation("DealerTaskAssigned", fields: [assignedStaffId], references: [id], onDelete: SetNull)
-  type           String           @default("FOLLOW_UP") // CALL | VISIT | CATALOGUE | PRICE_LIST | PAYMENT_COLLECTION | REPEAT_ORDER | COMPLAINT | OTHER
-  title          String
-  description    String?
-  dueDate        DateTime
-  reminderAt     DateTime?
-  priority       String           @default("MEDIUM") // LOW | MEDIUM | HIGH | URGENT
-  status         DealerTaskStatus @default(PENDING)
-  completedAt    DateTime?
-  notes          String?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  type            String           @default("FOLLOW_UP") // CALL | VISIT | CATALOGUE | PRICE_LIST | PAYMENT_COLLECTION | REPEAT_ORDER | COMPLAINT | OTHER
+  title           String
+  description     String?
+  dueDate         DateTime
+  reminderAt      DateTime?
+  priority        String           @default("MEDIUM") // LOW | MEDIUM | HIGH | URGENT
+  status          DealerTaskStatus @default(PENDING)
+  completedAt     DateTime?
+  notes           String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   @@index([dealerId, status])
   @@index([assignedStaffId, dueDate])
@@ -2743,12 +2755,12 @@ model DealerTask {
 }
 
 model DealerVisit {
-  id              Int      @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   dealerId        Int
-  dealer          Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  dealer          Dealer    @relation(fields: [dealerId], references: [id], onDelete: Cascade)
   staffId         Int?
-  staff           Staff?   @relation("DealerVisitStaff", fields: [staffId], references: [id], onDelete: SetNull)
-  visitDate       DateTime @default(now())
+  staff           Staff?    @relation("DealerVisitStaff", fields: [staffId], references: [id], onDelete: SetNull)
+  visitDate       DateTime  @default(now())
   purpose         String
   personMet       String?
   outcome         String?
@@ -2756,48 +2768,48 @@ model DealerVisit {
   nextFollowUpAt  DateTime?
   nextMeetingAt   DateTime?
   samplesShown    String?
-  priceListShared Boolean  @default(false)
+  priceListShared Boolean   @default(false)
   dealerFeedback  String?
-  photoUrls       String[] @default([])
-  documentUrls    String[] @default([])
+  photoUrls       String[]  @default([])
+  documentUrls    String[]  @default([])
   notes           String?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   @@index([dealerId, visitDate])
   @@index([staffId, visitDate])
 }
 
 model DealerOrder {
-  id                   Int              @id @default(autoincrement())
-  displayId            String           @unique
+  id                   Int               @id @default(autoincrement())
+  displayId            String            @unique
   dealerId             Int
-  dealer               Dealer           @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  dealer               Dealer            @relation(fields: [dealerId], references: [id], onDelete: Cascade)
   status               DealerOrderStatus @default(ENQUIRY)
-  orderDate            DateTime         @default(now())
+  orderDate            DateTime          @default(now())
   expectedDispatchDate DateTime?
-  paymentDueDate      DateTime?
+  paymentDueDate       DateTime?
   dispatchDate         DateTime?
   deliveryDate         DateTime?
-  subtotal             Int              @default(0)
-  discount             Int              @default(0)
-  gst                  Int              @default(0)
-  freight              Int              @default(0)
-  loading              Int              @default(0)
-  installation         Int              @default(0)
-  total                Int              @default(0)
-  amountPaid           Int              @default(0)
-  balanceDue           Int              @default(0)
-  estimatedCost        Int              @default(0)
-  marginAmount         Int              @default(0)
-  marginPercent        Float            @default(0)
-  paymentStatus        PaymentStatus    @default(PENDING)
+  subtotal             Int               @default(0)
+  discount             Int               @default(0)
+  gst                  Int               @default(0)
+  freight              Int               @default(0)
+  loading              Int               @default(0)
+  installation         Int               @default(0)
+  total                Int               @default(0)
+  amountPaid           Int               @default(0)
+  balanceDue           Int               @default(0)
+  estimatedCost        Int               @default(0)
+  marginAmount         Int               @default(0)
+  marginPercent        Float             @default(0)
+  paymentStatus        PaymentStatus     @default(PENDING)
   salespersonId        Int?
-  salesperson          Staff?           @relation("DealerOrderSalesperson", fields: [salespersonId], references: [id], onDelete: SetNull)
+  salesperson          Staff?            @relation("DealerOrderSalesperson", fields: [salespersonId], references: [id], onDelete: SetNull)
   deliveryAddress      String?
   allocationNotes      String?
   notes                String?
-  createdAt            DateTime         @default(now())
-  updatedAt            DateTime         @updatedAt
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
 
   items    DealerOrderItem[]
   payments DealerPayment[]
@@ -2833,43 +2845,43 @@ model DealerOrderItem {
 }
 
 model DealerPayment {
-  id            Int         @id @default(autoincrement())
+  id            Int          @id @default(autoincrement())
   dealerId      Int
-  dealer        Dealer      @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  dealer        Dealer       @relation(fields: [dealerId], references: [id], onDelete: Cascade)
   dealerOrderId Int?
   dealerOrder   DealerOrder? @relation(fields: [dealerOrderId], references: [id], onDelete: SetNull)
   amount        Int
-  method        String      @default("Bank Transfer")
+  method        String       @default("Bank Transfer")
   reference     String?
-  paymentDate   DateTime    @default(now())
+  paymentDate   DateTime     @default(now())
   notes         String?
-  createdAt     DateTime    @default(now())
+  createdAt     DateTime     @default(now())
 
   @@index([dealerId, paymentDate])
   @@index([dealerOrderId])
 }
 
 model DealerClaim {
-  id             Int               @id @default(autoincrement())
-  dealerId       Int
-  dealer         Dealer            @relation(fields: [dealerId], references: [id], onDelete: Cascade)
-  dealerOrderId  Int?
-  dealerOrder    DealerOrder?      @relation(fields: [dealerOrderId], references: [id], onDelete: SetNull)
-  assignedStaffId Int?
-  assignedStaff   Staff?           @relation("DealerClaimAssigned", fields: [assignedStaffId], references: [id], onDelete: SetNull)
-  type           String            @default("DAMAGE") // DAMAGE | SHORTAGE | SHADE_MISMATCH | QUALITY | DELIVERY | PAYMENT | OTHER
-  description    String
-  quantity       Float?
-  claimAmount    Int               @default(0)
-  status         DealerClaimStatus @default(OPEN)
-  resolution     String?
-  replacementStatus String   @default("NOT_REQUIRED") // NOT_REQUIRED | PENDING | APPROVED | DISPATCHED | COMPLETED
+  id                Int               @id @default(autoincrement())
+  dealerId          Int
+  dealer            Dealer            @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  dealerOrderId     Int?
+  dealerOrder       DealerOrder?      @relation(fields: [dealerOrderId], references: [id], onDelete: SetNull)
+  assignedStaffId   Int?
+  assignedStaff     Staff?            @relation("DealerClaimAssigned", fields: [assignedStaffId], references: [id], onDelete: SetNull)
+  type              String            @default("DAMAGE") // DAMAGE | SHORTAGE | SHADE_MISMATCH | QUALITY | DELIVERY | PAYMENT | OTHER
+  description       String
+  quantity          Float?
+  claimAmount       Int               @default(0)
+  status            DealerClaimStatus @default(OPEN)
+  resolution        String?
+  replacementStatus String            @default("NOT_REQUIRED") // NOT_REQUIRED | PENDING | APPROVED | DISPATCHED | COMPLETED
   replacementNotes  String?
-  openedAt       DateTime          @default(now())
-  resolvedAt     DateTime?
-  notes          String?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  openedAt          DateTime          @default(now())
+  resolvedAt        DateTime?
+  notes             String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   @@index([dealerId, status])
   @@index([assignedStaffId])
@@ -2889,16 +2901,16 @@ model DealerActivity {
 }
 
 model DealerPriceList {
-  id               Int      @id @default(autoincrement())
-  name             String
-  dealerId         Int?
-  dealer           Dealer?  @relation(fields: [dealerId], references: [id], onDelete: Cascade)
-  validFrom        DateTime @default(now())
-  validUntil       DateTime?
-  isActive         Boolean  @default(true)
-  notes            String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id         Int       @id @default(autoincrement())
+  name       String
+  dealerId   Int?
+  dealer     Dealer?   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  validFrom  DateTime  @default(now())
+  validUntil DateTime?
+  isActive   Boolean   @default(true)
+  notes      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   items DealerPriceListItem[]
 
@@ -2923,31 +2935,31 @@ model DealerPriceListItem {
 // ─── Evolution API group routing ──────────────────────────────────────────
 
 model EvolutionGroup {
-  id                 String   @id @default(cuid())
-  userId             Int
-  groupJid           String
-  subject            String
-  departmentId       Int?
-  departmentName     String?
-  routingReason      String?
-  routeType          String   @default("DEFAULT")
-  intent             String?
-  confidence         Float?
-  assignedUserId     Int?
-  mentionPriority    Boolean  @default(false)
-  lastMentionAt      DateTime?
-  lastMessageText    String?
-  lastMessageAt      DateTime?
-  lastInboundAt      DateTime?
-  unreadCount        Int      @default(0)
-  claimedByUserId    Int?
-  claimedAt          DateTime?
-  status             String   @default("open")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id              String    @id @default(cuid())
+  userId          Int
+  groupJid        String
+  subject         String
+  departmentId    Int?
+  departmentName  String?
+  routingReason   String?
+  routeType       String    @default("DEFAULT")
+  intent          String?
+  confidence      Float?
+  assignedUserId  Int?
+  mentionPriority Boolean   @default(false)
+  lastMentionAt   DateTime?
+  lastMessageText String?
+  lastMessageAt   DateTime?
+  lastInboundAt   DateTime?
+  unreadCount     Int       @default(0)
+  claimedByUserId Int?
+  claimedAt       DateTime?
+  status          String    @default("open")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  messages           EvolutionGroupMessage[]
-  ticket             EvolutionGroupTicket?
+  messages EvolutionGroupMessage[]
+  ticket   EvolutionGroupTicket?
 
   @@unique([userId, groupJid])
   @@index([userId, departmentId, status])
@@ -2971,7 +2983,7 @@ model EvolutionGroupMessage {
   status          String   @default("received")
   createdAt       DateTime @default(now())
 
-  group           EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, messageId])
   @@index([groupId, createdAt])
@@ -2980,41 +2992,389 @@ model EvolutionGroupMessage {
 }
 
 model EvolutionGroupTicket {
-  id              String   @id @default(cuid())
-  groupId         String   @unique
-  departmentId    Int?
-  departmentName  String?
-  assignedUserId  Int?
-  status          String   @default("open")
-  routeType       String   @default("default")
-  lastIntent      String?
-  confidence      Float?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  groupId        String   @unique
+  departmentId   Int?
+  departmentName String?
+  assignedUserId Int?
+  status         String   @default("open")
+  routeType      String   @default("default")
+  lastIntent     String?
+  confidence     Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  group           EvolutionGroup         @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  audits          EvolutionRoutingAudit[]
+  group         EvolutionGroup          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  audits        EvolutionRoutingAudit[]
+  notes         EvolutionGroupNote[]
+  sla           TicketSLA?
+  csatResponses CSATResponse?
+  workItems     DepartmentWorkItem[]
 
   @@index([departmentId, status])
   @@index([routeType, createdAt])
   @@map("evolution_group_tickets")
 }
 
-model EvolutionRoutingAudit {
-  id                 String   @id @default(cuid())
-  ticketId           String
-  messageId          String?
-  event              String
-  routeType          String
-  fromDepartmentId   Int?
-  toDepartmentId     Int?
-  confidence         Float?
-  reason             String?
-  createdAt          DateTime @default(now())
+// DepartmentWorkItem represents a department-specific work item within a WhatsApp group.
+// One group can spawn multiple work items (one per department mentioned/matched).
+// Each work item has its own lifecycle, status, assigned user, and SLA tracking.
+model DepartmentWorkItem {
+  id              String               @id @default(cuid())
+  ticketId        String
+  ticket          EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  departmentId    Int
+  department      RoutingDepartment    @relation(fields: [departmentId], references: [id])
+  departmentName  String
+  assignedUserId  Int?
+  assignedUser    User?                @relation("WorkItemAssignedUser", fields: [assignedUserId], references: [id])
+  status          String               @default("open") // open, in_progress, waiting_customer, resolved, closed
+  routeType       String // DIRECT_MENTION, KEYWORD, AI_CLASSIFIED, EXISTING, DEFAULT, RULE_MATCH
+  routingReason   String?
+  confidence      Float?
+  intent          String?
+  mentionPriority Boolean              @default(false)
+  sourceMessageId String? // The message that triggered this work item creation
+  doneAt          DateTime?
+  doneByUserId    Int?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
-  ticket             EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sla   WorkItemSLA?
+  notes EvolutionGroupNote[]
+
+  @@unique([ticketId, departmentId, sourceMessageId]) // Prevent duplicate work items per message per department
+  @@index([ticketId, departmentId])
+  @@index([departmentId, status])
+  @@index([assignedUserId, status])
+  @@map("department_work_items")
+}
+
+// WorkItemSLA tracks SLA per department work item
+model WorkItemSLA {
+  id                    String             @id @default(cuid())
+  workItemId            String             @unique
+  workItem              DepartmentWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  firstResponseDue      DateTime?
+  firstRespondedAt      DateTime?
+  resolutionDue         DateTime?
+  resolvedAt            DateTime?
+  breachedFirstResponse Boolean            @default(false)
+  breachedResolution    Boolean            @default(false)
+  escalatedAt           DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@map("work_item_slas")
+}
+
+model EvolutionRoutingAudit {
+  id               String   @id @default(cuid())
+  ticketId         String
+  messageId        String?
+  event            String
+  routeType        String
+  fromDepartmentId Int?
+  toDepartmentId   Int?
+  confidence       Float?
+  reason           String?
+  createdAt        DateTime @default(now())
+
+  ticket EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   @@index([ticketId, createdAt])
   @@index([event, createdAt])
   @@map("evolution_routing_audits")
 }
+
+// ─── DASHBOARD & OPERATIONS INTELLIGENCE ─────────────────
+
+model DashboardWidget {
+  id        String    @id @default(cuid())
+  userId    Int?
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      UserRole?
+  widgetKey String
+  position  Int       @default(0)
+  config    Json
+  isVisible Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([userId, widgetKey])
+  @@index([role, widgetKey])
+  @@map("dashboard_widgets")
+}
+
+model DashboardSnapshot {
+  id           String   @id @default(cuid())
+  snapshotType String
+  periodStart  DateTime
+  periodEnd    DateTime
+  metrics      Json
+  createdAt    DateTime @default(now())
+
+  @@index([snapshotType, periodStart])
+  @@map("dashboard_snapshots")
+}
+
+model AlertRule {
+  id            String    @id @default(cuid())
+  name          String
+  metric        String
+  operator      String
+  threshold     Float
+  severity      String    @default("warning")
+  channels      String[]  @default(["in_app"])
+  recipients    Int[]
+  isActive      Boolean   @default(true)
+  cooldownMins  Int       @default(60)
+  lastTriggered DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  alerts        Alert[]
+
+  @@index([metric, isActive])
+  @@map("alert_rules")
+}
+
+model Alert {
+  id         String    @id @default(cuid())
+  ruleId     String
+  rule       AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  metric     String
+  value      Float
+  severity   String
+  message    String    @db.Text
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([ruleId, resolvedAt])
+  @@map("alerts")
+}
+
+// ─── GROUP TICKET ROUTING ENHANCEMENTS ───────────────────
+
+model EvolutionGroupNote {
+  id         String               @id @default(cuid())
+  ticketId   String
+  ticket     EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  workItemId String?
+  workItem   DepartmentWorkItem?  @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User                 @relation(fields: [userId], references: [id])
+  content    String               @db.Text
+  isInternal Boolean              @default(true)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  @@index([ticketId, createdAt])
+  @@index([workItemId, createdAt])
+  @@map("evolution_group_notes")
+}
+
+model DepartmentSLA {
+  id                String            @id @default(cuid())
+  departmentId      Int               @unique
+  department        RoutingDepartment @relation(fields: [departmentId], references: [id])
+  firstResponseMins Int               @default(15)
+  resolutionMins    Int               @default(240)
+  businessHoursOnly Boolean           @default(true)
+  timezone          String            @default("Asia/Kolkata")
+  escalationUserId  Int?
+  escalationUser    User?             @relation("DepartmentSlaEscalation", fields: [escalationUserId], references: [id])
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@map("department_slas")
+}
+
+model TicketSLA {
+  id                    String               @id @default(cuid())
+  ticketId              String               @unique
+  ticket                EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  firstResponseDue      DateTime?
+  firstRespondedAt      DateTime?
+  resolutionDue         DateTime?
+  resolvedAt            DateTime?
+  breachedFirstResponse Boolean              @default(false)
+  breachedResolution    Boolean              @default(false)
+  escalatedAt           DateTime?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@map("ticket_slas")
+}
+
+model Macro {
+  id           String             @id @default(cuid())
+  name         String
+  content      String             @db.Text
+  variables    String[]           @default([])
+  departmentId Int?
+  department   RoutingDepartment? @relation(fields: [departmentId], references: [id])
+  isGlobal     Boolean            @default(false)
+  createdById  Int
+  createdBy    User               @relation("MacroCreatedBy", fields: [createdById], references: [id])
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([departmentId])
+  @@map("macros")
+}
+
+model CSATResponse {
+  id            String               @id @default(cuid())
+  ticketId      String               @unique
+  ticket        EvolutionGroupTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  rating        Int
+  comment       String?
+  respondentJid String
+  createdAt     DateTime             @default(now())
+
+  @@map("csat_responses")
+}
+
+model RoutingRule {
+  id           String            @id @default(cuid())
+  name         String
+  departmentId Int
+  department   RoutingDepartment @relation(fields: [departmentId], references: [id])
+  priority     Int               @default(0)
+  conditions   Json
+  actions      Json
+  isActive     Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([departmentId, priority])
+  @@map("routing_rules")
+}
+
+// ─── WORKFLOW AUTOMATION V2 ──────────────────────────────
+
+model Automation {
+  id               String    @id @default(cuid())
+  userId           String
+  name             String
+  description      String?
+  triggerType      String
+  triggerConfig    Json
+  isActive         Boolean   @default(false)
+  status           String    @default("draft")
+  version          Int       @default(1)
+  publishedVersion Int?
+  executionCount   Int       @default(0)
+  lastExecutedAt   DateTime?
+  errorCount       Int       @default(0)
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  steps      AutomationStepV2[]
+  versions   AutomationVersion[]
+  executions AutomationExecution[]
+
+  @@index([userId, status])
+  @@index([triggerType, isActive])
+  @@map("automations_v2")
+}
+
+model AutomationVersion {
+  id           String     @id @default(cuid())
+  automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  version      Int
+  definition   Json
+  changelog    String?
+  publishedAt  DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@unique([automationId, version])
+  @@map("automation_versions")
+}
+
+model AutomationExecution {
+  id             String     @id @default(cuid())
+  automationId   String
+  automation     Automation @relation(fields: [automationId], references: [id])
+  version        Int
+  triggerPayload Json
+  status         String     @default("running")
+  currentStepId  String?
+  context        Json
+  startedAt      DateTime   @default(now())
+  completedAt    DateTime?
+  error          String?
+  errorStepId    String?
+
+  steps AutomationStepExecution[]
+
+  @@index([automationId, startedAt])
+  @@index([status])
+  @@map("automation_executions")
+}
+
+model AutomationStepV2 {
+  id              String             @id @default(cuid())
+  automationId    String
+  automation      Automation         @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  parentStepId    String?
+  parentStep      AutomationStepV2?  @relation("AutomationStepHierarchyV2", fields: [parentStepId], references: [id], onDelete: Cascade)
+  childSteps      AutomationStepV2[] @relation("AutomationStepHierarchyV2")
+  branch          String?
+  stepType        String
+  stepConfig      Json               @default("{}")
+  position        Int
+  retryPolicy     Json?
+  timeoutMs       Int?
+  continueOnError Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([automationId, position])
+  @@index([parentStepId])
+  @@map("automation_steps_v2")
+}
+
+model AutomationStepExecution {
+  id          String              @id @default(cuid())
+  executionId String
+  execution   AutomationExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  stepId      String
+  stepType    String
+  input       Json
+  output      Json?
+  status      String              @default("pending")
+  retryCount  Int                 @default(0)
+  startedAt   DateTime?
+  completedAt DateTime?
+  error       String?
+
+  @@index([executionId, stepId])
+  @@map("automation_step_executions")
+}
+
+model AutomationDeadLetter {
+  id           String    @id @default(cuid())
+  executionId  String
+  automationId String
+  failedStepId String
+  payload      Json
+  error        String
+  status       String    @default("pending")
+  retryCount   Int       @default(0)
+  maxRetries   Int       @default(3)
+  nextRetryAt  DateTime?
+  resolvedAt   DateTime?
+  resolvedBy   String?
+  createdAt    DateTime  @default(now())
+
+  @@index([automationId, nextRetryAt])
+  @@index([status])
+  @@map("automation_dead_letters")
+}
+
+// Extend existing WaAutomationStep with new fields (additive)
+// Note: These fields are added to the existing WaAutomationStep model
+// retryPolicy, timeoutMs, continueOnError
