@@ -4,11 +4,12 @@ import { downloadEvolutionMedia, isAuthorizedEvolutionWebhook, extractEvolutionM
 import { randomUUID } from 'node:crypto'
 import { publishEvent } from '@/lib/redis'
 import { uploadFile } from '@/lib/r2'
-import { findDealerForEvolutionMessage } from '@/lib/evolution-operations'
+import { findDealerForEvolutionMessage, normalizeEvolutionPhone } from '@/lib/evolution-operations'
 import { getEvolutionAgentQueue, getEvolutionVisionQueue } from '@/lib/queues/jobs'
 import { isEvolutionVisionEnabled } from '@/lib/evolution-vision'
 import { workItemRecipientIds } from '@/lib/evolution-work-items'
 import { createCatalogDraftForInbound } from '@/lib/evolution-catalog-workflow'
+import { isEvolutionMarketingOptOut } from '@/lib/evolution-safety'
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 
@@ -132,6 +133,22 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           groupJid: item.groupJid,
           senderJid: item.senderJid,
         })
+        // A WhatsApp group also contains our own staff. Only treat STOP as a
+        // dealer opt-out when the sender is the explicitly linked dealer
+        // number (or the sender produced the initial exact CRM phone match).
+        // This prevents an employee's group message from disabling consent.
+        const savedIdentity = await prisma.dealerEvolutionIdentity.findUnique({
+          where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
+          select: { phone: true },
+        })
+        const senderPhone = normalizeEvolutionPhone(item.senderJid)
+        const verifiedDealerSender = Boolean(
+          senderPhone && (
+            (savedIdentity?.phone && normalizeEvolutionPhone(savedIdentity.phone) === senderPhone)
+            || (!savedIdentity && dealerMatch?.source === 'dealer_phone')
+          ),
+        )
+        const marketingOptOut = verifiedDealerSender && isEvolutionMarketingOptOut(item.text)
         const result = await prisma.$transaction(async (tx) => {
           const group = await tx.evolutionGroup.upsert({
             where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
@@ -146,6 +163,12 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
               where: { userId_groupJid: { userId: ownerUserId, groupJid: item.groupJid } },
               update: { dealerId: dealerMatch.dealerId, phone: dealerMatch.matchedPhone, lastSeenAt: item.createdAt },
               create: { userId: ownerUserId, dealerId: dealerMatch.dealerId, groupJid: item.groupJid, phone: dealerMatch.matchedPhone, lastSeenAt: item.createdAt },
+            })
+          }
+          if (marketingOptOut) {
+            await tx.dealerEvolutionIdentity.updateMany({
+              where: { userId: ownerUserId, groupJid: item.groupJid },
+              data: { marketingConsentStatus: 'OPTED_OUT', marketingOptInAt: null, marketingOptOutAt: item.createdAt, consentSource: 'DEALER_WHATSAPP_REPLY', consentEvidence: item.text?.slice(0, 1_000) || 'Dealer requested that campaign messages stop' },
             })
           }
           const inquiry = await tx.evolutionDealerInquiry.upsert({
@@ -237,7 +260,7 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
               data: { status: 'REPLIED', repliedAt: item.createdAt, responseMessageId: message.id },
             })
           }
-          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, inquiryId: inquiry.id, event: 'ROUTED', routeType: routing.routeType, fromDepartmentId: null, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: routing.routingReason, correlationId, metadata: { dealerMatch: dealerMatch?.source ?? null, webhookMessageId: item.messageId, workItemId: workItem.id } } })
+          await tx.evolutionRoutingAudit.create({ data: { ticketId: ticket.id, messageId: message.id, inquiryId: inquiry.id, event: marketingOptOut ? 'CAMPAIGN_OPT_OUT' : 'ROUTED', routeType: routing.routeType, fromDepartmentId: null, toDepartmentId: routing.departmentId, confidence: routing.confidence ?? null, reason: marketingOptOut ? 'Dealer opted out of campaign messages from the WhatsApp group' : routing.routingReason, correlationId, metadata: { dealerMatch: dealerMatch?.source ?? null, webhookMessageId: item.messageId, workItemId: workItem.id, marketingOptOut } } })
           const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { lastMessageText: item.text || `[${item.messageType}]`, lastMessageAt: item.createdAt, lastInboundAt: item.createdAt, unreadCount: { increment: 1 } } })
           return { message, group: updatedGroup, ticketId: ticket.id, inquiryId: inquiry.id, workItem }
         })
@@ -346,6 +369,22 @@ export async function POST(request: Request) {
   const statusUpdates = extractEvolutionMessageStatusUpdates(body)
   const root = body && typeof body === 'object' ? body as Record<string, unknown> : {}
   const event = typeof root.event === 'string' ? root.event : typeof root.type === 'string' ? root.type : 'unknown'
+  const eventKey = event.toUpperCase().replace(/[.\-]/g, '_')
+  if (eventKey === 'CONNECTION_UPDATE') {
+    const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : {}
+    const instance = data.instance && typeof data.instance === 'object' ? data.instance as Record<string, unknown> : {}
+    const connectionState = String(data.state || data.status || instance.state || '').trim().toLowerCase()
+    if (['close', 'closed', 'disconnected', 'logged_out', 'logout'].includes(connectionState)) {
+      await prisma.evolutionSafetyConfig.upsert({
+        where: { userId: ownerUserId },
+        create: { userId: ownerUserId, circuitOpenUntil: new Date(Date.now() + 60 * 60 * 1000), circuitReason: `Connection state: ${connectionState}` },
+        update: { circuitOpenUntil: new Date(Date.now() + 60 * 60 * 1000), circuitReason: `Connection state: ${connectionState}` },
+      }).catch(() => undefined)
+    } else if (['open', 'connected'].includes(connectionState)) {
+      const safety = await prisma.evolutionSafetyConfig.findUnique({ where: { userId: ownerUserId }, select: { circuitReason: true } }).catch(() => null)
+      if (safety?.circuitReason?.startsWith('Connection state:')) await prisma.evolutionSafetyConfig.update({ where: { userId: ownerUserId }, data: { circuitOpenUntil: null, circuitReason: null, consecutiveFailures: 0 } }).catch(() => undefined)
+    }
+  }
   await prisma.evolutionWebhookHealth.upsert({
     where: { ownerUserId },
     update: { lastReceivedAt: new Date(), lastEvent: event, lastMessageId: incoming[0]?.messageId || statusUpdates[0]?.messageId || null, lastCorrelationId: correlationId, lastError: null },

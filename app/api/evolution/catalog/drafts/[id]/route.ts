@@ -4,6 +4,7 @@ import { getSession } from '@/lib/auth-helpers'
 import { EvolutionApiError, getEvolutionOwnerUserId, sendEvolutionGroupMediaUrl, sendEvolutionGroupText } from '@/lib/evolution-routing'
 import { canAccessDepartmentWorkItem, isRoutingManager, workItemRecipientIds } from '@/lib/evolution-work-items'
 import { publishEvent } from '@/lib/redis'
+import { EvolutionSafetyBlockedError } from '@/lib/evolution-safety'
 
 function providerMessageId(value: unknown): string {
   if (!value || typeof value !== 'object') return `catalog-${Date.now()}`
@@ -55,7 +56,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   let providerMessageAccepted = false
   try {
     providerCallStarted = true
-    const providerResponse = await sendEvolutionGroupText({ groupJid: draft.group.groupJid, text: draft.content, quoted: draft.requestedMessageId ? { id: draft.requestedMessageId, text: null } : undefined })
+    const providerResponse = await sendEvolutionGroupText({ groupJid: draft.group.groupJid, text: draft.content, quoted: draft.requestedMessageId ? { id: draft.requestedMessageId, text: null } : undefined, ownerUserId: ownerId, category: 'CATALOG', idempotencyKey: `evolution-catalog:${draft.id}:text`, metadata: { draftId: draft.id } })
     providerMessageAccepted = true
     const sentMedia: Array<{ providerId: string; url: string; type: 'image' | 'video' | 'document' }> = []
     for (let index = 0; index < draft.mediaUrls.length; index += 1) {
@@ -63,7 +64,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       const type = draft.mediaTypes[index] === 'video' ? 'video' : draft.mediaTypes[index] === 'document' ? 'document' : 'image'
       const extension = type === 'video' ? 'mp4' : type === 'document' ? 'pdf' : 'jpg'
       providerCallStarted = true
-      const response = await sendEvolutionGroupMediaUrl({ groupJid: draft.group.groupJid, mediaUrl: url, mediaType: type, mimeType: type === 'video' ? 'video/mp4' : type === 'document' ? 'application/pdf' : 'image/jpeg', fileName: `catalog-${index + 1}.${extension}`, quoted: index === 0 && draft.requestedMessageId ? { id: draft.requestedMessageId, text: null } : undefined })
+      const response = await sendEvolutionGroupMediaUrl({ groupJid: draft.group.groupJid, mediaUrl: url, mediaType: type, mimeType: type === 'video' ? 'video/mp4' : type === 'document' ? 'application/pdf' : 'image/jpeg', fileName: `catalog-${index + 1}.${extension}`, quoted: index === 0 && draft.requestedMessageId ? { id: draft.requestedMessageId, text: null } : undefined, ownerUserId: ownerId, category: 'CATALOG', idempotencyKey: `evolution-catalog:${draft.id}:media:${index}`, metadata: { draftId: draft.id, mediaIndex: index } })
       providerMessageAccepted = true
       sentMedia.push({ providerId: providerMessageId(response), url, type })
     }
@@ -94,7 +95,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     // resetting to APPROVED would let a retry duplicate the dealer reply.
     // Only a definitive Evolution HTTP rejection before any acceptance is
     // safely retryable. Unknown failures remain FAILED for manual inspection.
-    const definitelyRejected = error instanceof EvolutionApiError && !providerMessageAccepted
+    const definitelyRejected = error instanceof EvolutionSafetyBlockedError || (error instanceof EvolutionApiError && !providerMessageAccepted)
     const uncertain = providerMessageAccepted || (providerCallStarted && !definitelyRejected)
     await prisma.evolutionCatalogResponseDraft.update({
       where: { id: draft.id },

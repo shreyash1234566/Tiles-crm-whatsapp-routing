@@ -13,6 +13,7 @@ import {
   newIdempotencyKey,
 } from '@/lib/evolution-operations'
 import { isEvolutionQuietHour, maxEvolutionAutoRepliesPerTicket } from '@/lib/evolution-runtime-guards'
+import { EvolutionSafetyBlockedError } from '@/lib/evolution-safety'
 
 export interface EvolutionAgentJobPayload {
   ownerUserId: number
@@ -244,8 +245,22 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
   let providerResponse: unknown
   try {
     if (config.responseDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(config.responseDelayMs, 10_000)))
-    providerResponse = await sendEvolutionGroupText({ groupJid: fresh.groupJid, text: response.text, quoted: { id: inbound.messageId, text: inbound.text } })
+    providerResponse = await sendEvolutionGroupText({
+      groupJid: fresh.groupJid,
+      text: response.text,
+      quoted: { id: inbound.messageId, text: inbound.text },
+      ownerUserId: payload.ownerUserId,
+      category: 'RAG',
+      idempotencyKey: `evolution-rag:${run.id}`,
+      metadata: { ticketId: freshTicket.id, inboundMessageId: inbound.messageId },
+    })
   } catch (error) {
+    if (error instanceof EvolutionSafetyBlockedError) {
+      const citedDraft = `${response.text}\n\n[Knowledge refs: ${retrievalIds.join(', ')}]`
+      await prisma.evolutionAgentRun.update({ where: { id: run.id }, data: { status: 'DRAFTED', mode: 'DRAFT', error: error.message, responseText: citedDraft, retrievalIds, model: getGroqModelName() } })
+      await recordAudit({ ticketId: fresh.ticket.id, messageId: inbound.id, inquiryId: fresh.inquiry?.id, event: 'RAG_DRAFT', reason: 'WhatsApp Safety prevented automatic delivery; the grounded reply was retained as a draft', metadata: { retrievalIds } })
+      return
+    }
     await prisma.evolutionAgentRun.update({ where: { id: run.id }, data: { status: 'FAILED', error: error instanceof Error ? error.message : 'Evolution send failed', retrievalIds, responseText: response.text, model: getGroqModelName() } })
     await recordAudit({ ticketId: fresh.ticket.id, messageId: inbound.id, inquiryId: fresh.inquiry?.id, event: 'RAG_FAILED', reason: 'Evolution provider rejected the generated reply', metadata: { retrievalIds } })
     return

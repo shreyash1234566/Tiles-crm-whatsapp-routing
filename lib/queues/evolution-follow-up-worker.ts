@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db'
 import { sendEvolutionGroupText } from '@/lib/evolution-routing'
 import { isClosedInquiryStage } from '@/lib/evolution-operations'
 import { isEvolutionQuietHour, nextEvolutionQuietRetryAt } from '@/lib/evolution-runtime-guards'
+import { EvolutionSafetyBlockedError } from '@/lib/evolution-safety'
 import { createEvolutionFollowUpWorker, getEvolutionFollowUpQueue, type EvolutionFollowUpJobData } from './jobs'
 
 let workerStarted = false
@@ -46,7 +47,14 @@ async function processFollowUp(job: EvolutionFollowUpJobData) {
   }
 
   try {
-    const response = await sendEvolutionGroupText({ groupJid: group.groupJid, text: followUp.message })
+    const response = await sendEvolutionGroupText({
+      groupJid: group.groupJid,
+      text: followUp.message,
+      ownerUserId: group.userId,
+      category: 'FOLLOW_UP',
+      idempotencyKey: `evolution-follow-up:${followUp.id}`,
+      metadata: { followUpId: followUp.id, ticketId: followUp.ticket.id },
+    })
     const sentAt = new Date()
     const providerId = providerMessageId(response)
     await prisma.$transaction(async (tx) => {
@@ -65,6 +73,12 @@ async function processFollowUp(job: EvolutionFollowUpJobData) {
       })
     })
   } catch (error) {
+    if (error instanceof EvolutionSafetyBlockedError) {
+      const retryAt = nextEvolutionQuietRetryAt()
+      await prisma.evolutionTicketFollowUp.update({ where: { id: followUp.id }, data: { status: 'PENDING', scheduledFor: retryAt, error: error.message.slice(0, 2_000) } })
+      await getEvolutionFollowUpQueue().add('send-group-follow-up', { followUpId: followUp.id }, { jobId: `evolution-follow-up:safety:${followUp.id}:${retryAt.getTime()}`, delay: Math.max(1, retryAt.getTime() - Date.now()) })
+      return
+    }
     await prisma.evolutionTicketFollowUp.update({ where: { id: followUp.id }, data: { status: 'FAILED', error: error instanceof Error ? error.message.slice(0, 2000) : 'Evolution follow-up send failed' } })
     throw error
   }

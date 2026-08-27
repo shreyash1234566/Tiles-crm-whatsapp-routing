@@ -76,5 +76,8 @@ export async function register() {
 
     const { startEvolutionVisionWorker } = await import('./lib/queues/evolution-vision-worker')
     startEvolutionVisionWorker()
+
+    const { startEvolutionCampaignWorker } = await import('./lib/queues/evolution-campaign-worker')
+    startEvolutionCampaignWorker()
   }
 }

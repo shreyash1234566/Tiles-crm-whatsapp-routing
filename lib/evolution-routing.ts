@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import { prisma } from '@/lib/db'
+import { executeEvolutionSafeSend, type EvolutionOutboundCategory } from '@/lib/evolution-safety'
 
 export type EvolutionConfig = {
   baseUrl: string
@@ -525,19 +526,19 @@ export async function getEvolutionOwnerUserId(): Promise<number | null> {
   return owner?.id ?? null
 }
 
-export async function sendEvolutionGroupText(input: { groupJid: string; text: string; quoted?: { id: string; text: string | null } }) {
+export async function sendEvolutionGroupText(input: { groupJid: string; text: string; quoted?: { id: string; text: string | null }; ownerUserId?: number; category?: EvolutionOutboundCategory; idempotencyKey?: string; metadata?: Record<string, unknown> }) {
   const config = getEvolutionConfig()
   if (!config) throw new Error('Evolution API is not configured')
   const quoted = input.quoted?.id
     ? { key: { id: input.quoted.id, remoteJid: input.groupJid, fromMe: false }, message: { conversation: input.quoted.text || '' } }
     : undefined
-  return evolutionRequest<unknown>(`/message/sendText/${encodeURIComponent(config.instanceName)}`, {
+  return executeEvolutionSafeSend(input, () => evolutionRequest<unknown>(`/message/sendText/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
     // Evolution API v2.3.7 validates `text` at the top level. Although newer
     // docs show `textMessage.text`, that shape is rejected by the pinned image
     // with: instance requires property "text".
     body: JSON.stringify({ number: input.groupJid, text: input.text, linkPreview: true, ...(quoted ? { quoted } : {}) }),
-  })
+  }))
 }
 
 /** Extract only delivery/read acknowledgements for messages sent by Evolution.
@@ -582,6 +583,10 @@ export async function sendEvolutionGroupMedia(input: {
   fileName: string
   caption?: string
   quoted?: { id: string; text: string | null }
+  ownerUserId?: number
+  category?: EvolutionOutboundCategory
+  idempotencyKey?: string
+  metadata?: Record<string, unknown>
 }) {
   const config = getEvolutionConfig()
   if (!config) throw new Error('Evolution API is not configured')
@@ -593,21 +598,21 @@ export async function sendEvolutionGroupMedia(input: {
     : undefined
 
   if (input.mediaType === 'audio') {
-    return evolutionRequest<unknown>(`/message/sendWhatsAppAudio/${encodeURIComponent(config.instanceName)}`, {
+    return executeEvolutionSafeSend(input, () => evolutionRequest<unknown>(`/message/sendWhatsAppAudio/${encodeURIComponent(config.instanceName)}`, {
       method: 'POST',
       // v2.3.7 accepts a raw, complete base64 value at top-level `audio`.
       // Avoid an internal Docker URL here: its hostname (`app`) fails the
       // provider's URL validator before Evolution can fetch the file.
       body: JSON.stringify({ number: input.groupJid, audio: input.media, mimetype: input.mimeType, ...(quoted ? { quoted } : {}) }),
-    }, 30000)
+    }, 30000))
   }
 
-  return evolutionRequest<unknown>(`/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
+  return executeEvolutionSafeSend(input, () => evolutionRequest<unknown>(`/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
     // v2.3.7 accepts raw base64 in top-level `media`; documents require
     // fileName. Keep filename too for the image/document compatibility path.
     body: JSON.stringify({ number: input.groupJid, mediatype: input.mediaType, media: input.media, mimetype: input.mimeType, fileName: input.fileName, filename: input.fileName, ...(input.caption ? { caption: input.caption } : {}), ...(quoted ? { quoted } : {}) }),
-  }, 30000)
+  }, 30000))
 }
 
 /** Send an explicitly dealer-shareable HTTPS catalog asset. Internal app
@@ -620,15 +625,19 @@ export async function sendEvolutionGroupMediaUrl(input: {
   fileName: string
   caption?: string
   quoted?: { id: string; text: string | null }
+  ownerUserId?: number
+  category?: EvolutionOutboundCategory
+  idempotencyKey?: string
+  metadata?: Record<string, unknown>
 }) {
   if (!/^https:\/\//i.test(input.mediaUrl)) throw new Error('Catalog media must use an HTTPS URL')
   const config = getEvolutionConfig()
   if (!config) throw new Error('Evolution API is not configured')
   const quoted = input.quoted?.id ? { key: { id: input.quoted.id, remoteJid: input.groupJid, fromMe: false }, message: { conversation: input.quoted.text || '' } } : undefined
-  return evolutionRequest<unknown>(`/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
+  return executeEvolutionSafeSend(input, () => evolutionRequest<unknown>(`/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
     body: JSON.stringify({ number: input.groupJid, mediatype: input.mediaType, media: input.mediaUrl, mimetype: input.mimeType, fileName: input.fileName, filename: input.fileName, ...(input.caption ? { caption: input.caption } : {}), ...(quoted ? { quoted } : {}) }),
-  }, 30000)
+  }, 30000))
 }
 
 /**

@@ -31,7 +31,12 @@ export async function GET() {
       inquiry: { select: { id: true, dealerId: true, convertedOrderId: true, stage: true, priority: true, slaDueAt: true, nextFollowUpAt: true, lastActivityAt: true, dealer: { select: { id: true, businessName: true, contactPerson: true, phone: true, whatsappNumber: true } } } },
     },
   })
-  return NextResponse.json({ data: groups })
+  const identities = groups.length > 0 ? await prisma.dealerEvolutionIdentity.findMany({
+    where: { userId: ownerId, groupJid: { in: groups.map((group) => group.groupJid) } },
+    select: { groupJid: true, marketingConsentStatus: true, marketingOptInAt: true, marketingOptOutAt: true, consentSource: true, consentEvidence: true, lastCampaignAt: true },
+  }) : []
+  const identityByGroup = new Map(identities.map((identity) => [identity.groupJid, identity]))
+  return NextResponse.json({ data: groups.map((group) => ({ ...group, marketingConsent: identityByGroup.get(group.groupJid) || null })) })
 }
 
 export async function POST(request: Request) {

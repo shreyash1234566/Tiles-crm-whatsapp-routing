@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { getSession } from '@/lib/auth-helpers'
-import { encodeEvolutionMedia, getEvolutionOwnerUserId, sendEvolutionGroupMedia, sendEvolutionGroupText } from '@/lib/evolution-routing'
+import { encodeEvolutionMedia, EvolutionApiError, getEvolutionOwnerUserId, sendEvolutionGroupMedia, sendEvolutionGroupText } from '@/lib/evolution-routing'
 import { deleteFile, uploadFile } from '@/lib/r2'
 import { canAccessDepartmentWorkItem } from '@/lib/evolution-work-items'
+import { EvolutionSafetyBlockedError } from '@/lib/evolution-safety'
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 type MediaType = 'image' | 'document' | 'audio' | 'video'
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
   let workItemId = ''
   let text = ''
   let quotedMessageId = ''
+  let idempotencyKey = request.headers.get('idempotency-key')?.trim() || ''
   let attachment: File | null = null
 
   if (request.headers.get('content-type')?.includes('multipart/form-data')) {
@@ -80,22 +82,33 @@ export async function POST(request: Request) {
     workItemId = String(form.get('work_item_id') || '').trim()
     text = String(form.get('text') || '').trim()
     quotedMessageId = String(form.get('quoted_message_id') || '').trim()
+    idempotencyKey = String(form.get('idempotency_key') || idempotencyKey).trim()
     const file = form.get('file')
     if (file && typeof file === 'object' && 'arrayBuffer' in file && 'size' in file) attachment = file as File
   } else {
-    const body = await request.json().catch(() => ({})) as { work_item_id?: string; text?: string; quoted_message_id?: string }
+    const body = await request.json().catch(() => ({})) as { work_item_id?: string; text?: string; quoted_message_id?: string; idempotency_key?: string }
     workItemId = String(body.work_item_id || '').trim()
     text = String(body.text || '').trim()
     quotedMessageId = String(body.quoted_message_id || '').trim()
+    idempotencyKey = String(body.idempotency_key || idempotencyKey).trim()
   }
 
   if (!workItemId || (!text && !attachment)) return NextResponse.json({ error: 'work_item_id and either text or an attachment are required' }, { status: 400 })
+  if (idempotencyKey.length > 180) return NextResponse.json({ error: 'idempotency_key is too long' }, { status: 400 })
   if (attachment && attachment.size === 0) return NextResponse.json({ error: 'Attachment is empty. Choose a non-empty file.' }, { status: 400 })
   if (attachment && attachment.size > MAX_MEDIA_BYTES) return NextResponse.json({ error: 'Attachment is too large. Maximum size is 25MB.' }, { status: 413 })
   const workItem = await visibleWorkItem(workItemId, current.user, current.ownerId)
   if (!workItem) return NextResponse.json({ error: 'Work item not found' }, { status: 404 })
   if (workItem.status !== 'ACTIVE') return NextResponse.json({ error: 'This work item is Done. Reopen it before replying.' }, { status: 409 })
   const quoted = quotedMessageId ? workItem.messages.map((entry) => entry.message).find((message) => message.id === quotedMessageId) : undefined
+
+  if (idempotencyKey) {
+    const previousAttempt = await prisma.evolutionOutboundAttempt.findUnique({ where: { idempotencyKey } })
+    if (previousAttempt?.status === 'SENT' && previousAttempt.providerMessageId) {
+      const existingMessage = workItem.messages.map((entry) => entry.message).find((message) => message.messageId === previousAttempt.providerMessageId)
+      if (existingMessage) return NextResponse.json({ data: { message: existingMessage, workItem } })
+    }
+  }
 
   try {
     let mediaUrl: string | null = null
@@ -110,14 +123,14 @@ export async function POST(request: Request) {
         // Keep the local upload solely for CRM rendering. Evolution receives
         // raw base64, which v2.3.7 accepts without relying on a Docker-only URL.
         mediaUrl = await uploadFile(buffer, attachment.name || `attachment.${mediaType}`, mimeType, `evolution/outbound/${current.ownerId}`)
-        response = await sendEvolutionGroupMedia({ groupJid: workItem.group.groupJid, media: evolutionMedia, mediaType, mimeType, fileName: attachment.name || `attachment.${mediaType}`, caption: text || undefined, quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined })
+        response = await sendEvolutionGroupMedia({ groupJid: workItem.group.groupJid, media: evolutionMedia, mediaType, mimeType, fileName: attachment.name || `attachment.${mediaType}`, caption: text || undefined, quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined, ownerUserId: current.ownerId, category: 'MANUAL', idempotencyKey: idempotencyKey || undefined, metadata: { workItemId: workItem.id, actorUserId: Number(current.user.id) || null } })
       } catch (error) {
         if (mediaUrl) await deleteFile(mediaUrl).catch(() => undefined)
         throw error
       }
       messageType = mediaType
     } else {
-      response = await sendEvolutionGroupText({ groupJid: workItem.group.groupJid, text, quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined })
+      response = await sendEvolutionGroupText({ groupJid: workItem.group.groupJid, text, quoted: quoted ? { id: quoted.messageId, text: quoted.text } : undefined, ownerUserId: current.ownerId, category: 'MANUAL', idempotencyKey: idempotencyKey || undefined, metadata: { workItemId: workItem.id, actorUserId: Number(current.user.id) || null } })
     }
 
     const sentAt = new Date()
@@ -134,6 +147,8 @@ export async function POST(request: Request) {
     })
     return NextResponse.json({ data })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to send group message' }, { status: 502 })
+    const message = error instanceof Error ? error.message : 'Failed to send group message'
+    const safeMessage = error instanceof EvolutionSafetyBlockedError || error instanceof EvolutionApiError ? message : `${message}. Delivery may be uncertain; verify the WhatsApp group before retrying.`
+    return NextResponse.json({ error: safeMessage }, { status: error instanceof EvolutionSafetyBlockedError ? error.status : 502 })
   }
 }

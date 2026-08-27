@@ -3249,20 +3249,27 @@ model EvolutionDepartmentWorkItemAudit {
 // ─── Evolution dealer operations (additive Phase 1) ───────────────────────
 
 model DealerEvolutionIdentity {
-  id          String   @id @default(cuid())
-  userId      Int
-  dealerId    Int
-  groupJid    String?
-  phone       String?
-  verifiedAt  DateTime?
-  lastSeenAt  DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                     String    @id @default(cuid())
+  userId                 Int
+  dealerId               Int
+  groupJid               String?
+  phone                  String?
+  verifiedAt             DateTime?
+  lastSeenAt             DateTime?
+  marketingConsentStatus String    @default("UNKNOWN")
+  marketingOptInAt       DateTime?
+  marketingOptOutAt      DateTime?
+  consentSource          String?
+  consentEvidence        String?
+  lastCampaignAt         DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   dealer      Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
 
   @@unique([userId, groupJid])
   @@index([userId, phone])
+  @@index([userId, marketingConsentStatus])
   @@index([dealerId])
   @@map("dealer_evolution_identities")
 }
@@ -3668,7 +3675,10 @@ model EvolutionCampaign {
   id          String   @id @default(cuid())
   userId      Int
   name        String
+  message     String   @default("")
   status      String   @default("DRAFT")
+  approvedByUserId Int?
+  approvedAt  DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -3700,6 +3710,58 @@ model EvolutionCampaignRecipient {
   @@index([dealerId])
   @@index([groupJid])
   @@map("evolution_campaign_recipients")
+}
+
+// One owner-scoped policy controls every outbound Evolution path. Manual
+// replies remain available when only automation is paused; allOutboundPaused
+// is the explicit emergency stop for the connected WhatsApp account.
+model EvolutionSafetyConfig {
+  id                       String    @id @default(cuid())
+  userId                   Int       @unique
+  automationPaused         Boolean   @default(false)
+  allOutboundPaused        Boolean   @default(false)
+  pauseReason              String?
+  pausedAt                 DateTime?
+  pausedByUserId           Int?
+  globalMinIntervalMs      Int       @default(2500)
+  campaignMinIntervalMs    Int       @default(10000)
+  campaignDailyLimit       Int       @default(25)
+  campaignCooldownHours    Int       @default(168)
+  maxConsecutiveFailures   Int       @default(3)
+  failureRateThreshold     Float     @default(0.20)
+  minimumFailureSample     Int       @default(10)
+  consecutiveFailures      Int       @default(0)
+  circuitOpenUntil         DateTime?
+  circuitReason            String?
+  lastOutboundAt           DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@map("evolution_safety_configs")
+}
+
+// Durable telemetry and idempotency for manual, RAG, follow-up, catalog and
+// campaign sends. The provider payload itself is deliberately not retained.
+model EvolutionOutboundAttempt {
+  id                String    @id @default(cuid())
+  ownerUserId       Int
+  groupJid          String
+  category          String
+  status            String    @default("PENDING")
+  idempotencyKey    String?   @unique
+  providerMessageId String?
+  error             String?
+  durationMs        Int?
+  startedAt         DateTime  @default(now())
+  sentAt            DateTime?
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([ownerUserId, createdAt])
+  @@index([ownerUserId, category, status, createdAt])
+  @@index([groupJid, createdAt])
+  @@map("evolution_outbound_attempts")
 }
 
 // Per-owner webhook heartbeat. It is intentionally separate from message

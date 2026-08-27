@@ -69,3 +69,44 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   })
   return NextResponse.json({ data: result })
 }
+
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
+  const resolved = await getManagerGroup(id)
+  if ('error' in resolved) return resolved.error
+  const body = await request.json().catch(() => ({})) as { marketingConsentStatus?: unknown; consentSource?: unknown; consentEvidence?: unknown }
+  const status = String(body.marketingConsentStatus || '').trim().toUpperCase()
+  if (!['OPTED_IN', 'OPTED_OUT', 'UNKNOWN'].includes(status)) return NextResponse.json({ error: 'marketingConsentStatus must be OPTED_IN, OPTED_OUT, or UNKNOWN' }, { status: 400 })
+  const consentSource = String(body.consentSource || '').trim().slice(0, 160)
+  const consentEvidence = String(body.consentEvidence || '').trim().slice(0, 1_000)
+  if (status === 'OPTED_IN' && (!consentSource || !consentEvidence)) return NextResponse.json({ error: 'Consent source and evidence are required before enabling dealer broadcasts' }, { status: 400 })
+  const identity = await prisma.dealerEvolutionIdentity.findUnique({ where: { userId_groupJid: { userId: resolved.ownerId, groupJid: resolved.group.groupJid } } })
+  if (!identity) return NextResponse.json({ error: 'Link this WhatsApp group to a dealer before recording campaign consent' }, { status: 409 })
+  const now = new Date()
+  const data = await prisma.dealerEvolutionIdentity.update({
+    where: { id: identity.id },
+    data: {
+      marketingConsentStatus: status,
+      consentSource: status === 'UNKNOWN' ? null : consentSource || (status === 'OPTED_OUT' ? 'DEALER_REQUEST' : null),
+      consentEvidence: status === 'UNKNOWN' ? null : consentEvidence || (status === 'OPTED_OUT' ? 'Dealer opted out' : null),
+      marketingOptInAt: status === 'OPTED_IN' ? now : null,
+      marketingOptOutAt: status === 'OPTED_OUT' ? now : null,
+    },
+  })
+  if (resolved.group.ticket) {
+    const actorUserId = Number(resolved.session.user.id)
+    await prisma.evolutionRoutingAudit.create({
+      data: {
+        ticketId: resolved.group.ticket.id,
+        messageId: 'campaign-consent',
+        inquiryId: resolved.group.inquiry?.id || null,
+        actorUserId: Number.isInteger(actorUserId) ? actorUserId : null,
+        event: status === 'OPTED_IN' ? 'CAMPAIGN_OPT_IN' : status === 'OPTED_OUT' ? 'CAMPAIGN_OPT_OUT' : 'CAMPAIGN_CONSENT_RESET',
+        routeType: 'MANUAL',
+        reason: status === 'OPTED_IN' ? 'Manager recorded explicit dealer campaign consent' : status === 'OPTED_OUT' ? 'Dealer campaign messages disabled' : 'Dealer campaign consent reset for review',
+        metadata: { consentSource: data.consentSource, consentEvidence: data.consentEvidence },
+      },
+    })
+  }
+  return NextResponse.json({ data })
+}

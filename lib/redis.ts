@@ -40,7 +40,11 @@ function createRedisClient(): Redis {
   }
 
   const client = new Redis(url ?? 'redis://localhost:6379', {
-    maxRetriesPerRequest: null, // Required for BullMQ workers
+    // This singleton serves realtime publishing and short safety locks. BullMQ
+    // creates separate connections in lib/queues/jobs.ts. Fail a command
+    // promptly so a Redis outage cannot hang a manual WhatsApp reply forever.
+    maxRetriesPerRequest: 1,
+    connectTimeout: 2_000,
     enableReadyCheck: false,
     lazyConnect: true,
     // Reconnect automatically, backing off up to 30 s.

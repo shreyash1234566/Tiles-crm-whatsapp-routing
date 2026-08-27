@@ -53,6 +53,7 @@ function RoutingCrmContent() {
   const [visionMatches, setVisionMatches] = useState([]);
   const [visionLoading, setVisionLoading] = useState(false);
   const fileInputRef = useRef(null);
+  const pendingSendKeyRef = useRef(null);
   const activeWorkItem = useMemo(() => workItems.find((item) => item.id === activeWorkItemId) || null, [workItems, activeWorkItemId]);
   const activeGroupId = activeWorkItem?.groupId || null;
   const reactionsByMessage = useMemo(() => reactions.reduce((result, reaction) => ({ ...result, [reaction.targetMessageId]: [...(result[reaction.targetMessageId] || []), reaction] }), {}), [reactions]);
@@ -137,9 +138,10 @@ function RoutingCrmContent() {
     event.preventDefault(); if (!activeWorkItem || (!draft.trim() && !attachment) || sending) return;
     setSending(true); setNotice('');
     try {
-      const form = new FormData(); form.set('work_item_id', activeWorkItem.id); form.set('text', draft.trim()); if (attachment) form.set('file', attachment);
+      const idempotencyKey = pendingSendKeyRef.current || `manual:${activeWorkItem.id}:${crypto.randomUUID()}`; pendingSendKeyRef.current = idempotencyKey;
+      const form = new FormData(); form.set('work_item_id', activeWorkItem.id); form.set('text', draft.trim()); form.set('idempotency_key', idempotencyKey); if (attachment) form.set('file', attachment);
       const response = await fetch('/api/evolution/messages', { method: 'POST', body: form }); const body = await response.json(); if (!response.ok) throw new Error(body.error || 'Unable to send message');
-      setMessages((current) => [...current, body.data.message]); setWorkItems((current) => current.map((item) => item.id === activeWorkItem.id ? { ...item, ...body.data.workItem } : item)); setDraft(''); setAttachment(null); if (fileInputRef.current) fileInputRef.current.value = '';
+      pendingSendKeyRef.current = null; setMessages((current) => [...current, body.data.message]); setWorkItems((current) => current.map((item) => item.id === activeWorkItem.id ? { ...item, ...body.data.workItem } : item)); setDraft(''); setAttachment(null); if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (error) { setNotice(error.message || 'Unable to send message'); } finally { setSending(false); }
   }
   async function runVisionMatch(message) {

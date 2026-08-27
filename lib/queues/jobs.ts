@@ -58,6 +58,7 @@ export const QUEUE_EVOLUTION_AGENT = 'evolution-agent'
 export const QUEUE_EVOLUTION_FOLLOW_UP = 'evolution-follow-up'
 export const QUEUE_EVOLUTION_CATALOG_SYNC = 'evolution-catalog-sync'
 export const QUEUE_EVOLUTION_VISION = 'evolution-vision'
+export const QUEUE_EVOLUTION_CAMPAIGN = 'evolution-campaign'
 
 // ── Typed job data shapes ──────────────────────────────────────────────────
 
@@ -125,6 +126,10 @@ export interface EvolutionVisionJobData {
   lotMediaId?: string
   groupId?: string
   requestedMessageId?: string
+}
+
+export interface EvolutionCampaignJobData {
+  recipientId: string
 }
 
 // ── Queue instances (Lazy Loaded) ──────────────────────────────────────────
@@ -252,6 +257,17 @@ export function getEvolutionVisionQueue() {
   return _evolutionVisionQueue
 }
 
+let _evolutionCampaignQueue: Queue<EvolutionCampaignJobData> | undefined
+export function getEvolutionCampaignQueue() {
+  if (!_evolutionCampaignQueue) {
+    _evolutionCampaignQueue = new Queue<EvolutionCampaignJobData>(QUEUE_EVOLUTION_CAMPAIGN, {
+      connection,
+      defaultJobOptions: { attempts: 2, backoff: { type: 'exponential', delay: 60_000 }, removeOnComplete: { count: 1_000 }, removeOnFail: { count: 1_000 } },
+    })
+  }
+  return _evolutionCampaignQueue
+}
+
 // ── Worker factory ─────────────────────────────────────────────────────────
 // Workers are created lazily so importing this module in the Next.js
 // process (which runs in both server and edge contexts) doesn't accidentally
@@ -320,4 +336,10 @@ export function createEvolutionCatalogSyncWorker(handler: WorkerHandler<Evolutio
 
 export function createEvolutionVisionWorker(handler: WorkerHandler<EvolutionVisionJobData>): Worker {
   return new Worker<EvolutionVisionJobData>(QUEUE_EVOLUTION_VISION, handler, { connection, concurrency: 1 })
+}
+
+export function createEvolutionCampaignWorker(handler: WorkerHandler<EvolutionCampaignJobData>): Worker {
+  // Campaign delivery is deliberately serial. The central safety adapter adds
+  // the configured inter-message interval and circuit-breaker checks.
+  return new Worker<EvolutionCampaignJobData>(QUEUE_EVOLUTION_CAMPAIGN, handler, { connection, concurrency: 1 })
 }
