@@ -20,6 +20,8 @@ export async function GET() {
             name: true,
             role: true,
             staffId: true,
+            routingDepartmentId: true,
+            routingDepartment: { select: { id: true, name: true, isActive: true } },
             createdAt: true,
           },
         })
@@ -54,6 +56,8 @@ export async function GET() {
         name: user?.name ?? session.name,
         role: user?.role ?? session.role,
         staffId: user?.staffId ?? session.staffId,
+        routingDepartmentId: user?.routingDepartment?.isActive === false ? null : (user?.routingDepartmentId ?? null),
+        routingDepartment: user?.routingDepartment?.isActive === false ? null : (user?.routingDepartment ?? null),
         created_at: user?.createdAt?.toISOString() ?? null,
       }
     })

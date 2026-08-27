@@ -67,6 +67,7 @@ const navItems = [
   { href: '/drafts', label: 'Drafts', icon: Trash2, roles: ['ADMIN', 'MANAGER'] },
   { href: '/email-marketing', label: 'Email Marketing', icon: MailPlus, roles: ['ADMIN', 'MANAGER'] },
   { href: '/routing-crm', label: 'Group Inbox', icon: MessageSquare },
+  { href: '/routing-crm/fulfillment', label: 'Dealer Fulfillment', icon: Truck },
   { href: '/routing-crm/operations', label: 'Routing Operations', icon: BarChart3, roles: ['ADMIN', 'MANAGER'] },
   { href: '/routing-crm/campaigns', label: 'Dealer Broadcasts', icon: Megaphone, roles: ['ADMIN', 'MANAGER'] },
   { href: '/routing-crm/agent', label: 'Evolution RAG', icon: Sparkles, roles: ['ADMIN', 'MANAGER'] },

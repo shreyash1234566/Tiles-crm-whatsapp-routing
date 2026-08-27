@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db'
 import { getSession } from '@/lib/auth-helpers'
 import { getEvolutionOwnerUserId } from '@/lib/evolution-routing'
 import { isClosedInquiryStage } from '@/lib/evolution-operations'
+import { dispatchCountdown } from '@/lib/evolution-fulfillment'
 
 function percentile(values: number[], percentileValue: number): number | null {
   if (values.length === 0) return null
@@ -37,7 +38,7 @@ export async function GET(request: Request) {
     openedAt: { gte: from, lte: until },
   }
 
-  const [inquiries, overdueFollowUps, campaignRecipients, routingAudits, agentRuns] = await Promise.all([
+  const [inquiries, overdueFollowUps, campaignRecipients, routingAudits, agentRuns, fulfillmentOrders] = await Promise.all([
     prisma.evolutionDealerInquiry.findMany({
       where: inquiryWhere,
       select: {
@@ -65,6 +66,14 @@ export async function GET(request: Request) {
     prisma.evolutionAgentRun.findMany({
       where: { ticket: { is: { group: { is: { userId: ownerUserId } } } }, createdAt: { gte: from, lte: until } },
       select: { status: true, confidence: true, handoff: true },
+      take: 10_000,
+    }),
+    prisma.dealerOrder.findMany({
+      // Keep fulfillment totals in the same reporting window as inquiry and
+      // campaign metrics. Without this, an old delivered order inflated every
+      // current dashboard range.
+      where: { orderDate: { gte: from, lte: until }, evolutionInquiries: { some: { ownerUserId, ...(departmentId ? { departmentId } : {}) } } },
+      select: { status: true, paymentStatus: true, expectedDispatchDate: true, dispatchDate: true, deliveryDate: true, logisticReceiptUrl: true, dealer: { select: { creditDays: true } } },
       take: 10_000,
     }),
   ])
@@ -100,6 +109,21 @@ export async function GET(request: Request) {
   const routingConfidence = routingAudits.filter((audit) => typeof audit.confidence === 'number').map((audit) => audit.confidence as number)
   const handoffs = agentRuns.filter((run) => run.handoff || run.status === 'HANDOFF').length
   const agentFailures = agentRuns.filter((run) => run.status === 'FAILED').length
+  const fulfillment = {
+    totalOrders: fulfillmentOrders.length,
+    paymentPending: fulfillmentOrders.filter((order) => order.paymentStatus !== 'PAID' && !['CANCELLED', 'DELIVERED'].includes(order.status)).length,
+    advanceTerms: fulfillmentOrders.filter((order) => (order.dealer.creditDays || 0) <= 0).length,
+    creditTerms: fulfillmentOrders.filter((order) => (order.dealer.creditDays || 0) > 0).length,
+    allocated: fulfillmentOrders.filter((order) => order.status === 'ALLOCATED').length,
+    dispatchPending: fulfillmentOrders.filter((order) => ['APPROVED', 'ALLOCATED'].includes(order.status)).length,
+    dispatched: fulfillmentOrders.filter((order) => order.status === 'DISPATCHED').length,
+    delivered: fulfillmentOrders.filter((order) => order.status === 'DELIVERED').length,
+    due1: fulfillmentOrders.filter((order) => !['DISPATCHED', 'DELIVERED', 'CANCELLED', 'RETURNED'].includes(order.status) && (() => { const count = dispatchCountdown(order.expectedDispatchDate); return count.state !== 'OVERDUE' && count.daysRemaining != null && count.daysRemaining <= 1 })()).length,
+    due3: fulfillmentOrders.filter((order) => !['DISPATCHED', 'DELIVERED', 'CANCELLED', 'RETURNED'].includes(order.status) && (() => { const count = dispatchCountdown(order.expectedDispatchDate); return count.state !== 'OVERDUE' && count.daysRemaining != null && count.daysRemaining <= 3 })()).length,
+    due7: fulfillmentOrders.filter((order) => !['DISPATCHED', 'DELIVERED', 'CANCELLED', 'RETURNED'].includes(order.status) && (() => { const count = dispatchCountdown(order.expectedDispatchDate); return count.state !== 'OVERDUE' && count.daysRemaining != null && count.daysRemaining <= 7 })()).length,
+    overdueDispatch: fulfillmentOrders.filter((order) => !['DISPATCHED', 'DELIVERED', 'CANCELLED', 'RETURNED'].includes(order.status) && dispatchCountdown(order.expectedDispatchDate).state === 'OVERDUE').length,
+    missingLogisticReceipt: fulfillmentOrders.filter((order) => order.status === 'DISPATCHED' && !order.logisticReceiptUrl).length,
+  }
 
   return NextResponse.json({
     data: {
@@ -134,6 +158,7 @@ export async function GET(request: Request) {
         handoffRate: agentRuns.length ? Number(((handoffs / agentRuns.length) * 100).toFixed(2)) : 0,
         failures: agentFailures,
       },
+      fulfillment,
     },
   })
 }

@@ -20,7 +20,7 @@ export async function getSession() {
       staffId: true,
       staff: { select: { status: true } },
       routingDepartmentId: true,
-      routingDepartment: { select: { isActive: true } },
+      routingDepartment: { select: { isActive: true, name: true } },
     },
   })
 
@@ -36,6 +36,7 @@ export async function getSession() {
       role: currentUser.role as UserRole,
       staffId: currentUser.staffId,
       routingDepartmentId: currentUser.routingDepartment?.isActive === false ? null : (currentUser.routingDepartmentId ?? null),
+      routingDepartmentName: currentUser.routingDepartment?.isActive === false ? null : (currentUser.routingDepartment?.name ?? null),
     }
   }
 }

@@ -19,7 +19,7 @@ export function normalizeRoutingPhone(value: unknown): string | null {
   return routingPhoneDigitsSchema.safeParse(digits).success ? digits : null
 }
 
-export const ROUTING_DEPARTMENTS = ['Sales', 'Accounts', 'Logistics'] as const
+export const ROUTING_DEPARTMENTS = ['Sales', 'Accounts', 'Warehouse', 'Logistics'] as const
 export type RoutingDepartmentName = (typeof ROUTING_DEPARTMENTS)[number]
 
 export function getEmployeeHomePath(input: {

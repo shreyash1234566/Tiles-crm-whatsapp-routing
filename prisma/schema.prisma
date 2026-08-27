@@ -202,6 +202,7 @@ model Product {
   orders               Order[]
   quotationItems       QuotationItem[]
   invoiceItems         InvoiceItem[]
+  dealerOrderAllocations DealerOrderAllocation[]
   customOrders         CustomOrder[]
   purchaseOrderItems   PurchaseOrderItem[]
   purchaseReturnItems  PurchaseReturnItem[]
@@ -507,6 +508,9 @@ model Invoice {
     roadPermit    String?
   godownId      Int?
   godown        Godown?       @relation(fields: [godownId], references: [id], onDelete: SetNull)
+  // Optional B2B trace. Existing retail invoices remain valid and unlinked.
+  dealerOrderId Int?
+  dealerOrder   DealerOrder?  @relation("DealerOrderInvoice", fields: [dealerOrderId], references: [id], onDelete: SetNull)
   supplyType    String        @default("INTRASTATE") // INTRASTATE | INTERSTATE | EXPORT | EXEMPT | NIL_RATED
   placeOfSupply String? // State name, e.g. "Maharashtra"
   isRCM         Boolean       @default(false) // Reverse Charge Mechanism
@@ -525,6 +529,7 @@ model Invoice {
   creditNotes   CreditNote[]
   eWayBills     EWayBill[]
   dailyPayments DailyPayment[]
+  fulfillmentEvents EvolutionFulfillmentEvent[]
 
   @@index([date])
   @@index([paymentStatus])
@@ -533,6 +538,7 @@ model Invoice {
   @@index([paymentStatus, date]) // billing dashboard: unpaid invoices by date
   @@index([invoiceStatus, date]) // billing: active invoices in date range
   @@index([contactId, paymentStatus]) // CRM: customer outstanding invoices
+  @@index([dealerOrderId])
 }
 
 model InvoiceItem {
@@ -1378,6 +1384,8 @@ model Godown {
   ledgerEntries StockLedger[]
   orders        Order[]
   invoices      Invoice[]
+  dealerOrderFulfillments DealerOrder[] @relation("DealerOrderFulfillmentGodown")
+  dealerOrderAllocations DealerOrderAllocation[]
   slabs         Slab[]
 
   @@index([branchId])
@@ -1390,6 +1398,7 @@ model GodownStock {
   godownId  Int
   godown    Godown  @relation(fields: [godownId], references: [id])
   quantity  Float   @default(0)
+  reservedQuantity Float @default(0)
 
   @@unique([productId, godownId])
   @@index([godownId])
@@ -2817,6 +2826,7 @@ model DealerOrder {
   paymentDueDate      DateTime?
   dispatchDate         DateTime?
   deliveryDate         DateTime?
+  committedDeliveryDate DateTime?
   subtotal             Int              @default(0)
   discount             Int              @default(0)
   gst                  Int              @default(0)
@@ -2834,6 +2844,19 @@ model DealerOrder {
   salesperson          Staff?           @relation("DealerOrderSalesperson", fields: [salespersonId], references: [id], onDelete: SetNull)
   deliveryAddress      String?
   allocationNotes      String?
+  fulfillmentGodownId  Int?
+  fulfillmentGodown    Godown?          @relation("DealerOrderFulfillmentGodown", fields: [fulfillmentGodownId], references: [id], onDelete: SetNull)
+  allocationConfirmedAt DateTime?
+  paymentVerifiedAt    DateTime?
+  paymentVerifiedByUserId Int?
+  paymentReference     String?
+  paymentReceiptUrl    String?
+  transporterName      String?
+  transportContact     String?
+  lrNumber             String?
+  logisticReceiptUrl   String?
+  logisticReceiptName  String?
+  dispatchNotes        String?
   notes                String?
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
@@ -2841,12 +2864,41 @@ model DealerOrder {
   items    DealerOrderItem[]
   payments DealerPayment[]
   claims   DealerClaim[]
+  invoices Invoice[] @relation("DealerOrderInvoice")
   evolutionInquiries EvolutionDealerInquiry[] @relation("EvolutionInquiryConvertedOrder")
+  fulfillmentEvents EvolutionFulfillmentEvent[]
+  allocations DealerOrderAllocation[]
 
   @@index([dealerId, status])
   @@index([orderDate])
   @@index([paymentStatus])
   @@index([salespersonId])
+}
+
+// A reservation keeps warehouse availability accurate without deducting stock
+// before physical dispatch. Cancellation releases these rows and the reserved
+// quantity atomically.
+model DealerOrderAllocation {
+  id              Int         @id @default(autoincrement())
+  dealerOrderId   Int
+  dealerOrder     DealerOrder @relation(fields: [dealerOrderId], references: [id], onDelete: Cascade)
+  godownId        Int
+  godown          Godown      @relation(fields: [godownId], references: [id])
+  productId       Int
+  product         Product     @relation(fields: [productId], references: [id])
+  quantity        Float
+  lotNumber       String?
+  shadeCode       String?
+  reservedAt      DateTime    @default(now())
+  releasedAt      DateTime?
+  releasedByUserId Int?
+  // Set when stock is physically dispatched. Unlike a cancellation release, this
+  // preserves the reservation's audit trail after stock has left the godown.
+  dispatchedAt    DateTime?
+  notes           String?
+
+  @@index([dealerOrderId, releasedAt, dispatchedAt])
+  @@index([godownId, productId, releasedAt, dispatchedAt])
 }
 
 model DealerOrderItem {
@@ -3050,6 +3102,7 @@ model EvolutionGroupTicket {
   followUps       EvolutionTicketFollowUp[]
   agentRuns       EvolutionAgentRun[]
   workItems       EvolutionDepartmentWorkItem[]
+  fulfillmentEvents EvolutionFulfillmentEvent[]
 
   @@index([departmentId, status])
   @@index([routeType, createdAt])
@@ -3228,6 +3281,7 @@ model EvolutionDealerInquiry {
   ticket            EvolutionGroupTicket?
   followUps         EvolutionTicketFollowUp[]
   audits            EvolutionRoutingAudit[]
+  fulfillmentEvents EvolutionFulfillmentEvent[]
 
   @@index([ownerUserId, stage, lastActivityAt])
   @@index([dealerId, stage])
@@ -3235,6 +3289,35 @@ model EvolutionDealerInquiry {
   @@index([nextFollowUpAt])
   @@index([convertedOrderId])
   @@map("evolution_dealer_inquiries")
+}
+
+// Immutable, additive trace of a dealer inquiry's payment, allocation and
+// transport milestones. It deliberately links existing CRM records instead of
+// duplicating orders, invoices, or warehouse stock.
+model EvolutionFulfillmentEvent {
+  id                String                 @id @default(cuid())
+  ticketId          String
+  inquiryId         String
+  dealerOrderId     Int?
+  invoiceId         Int?
+  actorUserId       Int?
+  action            String
+  fromStage         EvolutionInquiryStage?
+  toStage           EvolutionInquiryStage?
+  providerMessageId String?
+  note              String?
+  metadata          Json?
+  createdAt         DateTime               @default(now())
+
+  ticket            EvolutionGroupTicket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  inquiry           EvolutionDealerInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  dealerOrder       DealerOrder?           @relation(fields: [dealerOrderId], references: [id], onDelete: SetNull)
+  invoice           Invoice?               @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([inquiryId, createdAt])
+  @@index([dealerOrderId, createdAt])
+  @@map("evolution_fulfillment_events")
 }
 
 model EvolutionTicketFollowUp {
