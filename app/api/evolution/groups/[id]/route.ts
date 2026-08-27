@@ -38,8 +38,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (body.expectedVersion != null && (!Number.isInteger(body.expectedVersion) || body.expectedVersion < 1)) {
     return NextResponse.json({ error: 'expectedVersion must be a positive integer' }, { status: 400 })
   }
-  if (body.expectedVersion != null && group.ticket && group.ticket.version !== body.expectedVersion) {
-    return NextResponse.json({ error: 'This group changed; refresh before updating it', currentVersion: group.ticket.version }, { status: 409 })
+  const expectedVersion = group.ticket?.version ?? null
+  if (expectedVersion != null && body.expectedVersion != null && expectedVersion !== body.expectedVersion) {
+    return NextResponse.json({ error: 'This group changed; refresh before updating it', currentVersion: expectedVersion }, { status: 409 })
   }
 
   let department: { id: number; name: string } | null = null
@@ -53,12 +54,24 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   const now = new Date()
   const fromDepartmentId = group.departmentId
-  const updated = await prisma.$transaction(async (tx) => {
+  let updated
+  try {
+    updated = await prisma.$transaction(async (tx) => {
     let ticket = group.ticket
+    const createdTicket = !ticket
     if (!ticket) {
       ticket = await tx.evolutionGroupTicket.create({
         data: { groupId: group.id, departmentId: group.departmentId, departmentName: group.departmentName, assignedUserId: group.assignedUserId, assignedAt: group.assignedUserId ? now : null, routeType: group.routeType },
       })
+    }
+
+    const updateTicket = async (data: Parameters<typeof tx.evolutionGroupTicket.update>[0]['data']) => {
+      const changed = await tx.evolutionGroupTicket.updateMany({
+        where: { id: ticket!.id, ...(createdTicket || expectedVersion == null ? {} : { version: expectedVersion }) },
+        data,
+      })
+      if (changed.count !== 1) throw new Error('STALE_GROUP')
+      return tx.evolutionGroupTicket.findUniqueOrThrow({ where: { id: ticket!.id } })
     }
 
     if (action === 'transfer' && department) {
@@ -67,10 +80,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         where: { id: group.id },
         data: { departmentId: department.id, departmentName: department.name, assignedUserId: null, routingReason: reason, routeType: 'MANUAL', claimedByUserId: null, claimedAt: null },
       })
-      await tx.evolutionGroupTicket.update({
-        where: { id: ticket.id },
-        data: { departmentId: department.id, departmentName: department.name, assignedUserId: null, assignedAt: null, routeType: 'MANUAL', version: { increment: 1 } },
-      })
+      await updateTicket({ departmentId: department.id, departmentName: department.name, assignedUserId: null, assignedAt: null, routeType: 'MANUAL', version: { increment: 1 } })
       if (group.inquiry) await tx.evolutionDealerInquiry.update({ where: { id: group.inquiry.id }, data: { departmentId: department.id, assignedUserId: null, lastActivityAt: now } })
       await tx.evolutionRoutingAudit.create({
         data: { ticketId: ticket.id, messageId: 'manual', inquiryId: group.inquiry?.id || null, actorUserId, event: fromDepartmentId == null ? 'ROUTED' : 'HANDOFF', routeType: 'MANUAL', fromDepartmentId, toDepartmentId: department.id, confidence: 1, reason },
@@ -85,18 +95,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         ? { claimedByUserId: actorUserId, claimedAt: now, assignedUserId: actorUserId }
         : { claimedByUserId: null, claimedAt: null, assignedUserId: null },
     })
-    await tx.evolutionGroupTicket.update({
-      where: { id: ticket.id },
-      data: isClaim
-        ? { assignedUserId: actorUserId, assignedAt: now, version: { increment: 1 } }
-        : { assignedUserId: null, assignedAt: null, version: { increment: 1 } },
-    })
+    await updateTicket(isClaim
+      ? { assignedUserId: actorUserId, assignedAt: now, version: { increment: 1 } }
+      : { assignedUserId: null, assignedAt: null, version: { increment: 1 } })
     if (group.inquiry) await tx.evolutionDealerInquiry.update({ where: { id: group.inquiry.id }, data: { assignedUserId: isClaim ? actorUserId : null, lastActivityAt: now } })
     await tx.evolutionRoutingAudit.create({
       data: { ticketId: ticket.id, messageId: 'manual', inquiryId: group.inquiry?.id || null, actorUserId, event: isClaim ? 'CLAIMED' : 'RELEASED', routeType: 'MANUAL', fromDepartmentId, toDepartmentId: group.departmentId, reason: isClaim ? 'Group claimed by a team member' : 'Group claim released' },
     })
     return updatedGroup
-  })
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'STALE_GROUP') return NextResponse.json({ error: 'This group changed; refresh before updating it' }, { status: 409 })
+    throw error
+  }
 
   const recipients = await prisma.user.findMany({
     where: {

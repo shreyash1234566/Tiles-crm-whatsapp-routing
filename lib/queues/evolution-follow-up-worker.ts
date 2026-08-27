@@ -2,7 +2,8 @@ import type { Job } from 'bullmq'
 import { prisma } from '@/lib/db'
 import { sendEvolutionGroupText } from '@/lib/evolution-routing'
 import { isClosedInquiryStage } from '@/lib/evolution-operations'
-import { createEvolutionFollowUpWorker, type EvolutionFollowUpJobData } from './jobs'
+import { isEvolutionQuietHour, nextEvolutionQuietRetryAt } from '@/lib/evolution-runtime-guards'
+import { createEvolutionFollowUpWorker, getEvolutionFollowUpQueue, type EvolutionFollowUpJobData } from './jobs'
 
 let workerStarted = false
 
@@ -32,6 +33,15 @@ async function processFollowUp(job: EvolutionFollowUpJobData) {
   const inquiry = followUp.ticket.inquiry
   if (group.status !== 'open' || followUp.ticket.status !== 'open' || isClosedInquiryStage(followUp.ticket.stage) || isClosedInquiryStage(inquiry?.stage)) {
     await prisma.evolutionTicketFollowUp.update({ where: { id: followUp.id }, data: { status: 'SKIPPED', error: 'Ticket or inquiry was closed before follow-up was due' } })
+    return
+  }
+  if (isEvolutionQuietHour()) {
+    // Keep the task durable and visibly pending. A new, uniquely identified
+    // delayed job is enqueued before this worker completes; no reminder is
+    // silently lost and no provider call occurs during quiet hours.
+    const retryAt = nextEvolutionQuietRetryAt()
+    await prisma.evolutionTicketFollowUp.update({ where: { id: followUp.id }, data: { status: 'PENDING', scheduledFor: retryAt, error: 'Deferred by configured quiet hours' } })
+    await getEvolutionFollowUpQueue().add('send-group-follow-up', { followUpId: followUp.id }, { jobId: `evolution-follow-up:${followUp.id}:${retryAt.getTime()}`, delay: Math.max(1, retryAt.getTime() - Date.now()) })
     return
   }
 

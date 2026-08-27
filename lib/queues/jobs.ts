@@ -56,6 +56,8 @@ export const QUEUE_MESSAGE_DELIVERY = 'message-delivery-queue'
 export const QUEUE_AI_AGENT = 'wa-ai-agent'
 export const QUEUE_EVOLUTION_AGENT = 'evolution-agent'
 export const QUEUE_EVOLUTION_FOLLOW_UP = 'evolution-follow-up'
+export const QUEUE_EVOLUTION_CATALOG_SYNC = 'evolution-catalog-sync'
+export const QUEUE_EVOLUTION_VISION = 'evolution-vision'
 
 // ── Typed job data shapes ──────────────────────────────────────────────────
 
@@ -108,6 +110,21 @@ export interface EvolutionAgentJobData {
 
 export interface EvolutionFollowUpJobData {
   followUpId: string
+}
+
+export interface EvolutionCatalogSyncJobData {
+  sourceId: string
+  ownerUserId: number
+  trigger: 'SCHEDULED' | 'MANUAL'
+}
+
+export interface EvolutionVisionJobData {
+  ownerUserId: number
+  sourceUrl: string
+  catalogItemId?: string
+  lotMediaId?: string
+  groupId?: string
+  requestedMessageId?: string
 }
 
 // ── Queue instances (Lazy Loaded) ──────────────────────────────────────────
@@ -212,6 +229,29 @@ export function getEvolutionFollowUpQueue() {
   return _evolutionFollowUpQueue
 }
 
+let _evolutionCatalogSyncQueue: Queue<EvolutionCatalogSyncJobData> | undefined
+export function getEvolutionCatalogSyncQueue() {
+  if (!_evolutionCatalogSyncQueue) {
+    _evolutionCatalogSyncQueue = new Queue<EvolutionCatalogSyncJobData>(QUEUE_EVOLUTION_CATALOG_SYNC, {
+      connection,
+      defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: { count: 500 }, removeOnFail: { count: 500 } },
+    })
+  }
+  return _evolutionCatalogSyncQueue
+}
+
+let _evolutionVisionQueue: Queue<EvolutionVisionJobData> | undefined
+export function getEvolutionVisionQueue() {
+  if (!_evolutionVisionQueue) {
+    _evolutionVisionQueue = new Queue<EvolutionVisionJobData>(QUEUE_EVOLUTION_VISION, {
+      connection,
+      // Local CPU inference is intentionally serialized to protect the CRM.
+      defaultJobOptions: { attempts: 2, backoff: { type: 'exponential', delay: 60_000 }, removeOnComplete: { count: 300 }, removeOnFail: { count: 300 } },
+    })
+  }
+  return _evolutionVisionQueue
+}
+
 // ── Worker factory ─────────────────────────────────────────────────────────
 // Workers are created lazily so importing this module in the Next.js
 // process (which runs in both server and edge contexts) doesn't accidentally
@@ -257,9 +297,11 @@ export function createAiAgentWorker(
 export function createEvolutionAgentWorker(
   handler: WorkerHandler<EvolutionAgentJobData>,
 ): Worker {
+  // Serialise Evolution agent jobs so the per-ticket auto-reply cap is
+  // deterministic and a human claim can win before the next job sends.
   return new Worker<EvolutionAgentJobData>(QUEUE_EVOLUTION_AGENT, handler, {
     connection,
-    concurrency: 2,
+    concurrency: 1,
   })
 }
 
@@ -270,4 +312,12 @@ export function createEvolutionFollowUpWorker(
     connection,
     concurrency: 2,
   })
+}
+
+export function createEvolutionCatalogSyncWorker(handler: WorkerHandler<EvolutionCatalogSyncJobData>): Worker {
+  return new Worker<EvolutionCatalogSyncJobData>(QUEUE_EVOLUTION_CATALOG_SYNC, handler, { connection, concurrency: 1 })
+}
+
+export function createEvolutionVisionWorker(handler: WorkerHandler<EvolutionVisionJobData>): Worker {
+  return new Worker<EvolutionVisionJobData>(QUEUE_EVOLUTION_VISION, handler, { connection, concurrency: 1 })
 }

@@ -24,6 +24,16 @@ services:
       EVOLUTION_WEBHOOK_URL: "https://${DOMAIN}/api/evolution/webhook"
       EVOLUTION_OWNER_USER_ID: "${EVOLUTION_OWNER_USER_ID:-}"
       EVOLUTION_BUSINESS_ALIASES: "${EVOLUTION_BUSINESS_ALIASES:-Tiles CRM,Homzentic,Tiles,Granite,Marble}"
+      # Phase 3/runtime guardrails must be passed into the container. Keeping
+      # these only in the host env would make quiet hours, reply caps, and the
+      # local vision feature silently fall back to their development defaults.
+      EVOLUTION_AGENT_MAX_AUTOREPLIES_PER_TICKET: "${EVOLUTION_AGENT_MAX_AUTOREPLIES_PER_TICKET:-2}"
+      EVOLUTION_OPERATIONS_TIMEZONE: "${EVOLUTION_OPERATIONS_TIMEZONE:-Asia/Kolkata}"
+      EVOLUTION_QUIET_HOURS_START: "${EVOLUTION_QUIET_HOURS_START:-}"
+      EVOLUTION_QUIET_HOURS_END: "${EVOLUTION_QUIET_HOURS_END:-}"
+      EVOLUTION_VISION_ENABLED: "${EVOLUTION_VISION_ENABLED:-false}"
+      EVOLUTION_VISION_MODEL: "${EVOLUTION_VISION_MODEL:-Xenova/clip-vit-base-patch16}"
+      EVOLUTION_VISION_AUTO_MATCH: "${EVOLUTION_VISION_AUTO_MATCH:-false}"
       GROQ_ROUTING_MODEL: "${GROQ_ROUTING_MODEL:-llama-3.1-8b-instant}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       ANTHROPIC_ROUTING_MODEL: "${ANTHROPIC_ROUTING_MODEL:-claude-haiku-4-5-20251001}"

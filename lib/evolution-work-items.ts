@@ -51,7 +51,15 @@ export function workItemRecipientIds(
   return [...recipients]
 }
 
-export function normalizeWorkItemFilter(value: string | null): 'active' | 'done' | 'history' | 'all' {
-  if (value === 'done' || value === 'history' || value === 'all') return value
+export type EvolutionWorkItemFilter =
+  | 'active' | 'done' | 'history' | 'all'
+  | 'mine' | 'unassigned' | 'mentioned' | 'sla_overdue'
+  | 'follow_up_due' | 'payment_pending' | 'dispatch_pending'
+
+export function normalizeWorkItemFilter(value: string | null): EvolutionWorkItemFilter {
+  if (value === 'done' || value === 'history' || value === 'all'
+    || value === 'mine' || value === 'unassigned' || value === 'mentioned'
+    || value === 'sla_overdue' || value === 'follow_up_due'
+    || value === 'payment_pending' || value === 'dispatch_pending') return value
   return 'active'
 }

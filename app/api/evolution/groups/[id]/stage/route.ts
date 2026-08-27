@@ -32,23 +32,37 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!isValidEvolutionStageTransition(group.inquiry.stage, stage)) return NextResponse.json({ error: `Cannot move from ${group.inquiry.stage} to ${stage}` }, { status: 409 })
   if (stage === 'CONFIRMED' && !group.inquiry.dealerId) return NextResponse.json({ error: 'Link a dealer before confirming this inquiry' }, { status: 409 })
   if (!reason || reason.length > 1000) return NextResponse.json({ error: 'A transition reason of up to 1000 characters is required' }, { status: 400 })
-  if (body.expectedVersion != null && body.expectedVersion !== group.ticket.version) return NextResponse.json({ error: 'This group changed; refresh before updating it', currentVersion: group.ticket.version }, { status: 409 })
+  // Require an optimistic-lock version even for older callers that omitted
+  // the field. Falling back to the version read above preserves compatibility
+  // while making the write atomic instead of allowing lost stage updates.
+  const expectedVersion = body.expectedVersion == null ? group.ticket.version : body.expectedVersion
+  if (!Number.isInteger(expectedVersion) || expectedVersion !== group.ticket.version) return NextResponse.json({ error: 'This group changed; refresh before updating it', currentVersion: group.ticket.version }, { status: 409 })
   const now = new Date()
   const closed = isClosedInquiryStage(stage)
-  const result = await prisma.$transaction(async (tx) => {
-    const inquiry = await tx.evolutionDealerInquiry.update({
-      where: { id: group.inquiry!.id },
-      data: { stage: stage as never, closedAt: closed ? now : null, lostReason: stage === 'LOST' ? String(body.lostReason || reason).slice(0, 1000) : null, lastActivityAt: now },
+  let result
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      const inquiry = await tx.evolutionDealerInquiry.update({
+        where: { id: group.inquiry!.id },
+        data: { stage: stage as never, closedAt: closed ? now : null, lostReason: stage === 'LOST' ? String(body.lostReason || reason).slice(0, 1000) : null, lastActivityAt: now },
+      })
+      const updatedTicket = await tx.evolutionGroupTicket.updateMany({
+        where: { id: group.ticket!.id, version: expectedVersion },
+        data: { stage: stage as never, status: closed ? 'closed' : 'open', resolvedAt: ['DELIVERED', 'CLOSED'].includes(stage) ? now : null, closedAt: closed ? now : null, version: { increment: 1 } },
+      })
+      if (updatedTicket.count !== 1) throw new Error('This group changed; refresh before updating it')
+      const ticket = await tx.evolutionGroupTicket.findUniqueOrThrow({ where: { id: group.ticket!.id } })
+      const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { status: closed ? 'closed' : 'open' } })
+      await tx.evolutionRoutingAudit.create({
+        data: { ticketId: ticket.id, messageId: 'stage', inquiryId: inquiry.id, actorUserId: Number.isInteger(actorUserId) ? actorUserId : null, event: 'STAGE_CHANGED', routeType: 'MANUAL', reason, metadata: { from: group.inquiry!.stage, to: stage } },
+      })
+      return { inquiry, ticket, group: updatedGroup }
     })
-    const ticket = await tx.evolutionGroupTicket.update({
-      where: { id: group.ticket!.id },
-      data: { stage: stage as never, status: closed ? 'closed' : 'open', resolvedAt: ['DELIVERED', 'CLOSED'].includes(stage) ? now : null, closedAt: closed ? now : null, version: { increment: 1 } },
-    })
-    const updatedGroup = await tx.evolutionGroup.update({ where: { id: group.id }, data: { status: closed ? 'closed' : 'open' } })
-    await tx.evolutionRoutingAudit.create({
-      data: { ticketId: ticket.id, messageId: 'stage', inquiryId: inquiry.id, actorUserId: Number.isInteger(actorUserId) ? actorUserId : null, event: 'STAGE_CHANGED', routeType: 'MANUAL', reason, metadata: { from: group.inquiry!.stage, to: stage } },
-    })
-    return { inquiry, ticket, group: updatedGroup }
-  })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'This group changed; refresh before updating it') {
+      return NextResponse.json({ error: 'This group changed; refresh before updating it' }, { status: 409 })
+    }
+    throw error
+  }
   return NextResponse.json({ data: result })
 }

@@ -5,8 +5,10 @@ import { randomUUID } from 'node:crypto'
 import { publishEvent } from '@/lib/redis'
 import { uploadFile } from '@/lib/r2'
 import { findDealerForEvolutionMessage } from '@/lib/evolution-operations'
-import { getEvolutionAgentQueue } from '@/lib/queues/jobs'
+import { getEvolutionAgentQueue, getEvolutionVisionQueue } from '@/lib/queues/jobs'
+import { isEvolutionVisionEnabled } from '@/lib/evolution-vision'
 import { workItemRecipientIds } from '@/lib/evolution-work-items'
+import { createCatalogDraftForInbound } from '@/lib/evolution-catalog-workflow'
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 
@@ -258,6 +260,33 @@ async function processIncoming(ownerUserId: number, incoming: ReturnType<typeof 
           inboundMessageId: result.message.id,
         }, { jobId: `evolution-agent:${result.message.id}` }).catch((error) => {
           console.error('[evolution/webhook] unable to enqueue RAG draft:', error)
+        })
+
+        // Optional local visual search is opt-in and dealer-only. It creates
+        // human-review suggestions after the media is stored; it never sends
+        // a product reply or reserves stock automatically.
+        if (item.mediaType === 'image' && storedMediaUrl && dealerMatch && isEvolutionVisionEnabled() && process.env.EVOLUTION_VISION_AUTO_MATCH === 'true') {
+          void getEvolutionVisionQueue().add('match-group-image', {
+            ownerUserId,
+            groupId: result.group.id,
+            requestedMessageId: result.message.messageId,
+            sourceUrl: storedMediaUrl,
+          }, { jobId: `vision-match:${result.group.id}:${result.message.messageId}` }).catch((error) => {
+            console.error('[evolution/webhook] unable to enqueue local image match:', error)
+          })
+        }
+
+        // An exact catalog code only produces an approval-gated draft. No
+        // automated Evolution message or inventory reservation occurs here.
+        void createCatalogDraftForInbound({
+          ownerUserId,
+          groupId: result.group.id,
+          ticketId: result.ticketId,
+          inquiryId: result.inquiryId,
+          providerMessageId: result.message.messageId,
+          text: result.message.text,
+        }).catch((error) => {
+          console.error('[evolution/webhook] unable to prepare catalog draft:', error)
         })
 
         // Create user-scoped notifications for each recipient locally since recipients and result exist now

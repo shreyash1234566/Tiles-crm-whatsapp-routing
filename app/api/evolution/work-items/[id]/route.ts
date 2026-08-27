@@ -35,8 +35,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const manager = isRoutingManager(session.user)
   if ((action === 'transfer' || action === 'reopen') && !manager) return NextResponse.json({ error: 'Only an admin or manager can perform this action' }, { status: 403 })
   if (item.status === 'DONE' && !['reopen'].includes(action)) return NextResponse.json({ error: 'This work item is already Done. Reopen it before changing it.' }, { status: 409 })
-  if (body.expectedVersion != null && (!Number.isInteger(body.expectedVersion) || body.expectedVersion < 1)) return NextResponse.json({ error: 'expectedVersion must be a positive integer' }, { status: 400 })
-  if (body.expectedVersion != null && item.version !== body.expectedVersion) return NextResponse.json({ error: 'This work item changed; refresh before updating it', currentVersion: item.version }, { status: 409 })
+  // Older clients may omit the version, but every write still uses the
+  // version read above as its compare-and-swap token. This prevents a stale
+  // claim/Done/transfer click from overwriting a newer department action.
+  const expectedVersion = body.expectedVersion == null ? item.version : body.expectedVersion
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) return NextResponse.json({ error: 'expectedVersion must be a positive integer' }, { status: 400 })
+  if (item.version !== expectedVersion) return NextResponse.json({ error: 'This work item changed; refresh before updating it', currentVersion: item.version }, { status: 409 })
   if (action === 'claim' && item.claimedByUserId && item.claimedByUserId !== actorUserId) return NextResponse.json({ error: 'This work item is already claimed by another team member' }, { status: 409 })
   if (action === 'release' && item.claimedByUserId && item.claimedByUserId !== actorUserId && !manager) return NextResponse.json({ error: 'Only the claimant or a manager can release this work item' }, { status: 403 })
 
@@ -51,17 +55,21 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   const now = new Date()
   const reason = String(body.reason || '').trim() || `Work item ${action} by ${session.user.name || 'team member'}`
-  const updated = await prisma.$transaction(async (tx) => {
-    const data = action === 'claim'
-      ? { claimedByUserId: actorUserId, claimedAt: now, assignedUserId: actorUserId, version: { increment: 1 } }
-      : action === 'release'
-        ? { claimedByUserId: null, claimedAt: null, assignedUserId: null, version: { increment: 1 } }
-        : action === 'done'
-          ? { status: 'DONE', doneAt: now, doneByUserId: actorUserId, unreadCount: 0, version: { increment: 1 } }
-          : action === 'reopen'
-            ? { status: 'ACTIVE', doneAt: null, doneByUserId: null, version: { increment: 1 } }
-            : { departmentId: targetDepartment!.id, departmentName: targetDepartment!.name, assignedUserId: null, claimedByUserId: null, claimedAt: null, version: { increment: 1 } }
-    const workItem = await tx.evolutionDepartmentWorkItem.update({ where: { id: item.id }, data })
+  let updated
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const data = action === 'claim'
+        ? { claimedByUserId: actorUserId, claimedAt: now, assignedUserId: actorUserId, version: { increment: 1 } }
+        : action === 'release'
+          ? { claimedByUserId: null, claimedAt: null, assignedUserId: null, version: { increment: 1 } }
+          : action === 'done'
+            ? { status: 'DONE', doneAt: now, doneByUserId: actorUserId, unreadCount: 0, version: { increment: 1 } }
+            : action === 'reopen'
+              ? { status: 'ACTIVE', doneAt: null, doneByUserId: null, version: { increment: 1 } }
+              : { departmentId: targetDepartment!.id, departmentName: targetDepartment!.name, assignedUserId: null, claimedByUserId: null, claimedAt: null, version: { increment: 1 } }
+      const changed = await tx.evolutionDepartmentWorkItem.updateMany({ where: { id: item.id, version: expectedVersion }, data })
+      if (changed.count !== 1) throw new Error('STALE_WORK_ITEM')
+      const workItem = await tx.evolutionDepartmentWorkItem.findUniqueOrThrow({ where: { id: item.id } })
     await tx.evolutionDepartmentWorkItemAudit.create({
       data: {
         workItemId: item.id,
@@ -85,8 +93,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         metadata: { workItemId: item.id },
       },
     })
-    return workItem
-  })
+      return workItem
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'STALE_WORK_ITEM') return NextResponse.json({ error: 'This work item changed; refresh before updating it' }, { status: 409 })
+    throw error
+  }
 
   const eligibleUsers = await prisma.user.findMany({ where: { isActive: true }, select: { id: true, role: true, routingDepartmentId: true } })
   const recipientIds = new Set<number>([

@@ -11,6 +11,7 @@ import {
   isClosedInquiryStage,
   newIdempotencyKey,
 } from '@/lib/evolution-operations'
+import { isEvolutionQuietHour, maxEvolutionAutoRepliesPerTicket } from '@/lib/evolution-runtime-guards'
 
 export interface EvolutionAgentJobPayload {
   ownerUserId: number
@@ -167,6 +168,12 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
   }
 
   const shouldSend = !config.draftOnly && automaticEvolutionRepliesEnabled()
+  if (shouldSend && isEvolutionQuietHour()) {
+    const citedDraft = `${response.text}\n\n[Knowledge refs: ${chunks.map((chunk) => chunk.id).join(', ')}]`
+    await prisma.evolutionAgentRun.update({ where: { id: run.id }, data: { status: 'DRAFTED', mode: 'DRAFT', responseText: citedDraft, retrievalIds: chunks.map((chunk) => chunk.id), model: getGroqModelName() } })
+    await recordAudit({ ticketId: group.ticket.id, messageId: inbound.id, inquiryId: group.inquiry?.id, event: 'RAG_DRAFT', reason: 'Automated send deferred by configured quiet hours', metadata: { retrievalIds: chunks.map((chunk) => chunk.id) } })
+    return
+  }
   if (!shouldSend) {
     const citedDraft = `${response.text}\n\n[Knowledge refs: ${retrievalIds.join(', ')}]`
     await prisma.evolutionAgentRun.update({
@@ -191,6 +198,16 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
     return skip('A human action, closure, or newer team reply superseded this agent job')
   }
   const freshTicket = fresh.ticket
+
+  // A misconfigured test group must not result in a conversation loop. This
+  // count is checked immediately before the provider call, not only at queue
+  // creation, so concurrent jobs remain bounded.
+  const sentCount = await prisma.evolutionAgentRun.count({
+    where: { ticketId: freshTicket.id, status: 'SENT' },
+  })
+  if (sentCount >= maxEvolutionAutoRepliesPerTicket()) {
+    return skip(`Automatic-reply limit reached for this ticket (${maxEvolutionAutoRepliesPerTicket()})`)
+  }
 
   let providerResponse: unknown
   try {

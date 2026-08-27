@@ -27,6 +27,7 @@ const routePermissions: Record<string, string[]> = {
   '/whatsapp-marketing': ['ADMIN', 'MANAGER'],
   '/routing-crm/operations': ['ADMIN', 'MANAGER'],
   '/routing-crm/campaigns': ['ADMIN', 'MANAGER'],
+  '/routing-crm/catalog': ['ADMIN', 'MANAGER'],
   '/routing-crm/agent': ['ADMIN', 'MANAGER'],
   '/email-marketing': ['ADMIN', 'MANAGER'],
 }

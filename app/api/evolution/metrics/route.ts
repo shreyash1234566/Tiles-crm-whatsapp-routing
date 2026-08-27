@@ -31,6 +31,10 @@ export async function GET(request: Request) {
   if (until.getTime() - from.getTime() > 366 * 24 * 60 * 60 * 1000) return NextResponse.json({ error: 'Date range cannot exceed 366 days' }, { status: 400 })
 
   const departmentId = session.user.role === 'STAFF' ? session.user.routingDepartmentId : (query.get('department_id') ? Number(query.get('department_id')) : null)
+  // A staff account without a department has no permitted Evolution work
+  // scope. Do not accidentally turn a missing department into an all-company
+  // metrics query.
+  if (session.user.role === 'STAFF' && !departmentId) return NextResponse.json({ error: 'Your staff account is not assigned to a routing department' }, { status: 403 })
   if (departmentId != null && (!Number.isInteger(departmentId) || departmentId <= 0)) return NextResponse.json({ error: 'department_id must be a positive integer' }, { status: 400 })
   const inquiryWhere = {
     ownerUserId,
@@ -50,24 +54,28 @@ export async function GET(request: Request) {
     prisma.evolutionTicketFollowUp.count({
       where: {
         status: 'PENDING', scheduledFor: { lt: new Date() },
-        ticket: { group: { userId: ownerUserId, ...(departmentId ? { departmentId } : {}) } },
+        ticket: { group: { userId: ownerUserId }, ...(departmentId ? { inquiry: { is: { departmentId } } } : {}) },
       },
     }),
-    prisma.evolutionCampaignRecipient.findMany({
-      where: { campaign: { userId: ownerUserId }, createdAt: { gte: from, lte: until } },
-      select: { status: true, sentAt: true, deliveredAt: true, readAt: true, repliedAt: true },
-      take: 10_000,
-    }),
+    session.user.role === 'STAFF'
+      ? Promise.resolve([] as Array<{ status: string; sentAt: Date | null; deliveredAt: Date | null; readAt: Date | null; repliedAt: Date | null }>)
+      : prisma.evolutionCampaignRecipient.findMany({
+        where: { campaign: { userId: ownerUserId }, createdAt: { gte: from, lte: until } },
+        select: { status: true, sentAt: true, deliveredAt: true, readAt: true, repliedAt: true },
+        take: 10_000,
+      }),
     prisma.evolutionRoutingAudit.findMany({
-      where: { ticket: { group: { userId: ownerUserId } }, createdAt: { gte: from, lte: until } },
+      where: { ticket: { group: { userId: ownerUserId } }, ...(departmentId ? { toDepartmentId: departmentId } : {}), createdAt: { gte: from, lte: until } },
       select: { routeType: true, confidence: true, event: true },
       take: 10_000,
     }),
-    prisma.evolutionAgentRun.findMany({
-      where: { ticket: { is: { group: { is: { userId: ownerUserId } } } }, createdAt: { gte: from, lte: until } },
-      select: { status: true, confidence: true, handoff: true },
-      take: 10_000,
-    }),
+    session.user.role === 'STAFF'
+      ? Promise.resolve([] as Array<{ status: string; confidence: number | null; handoff: boolean }>)
+      : prisma.evolutionAgentRun.findMany({
+        where: { ticket: { is: { group: { is: { userId: ownerUserId } } } }, createdAt: { gte: from, lte: until } },
+        select: { status: true, confidence: true, handoff: true },
+        take: 10_000,
+      }),
     prisma.dealerOrder.findMany({
       // Keep fulfillment totals in the same reporting window as inquiry and
       // campaign metrics. Without this, an old delivered order inflated every

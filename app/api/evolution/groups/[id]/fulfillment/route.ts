@@ -145,9 +145,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if ((amount == null || amount === 0) && order.amountPaid <= 0) return NextResponse.json({ error: 'Record a positive received amount before verifying payment' }, { status: 400 })
     if (!reference) return NextResponse.json({ error: 'Payment reference is required for verification' }, { status: 400 })
     const result = await runMutation(async (tx) => {
-      const verifiedAmountPaid = order.amountPaid + (amount || 0)
-      if (amount && amount > 0) { await tx.dealerPayment.create({ data: { dealerId: order.dealerId, dealerOrderId: order.id, amount, method: text(body.method, 100) || 'UPI', reference, notes: reason || 'Verified from Evolution ticket' } }); await tx.dealerOrder.update({ where: { id: order.id }, data: { amountPaid: { increment: amount }, balanceDue: { decrement: amount } } }) }
-      const updatedOrder = await tx.dealerOrder.update({ where: { id: order.id }, data: { paymentVerifiedAt: new Date(), paymentVerifiedByUserId: actorUserId, paymentReference: reference, paymentStatus: verifiedAmountPaid >= order.total ? 'PAID' : 'PARTIAL' } })
+      // The order included in the initial request can be stale when two
+      // Accounts users verify payments at the same time. Lock and re-read the
+      // authoritative row before validating the amount or calculating the
+      // resulting balance; otherwise both requests could accept the same
+      // outstanding balance.
+      await tx.$queryRaw`SELECT "id" FROM "DealerOrder" WHERE "id" = ${order.id} FOR UPDATE`
+      const lockedOrder = await tx.dealerOrder.findUniqueOrThrow({ where: { id: order.id }, select: fulfillmentOrderSelect })
+      ensurePricedOrder(lockedOrder)
+      if (amount != null && (amount <= 0 || amount > lockedOrder.balanceDue)) throw new WorkflowError('Payment amount must be positive and cannot exceed the outstanding balance')
+      if ((amount == null || amount === 0) && lockedOrder.amountPaid <= 0) throw new WorkflowError('Record a positive received amount before verifying payment')
+      const verifiedAmountPaid = lockedOrder.amountPaid + (amount || 0)
+      if (amount && amount > 0) { await tx.dealerPayment.create({ data: { dealerId: lockedOrder.dealerId, dealerOrderId: lockedOrder.id, amount, method: text(body.method, 100) || 'UPI', reference, notes: reason || 'Verified from Evolution ticket' } }); await tx.dealerOrder.update({ where: { id: lockedOrder.id }, data: { amountPaid: { increment: amount }, balanceDue: { decrement: amount } } }) }
+      const updatedOrder = await tx.dealerOrder.update({ where: { id: lockedOrder.id }, data: { paymentVerifiedAt: new Date(), paymentVerifiedByUserId: actorUserId, paymentReference: reference, paymentStatus: verifiedAmountPaid >= lockedOrder.total ? 'PAID' : 'PARTIAL' } })
       const transitioned = group.inquiry.stage === 'PAYMENT_PENDING' ? { inquiry: group.inquiry, ticket: await updateTicketAtExpectedVersion(tx, group.ticket.id, group.ticket.version, {}) } : await transitionInTransaction(tx, group, actorUserId, 'PAYMENT_PENDING', 'PAYMENT_VERIFIED', reason || `Payment verified: ${reference}`, { amount: amount || 0, reference })
       if (group.inquiry.stage === 'PAYMENT_PENDING') await tx.evolutionFulfillmentEvent.create({ data: { ticketId: transitioned.ticket.id, inquiryId: group.inquiry.id, dealerOrderId: order.id, actorUserId, action: 'PAYMENT_VERIFIED', fromStage: group.inquiry.stage, toStage: group.inquiry.stage, note: reason || null, metadata: { amount: amount || 0, reference } } })
       return { order: updatedOrder, ...transitioned }
@@ -164,17 +174,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       // Serialize allocations per order as well as per stock row. This blocks a
       // second Warehouse click from reserving the same order twice.
       await tx.$queryRaw`SELECT "id" FROM "DealerOrder" WHERE "id" = ${order.id} FOR UPDATE`
-      if (await tx.dealerOrderAllocation.count({ where: { dealerOrderId: order.id, releasedAt: null, dispatchedAt: null } })) throw new WorkflowError('This order already has an active warehouse allocation')
+      const lockedOrder = await tx.dealerOrder.findUniqueOrThrow({ where: { id: order.id }, select: fulfillmentOrderSelect })
+      ensurePricedOrder(lockedOrder)
+      if (await tx.dealerOrderAllocation.count({ where: { dealerOrderId: lockedOrder.id, releasedAt: null, dispatchedAt: null } })) throw new WorkflowError('This order already has an active warehouse allocation')
       const creditDays = group.inquiry.dealer?.creditDays || 0; const creditLimit = group.inquiry.dealer?.creditLimit || 0
-      if (!order.paymentVerifiedAt && (creditDays <= 0 || (creditLimit > 0 && order.balanceDue > creditLimit))) throw new WorkflowError('Payment is not verified and the dealer does not have sufficient approved credit terms')
-      for (const item of order.items) {
+      if (!lockedOrder.paymentVerifiedAt && (creditDays <= 0 || (creditLimit > 0 && lockedOrder.balanceDue > creditLimit))) throw new WorkflowError('Payment is not verified and the dealer does not have sufficient approved credit terms')
+      for (const item of lockedOrder.items) {
         if (!item.productId) throw new WorkflowError(`Line item ${item.name} is not linked to an inventory product`)
         const [stock] = await tx.$queryRaw<Array<{ id: number; quantity: number; reservedQuantity: number }>>`SELECT "id", "quantity", "reservedQuantity" FROM "GodownStock" WHERE "godownId" = ${godown.id} AND "productId" = ${item.productId} FOR UPDATE`
         if (!stock || stock.quantity - stock.reservedQuantity < item.quantity) throw new WorkflowError(`Insufficient unreserved stock for ${item.name} in ${godown.name}`)
         await tx.godownStock.update({ where: { id: stock.id }, data: { reservedQuantity: { increment: item.quantity } } })
-        await tx.dealerOrderAllocation.create({ data: { dealerOrderId: order.id, godownId: godown.id, productId: item.productId, quantity: item.quantity, lotNumber: item.lotNumber, shadeCode: item.shadeCode, notes: allocationNotes } })
+        await tx.dealerOrderAllocation.create({ data: { dealerOrderId: lockedOrder.id, godownId: godown.id, productId: item.productId, quantity: item.quantity, lotNumber: item.lotNumber, shadeCode: item.shadeCode, notes: allocationNotes } })
       }
-      const updatedOrder = await tx.dealerOrder.update({ where: { id: order.id }, data: { status: 'ALLOCATED', fulfillmentGodownId: godown.id, allocationNotes, allocationConfirmedAt: new Date() } })
+      const updatedOrder = await tx.dealerOrder.update({ where: { id: lockedOrder.id }, data: { status: 'ALLOCATED', fulfillmentGodownId: godown.id, allocationNotes, allocationConfirmedAt: new Date() } })
       const transitioned = await transitionInTransaction(tx, group, actorUserId, 'ALLOCATED', 'ALLOCATED', reason || `Allocated at ${godown.name}`, { godownId: godown.id, godownName: godown.name })
       return { order: updatedOrder, ...transitioned }
     })

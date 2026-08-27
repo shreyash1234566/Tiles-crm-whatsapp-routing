@@ -1,0 +1,3 @@
+ALTER TABLE "evolution_catalog_response_drafts"
+  ADD COLUMN IF NOT EXISTS "mediaUrls" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  ADD COLUMN IF NOT EXISTS "mediaTypes" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

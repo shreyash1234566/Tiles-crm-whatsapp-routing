@@ -49,16 +49,32 @@ export async function register() {
     }
     probe.disconnect()
 
-    const { startAutomationWorker } = await import('./lib/queues/automation-worker')
-    startAutomationWorker()
+    // The Tiles deployment uses Evolution groups as its only WhatsApp
+    // channel. Legacy automation/AI workers call the Meta 1:1 APIs and must
+    // not consume old queue jobs while the compatibility mode is disabled.
+    // Keeping this guard at worker startup also protects a restart after a
+    // partial deploy, when stale legacy jobs may still be present in Redis.
+    const legacyMetaEnabled = process.env.LEGACY_META_COMPATIBILITY?.trim().toLowerCase() === 'true'
+    if (legacyMetaEnabled) {
+      const { startAutomationWorker } = await import('./lib/queues/automation-worker')
+      startAutomationWorker()
 
-    const { startAiAgentWorker } = await import('./lib/queues/ai-agent-worker')
-    startAiAgentWorker()
+      const { startAiAgentWorker } = await import('./lib/queues/ai-agent-worker')
+      startAiAgentWorker()
+    } else {
+      console.log('[queues] legacy Meta automation/AI workers disabled for the Evolution Tiles deployment')
+    }
 
     const { startEvolutionAgentWorker } = await import('./lib/queues/evolution-agent-worker')
     startEvolutionAgentWorker()
 
     const { startEvolutionFollowUpWorker } = await import('./lib/queues/evolution-follow-up-worker')
     startEvolutionFollowUpWorker()
+
+    const { startEvolutionCatalogSyncWorker } = await import('./lib/queues/evolution-catalog-sync-worker')
+    startEvolutionCatalogSyncWorker()
+
+    const { startEvolutionVisionWorker } = await import('./lib/queues/evolution-vision-worker')
+    startEvolutionVisionWorker()
   }
 }

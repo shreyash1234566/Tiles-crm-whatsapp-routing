@@ -610,6 +610,27 @@ export async function sendEvolutionGroupMedia(input: {
   }, 30000)
 }
 
+/** Send an explicitly dealer-shareable HTTPS catalog asset. Internal app
+ * container URLs are rejected because Evolution cannot resolve them. */
+export async function sendEvolutionGroupMediaUrl(input: {
+  groupJid: string
+  mediaUrl: string
+  mediaType: 'image' | 'video' | 'document'
+  mimeType: string
+  fileName: string
+  caption?: string
+  quoted?: { id: string; text: string | null }
+}) {
+  if (!/^https:\/\//i.test(input.mediaUrl)) throw new Error('Catalog media must use an HTTPS URL')
+  const config = getEvolutionConfig()
+  if (!config) throw new Error('Evolution API is not configured')
+  const quoted = input.quoted?.id ? { key: { id: input.quoted.id, remoteJid: input.groupJid, fromMe: false }, message: { conversation: input.quoted.text || '' } } : undefined
+  return evolutionRequest<unknown>(`/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
+    method: 'POST',
+    body: JSON.stringify({ number: input.groupJid, mediatype: input.mediaType, media: input.mediaUrl, mimetype: input.mimeType, fileName: input.fileName, filename: input.fileName, ...(input.caption ? { caption: input.caption } : {}), ...(quoted ? { quoted } : {}) }),
+  }, 30000)
+}
+
 /**
  * Evolution v2.3.7 validates raw base64 with class-validator before sending.
  * This rejects empty/truncated buffers in the CRM before a provider request is

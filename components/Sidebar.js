@@ -70,6 +70,7 @@ const navItems = [
   { href: '/routing-crm/fulfillment', label: 'Dealer Fulfillment', icon: Truck },
   { href: '/routing-crm/operations', label: 'Routing Operations', icon: BarChart3, roles: ['ADMIN', 'MANAGER'] },
   { href: '/routing-crm/campaigns', label: 'Dealer Broadcasts', icon: Megaphone, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/routing-crm/catalog', label: 'Catalog Automation', icon: FileSpreadsheet, roles: ['ADMIN', 'MANAGER'] },
   { href: '/routing-crm/agent', label: 'Evolution RAG', icon: Sparkles, roles: ['ADMIN', 'MANAGER'] },
   { href: '/calls', label: 'Call Center', icon: Headphones },
   { href: '/gst', label: 'GST Compliance', icon: FileSpreadsheet, roles: ['ADMIN', 'MANAGER'] },

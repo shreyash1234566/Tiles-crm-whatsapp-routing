@@ -22,14 +22,23 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams
   const filter = normalizeWorkItemFilter(params.get('filter'))
   const requestedDepartmentId = Number(params.get('department_id') || '')
-  const where: {
-    group: { userId: number }
-    status?: string | { in: string[] }
-    departmentId?: number
-  } = { group: { userId: current.ownerId } }
+  const now = new Date()
+  // Prisma's generated relation filter is deliberately kept as an object here:
+  // this endpoint adds operational filters without weakening department access.
+  const where: Record<string, unknown> = { group: { userId: current.ownerId } }
 
   if (filter === 'active') where.status = 'ACTIVE'
   if (filter === 'done') where.status = 'DONE'
+  if (['mine', 'unassigned', 'mentioned', 'sla_overdue', 'follow_up_due', 'payment_pending', 'dispatch_pending'].includes(filter)) where.status = 'ACTIVE'
+
+  const currentUserId = Number(current.user.id)
+  if (filter === 'mine') where.OR = [{ assignedUserId: currentUserId }, { claimedByUserId: currentUserId }]
+  if (filter === 'unassigned') where.AND = [{ assignedUserId: null }, { claimedByUserId: null }]
+  if (filter === 'mentioned') where.mentionPriority = true
+  if (filter === 'sla_overdue') where.ticket = { inquiry: { is: { slaDueAt: { lt: now }, stage: { notIn: ['CLOSED', 'LOST', 'CANCELLED'] } } } }
+  if (filter === 'follow_up_due') where.ticket = { inquiry: { is: { nextFollowUpAt: { lte: now }, stage: { notIn: ['CLOSED', 'LOST', 'CANCELLED'] } } } }
+  if (filter === 'payment_pending') where.ticket = { inquiry: { is: { stage: 'PAYMENT_PENDING' } } }
+  if (filter === 'dispatch_pending') where.ticket = { inquiry: { is: { stage: 'DISPATCH_PENDING' } } }
 
   if (current.user.role === 'STAFF') {
     if (!current.user.routingDepartmentId) return NextResponse.json({ data: [], filter })

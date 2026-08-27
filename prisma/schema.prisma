@@ -36,6 +36,12 @@ model User {
   accounts Account[]
   sessions Session[]
   notifications Notification[] @relation("UserNotifications")
+  catalogSources EvolutionCatalogSource[]
+  catalogResponseDrafts EvolutionCatalogResponseDraft[]
+  visionEmbeddings EvolutionVisionEmbedding[]
+  visionMatches EvolutionVisionMatch[] @relation("VisionMatchOwner")
+  reviewedVisionMatches EvolutionVisionMatch[] @relation("VisionMatchReviewer")
+  workerMetrics EvolutionWorkerMetric[]
 }
 
 model RoutingDepartment {
@@ -220,6 +226,7 @@ model Product {
   sampleLoans          SampleLoan[]
   dealerOrderItems     DealerOrderItem[]
   dealerPriceListItems DealerPriceListItem[]
+  catalogItems         EvolutionCatalogItem[]
 
   // Deep inventory fields
   hsnCode       String?
@@ -268,12 +275,16 @@ model StoneLot {
   shadeCode      String?
   qualityGrade   String?
   photos         String[]  @default([])
+  // Existing lot photos are internal by default. A manager must explicitly
+  // mark a lot/media record shareable before it can reach a dealer workflow.
+  shareable      Boolean   @default(false)
   status         String    @default("IN_STOCK")
   costPerSqft    Int       @default(0)
   notes          String?
   createdAt      DateTime  @default(now())
 
   slabs Slab[]
+  media StoneLotMedia[]
 
   @@index([productId])
   @@index([status])
@@ -3043,6 +3054,8 @@ model EvolutionGroup {
   ticket             EvolutionGroupTicket?
   inquiry            EvolutionDealerInquiry?
   workItems          EvolutionDepartmentWorkItem[]
+  catalogResponseDrafts EvolutionCatalogResponseDraft[]
+  visionMatches      EvolutionVisionMatch[]
 
   @@unique([userId, groupJid])
   @@index([userId, departmentId, status])
@@ -3103,6 +3116,7 @@ model EvolutionGroupTicket {
   agentRuns       EvolutionAgentRun[]
   workItems       EvolutionDepartmentWorkItem[]
   fulfillmentEvents EvolutionFulfillmentEvent[]
+  catalogResponseDrafts EvolutionCatalogResponseDraft[]
 
   @@index([departmentId, status])
   @@index([routeType, createdAt])
@@ -3282,6 +3296,7 @@ model EvolutionDealerInquiry {
   followUps         EvolutionTicketFollowUp[]
   audits            EvolutionRoutingAudit[]
   fulfillmentEvents EvolutionFulfillmentEvent[]
+  catalogResponseDrafts EvolutionCatalogResponseDraft[]
 
   @@index([ownerUserId, stage, lastActivityAt])
   @@index([dealerId, stage])
@@ -3362,6 +3377,265 @@ model EvolutionAgentConfig {
   updatedAt            DateTime @updatedAt
 
   @@map("evolution_agent_configs")
+}
+
+// ─── Phase 3: dealer-safe catalog, lot media and approval workflow ────────
+
+model EvolutionCatalogSource {
+  id                String   @id @default(cuid())
+  userId            Int
+  sourceType        String   @default("GOOGLE_SHEETS_CSV")
+  sourceUrl         String
+  sheetName         String?
+  isActive          Boolean  @default(true)
+  lastSyncAt        DateTime?
+  lastSuccessAt     DateTime?
+  lastChecksum      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items             EvolutionCatalogItem[]
+  syncs             EvolutionCatalogSync[]
+
+  @@unique([userId, sourceUrl])
+  @@index([userId, isActive])
+  @@map("evolution_catalog_sources")
+}
+
+// Imported catalog rows are a dealer-shareable projection only. They never
+// overwrite Product.price, Product.stock, internal cost or dealer price lists.
+model EvolutionCatalogItem {
+  id                String   @id @default(cuid())
+  sourceId          String
+  externalRowId     String
+  normalizedSku     String
+  sku               String
+  name              String
+  category          String?
+  materialCategory  String?
+  tileSize          String?
+  unitOfMeasure     String?
+  finish            String?
+  applicationArea   String?
+  hsnCode           String?
+  dealerPriceTier   String?
+  dealerRate        Int?
+  minimumQuantity   Float?
+  availableQuantity Float?
+  stockStatus       String?
+  lotNumber         String?
+  shadeCode         String?
+  photoUrls         String[] @default([])
+  videoUrls         String[] @default([])
+  shareable         Boolean  @default(false)
+  active            Boolean  @default(true)
+  productId         Int?
+  sourceChecksum    String
+  sourceData        Json?
+  lastSyncedAt      DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  source            EvolutionCatalogSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  product           Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  conflicts         EvolutionCatalogConflict[]
+  visionEmbeddings  EvolutionVisionEmbedding[]
+
+  @@unique([sourceId, externalRowId])
+  @@index([normalizedSku, active, shareable])
+  @@index([sourceId, lastSyncedAt])
+  @@index([productId])
+  @@map("evolution_catalog_items")
+}
+
+model EvolutionCatalogSync {
+  id              String   @id @default(cuid())
+  sourceId        String
+  status          String   @default("RUNNING")
+  startedAt       DateTime @default(now())
+  finishedAt      DateTime?
+  sourceChecksum  String?
+  importedCount   Int      @default(0)
+  unchangedCount  Int      @default(0)
+  conflictCount   Int      @default(0)
+  errorCount      Int      @default(0)
+  errorSummary    String?
+
+  source          EvolutionCatalogSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  errors          EvolutionCatalogSyncError[]
+
+  @@index([sourceId, startedAt])
+  @@index([status, startedAt])
+  @@map("evolution_catalog_syncs")
+}
+
+model EvolutionCatalogSyncError {
+  id              String   @id @default(cuid())
+  syncId          String
+  rowNumber       Int?
+  externalRowId   String?
+  code            String
+  message         String
+  rawRow          Json?
+  createdAt       DateTime @default(now())
+
+  sync            EvolutionCatalogSync @relation(fields: [syncId], references: [id], onDelete: Cascade)
+
+  @@index([syncId, createdAt])
+  @@map("evolution_catalog_sync_errors")
+}
+
+// A conflict records a source value that was not copied into a CRM-owned
+// product field. It keeps manual rates and inventory authoritative.
+model EvolutionCatalogConflict {
+  id              String   @id @default(cuid())
+  catalogItemId   String
+  field           String
+  sourceValue     Json?
+  crmValue        Json?
+  status          String   @default("OPEN")
+  resolutionNote  String?
+  createdAt       DateTime @default(now())
+  resolvedAt      DateTime?
+
+  catalogItem     EvolutionCatalogItem @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+
+  @@index([catalogItemId, status])
+  @@map("evolution_catalog_conflicts")
+}
+
+model StoneLotMedia {
+  id              String   @id @default(cuid())
+  lotId           Int
+  url             String
+  mimeType        String?
+  mediaType       String   @default("IMAGE")
+  patternTags     String[] @default([])
+  shadeCode       String?
+  qualityGrade    String?
+  capturedAt      DateTime?
+  shareable       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  lot             StoneLot @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  visionEmbeddings EvolutionVisionEmbedding[]
+
+  @@unique([lotId, url])
+  @@index([lotId, shareable])
+  @@map("stone_lot_media")
+}
+
+// Drafts are the explicit approval gate between catalog lookup and Evolution
+// sending. A lookup alone can never reserve stock or message a dealer.
+model EvolutionCatalogResponseDraft {
+  id                String   @id @default(cuid())
+  userId            Int
+  groupId           String
+  ticketId          String?
+  inquiryId         String?
+  requestedMessageId String?
+  catalogItemIds    String[] @default([])
+  mediaUrls         String[] @default([])
+  mediaTypes        String[] @default([])
+  content           String   @db.Text
+  sourceSummary     Json?
+  confidence        Float?
+  status            String   @default("DRAFT")
+  approvedByUserId  Int?
+  approvedAt        DateTime?
+  rejectionReason   String?
+  providerMessageId String?
+  sentAt            DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group             EvolutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  ticket            EvolutionGroupTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  inquiry           EvolutionDealerInquiry? @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
+
+  @@index([groupId, status, createdAt])
+  @@index([userId, status, createdAt])
+  @@unique([groupId, requestedMessageId])
+  @@map("evolution_catalog_response_drafts")
+}
+
+// Vision vectors intentionally live apart from text/RAG vectors. They are
+// generated only by the local feature-gated worker and are never sent to a
+// third-party AI provider.
+model EvolutionVisionEmbedding {
+  id              String   @id @default(cuid())
+  userId          Int
+  catalogItemId   String?
+  lotMediaId      String?
+  sourceUrl       String
+  sourceHash      String
+  model           String
+  dimension       Int
+  embedding       Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  catalogItem     EvolutionCatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+  lotMedia        StoneLotMedia? @relation(fields: [lotMediaId], references: [id], onDelete: Cascade)
+  matches         EvolutionVisionMatch[]
+
+  @@unique([userId, model, sourceHash, catalogItemId])
+  @@index([userId, catalogItemId])
+  @@index([userId, lotMediaId])
+  @@map("evolution_vision_embeddings")
+}
+
+// A visual match is always a suggestion. It requires a human approval before
+// a catalog response can be prepared or sent to a dealer group.
+model EvolutionVisionMatch {
+  id                 String   @id @default(cuid())
+  userId             Int
+  groupId            String?
+  requestedMessageId String?
+  querySourceUrl     String
+  querySourceHash    String
+  candidateId        String
+  score              Float
+  confidenceBand     String
+  status             String   @default("SUGGESTED")
+  reviewedByUserId   Int?
+  reviewedAt         DateTime?
+  createdAt          DateTime @default(now())
+
+  user               User     @relation("VisionMatchOwner", fields: [userId], references: [id], onDelete: Cascade)
+  group              EvolutionGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  candidate          EvolutionVisionEmbedding @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  reviewedByUser     User?    @relation("VisionMatchReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId, groupId, createdAt])
+  @@index([candidateId, createdAt])
+  @@map("evolution_vision_matches")
+}
+
+// Durable job telemetry gives Admin/Manager an honest view of queue latency,
+// retries and errors without exposing Redis implementation details to staff.
+model EvolutionWorkerMetric {
+  id          String   @id @default(cuid())
+  userId      Int?
+  queue       String
+  jobId       String?
+  operation   String
+  status      String
+  durationMs  Int?
+  error       String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([queue, createdAt])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("evolution_worker_metrics")
 }
 
 model EvolutionAgentRun {
