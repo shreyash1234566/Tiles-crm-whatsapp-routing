@@ -38,7 +38,7 @@ import {
   Sparkles,
   Handshake,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import { useSession } from '@/components/AuthProvider';
 import { useSidebarContext } from './SidebarContext';
 import { getStoreSettings } from '@/app/actions/settings';
@@ -69,9 +69,6 @@ const navItems = [
   { href: '/routing-crm', label: 'Group Inbox', icon: MessageSquare },
   { href: '/routing-crm/fulfillment', label: 'Dealer Fulfillment', icon: Truck },
   { href: '/routing-crm/operations', label: 'Routing Operations', icon: BarChart3, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/routing-crm/campaigns', label: 'Dealer Broadcasts', icon: Megaphone, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/routing-crm/catalog', label: 'Catalog Automation', icon: FileSpreadsheet, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/routing-crm/agent', label: 'Evolution RAG', icon: Sparkles, roles: ['ADMIN', 'MANAGER'] },
   { href: '/calls', label: 'Call Center', icon: Headphones },
   { href: '/gst', label: 'GST Compliance', icon: FileSpreadsheet, roles: ['ADMIN', 'MANAGER'] },
   { href: '/expenses', label: 'Expenses', icon: Calculator, roles: ['ADMIN', 'MANAGER', 'STAFF'] },
@@ -79,6 +76,14 @@ const navItems = [
   { href: '/payroll', label: 'Payroll', icon: Wallet, roles: ['ADMIN'] },
   { href: '/financials', label: 'Financials', icon: BarChart3, roles: ['ADMIN'] },
   { href: '/settings', label: 'Settings', icon: Settings, roles: ['ADMIN'] },
+];
+
+// These tools share the Evolution workflow but remain separate routes so their
+// existing functionality and deep links continue to work unchanged.
+const evolutionToolItems = [
+  { href: '/routing-crm/campaigns', label: 'Dealer Broadcasts', icon: Megaphone, description: 'Dealer-only campaigns', roles: ['ADMIN', 'MANAGER'] },
+  { href: '/routing-crm/catalog', label: 'Catalog Automation', icon: FileSpreadsheet, description: 'Products, lots and pricing', roles: ['ADMIN', 'MANAGER'] },
+  { href: '/routing-crm/agent', label: 'Evolution RAG', icon: Sparkles, description: 'Local AI-assisted replies', roles: ['ADMIN', 'MANAGER'] },
 ];
 
 export default function Sidebar() {
@@ -109,13 +114,51 @@ export default function Sidebar() {
 
   const roleLabel = userRole === 'ADMIN' ? 'Administrator' : userRole === 'MANAGER' ? 'Manager' : 'Staff';
 
-  // Filter nav items by role
-  const visibleNav = navItems.filter(item => {
+  const canSeeItem = (item) => {
     if (item.vertical && item.vertical !== brand.vertical) return false;
     if (!item.roles) return true;
     if (item.href === '/indiamart-leads' && !indiaMartEnabled) return false;
     return item.roles.includes(userRole);
-  });
+  };
+
+  // Filter both navigation lists by role while keeping the Evolution tools in
+  // one dedicated section in the sidebar.
+  const visibleNav = navItems.filter(canSeeItem);
+  const visibleEvolutionTools = evolutionToolItems.filter(canSeeItem);
+
+  const renderNavItem = (item, options = {}) => {
+    const Icon = item.icon;
+    const isActive = pathname === item.href;
+    const itemLabel = brand.vertical === 'tiles' && item.href === '/custom-orders'
+      ? 'Fabrication Jobs'
+      : brand.vertical === 'tiles' && item.href === '/inventory'
+        ? 'Inventory & Lots'
+        : item.label;
+    const block = options.block;
+
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        onClick={() => setSidebarOpen(false)}
+        className={`flex items-center gap-3 ${block ? 'rounded-lg px-2.5 py-2.5' : 'px-3 py-2 rounded-lg'} text-[13px] font-medium transition-all duration-150 ${isActive
+          ? 'bg-white/15 text-white'
+          : block
+            ? 'text-white/60 hover:bg-white/10 hover:text-white'
+            : 'text-white/50 hover:text-white/80 hover:bg-white/5'
+          }`}
+        title={collapsed && !sidebarOpen ? itemLabel : undefined}
+      >
+        <Icon className={`w-[17px] h-[17px] flex-shrink-0 ${isActive ? 'text-white' : ''}`} />
+        {(!collapsed || sidebarOpen) && (
+          <span className="min-w-0">
+            <span className="block truncate">{itemLabel}</span>
+            {block && <span className="mt-0.5 block truncate text-[10px] font-normal text-white/35">{item.description}</span>}
+          </span>
+        )}
+      </Link>
+    );
+  };
 
   return (
     <>
@@ -161,31 +204,23 @@ export default function Sidebar() {
 
         {/* Navigation */}
         <nav className="flex-1 py-3 px-2.5 space-y-0.5 overflow-y-auto">
-          {visibleNav.map((item) => {
-            const Icon = item.icon;
-            const isActive = pathname === item.href;
-            const itemLabel = brand.vertical === 'tiles' && item.href === '/custom-orders'
-              ? 'Fabrication Jobs'
-              : brand.vertical === 'tiles' && item.href === '/inventory'
-                ? 'Inventory & Lots'
-                : item.label;
-
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setSidebarOpen(false)}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150 ${isActive
-                  ? 'bg-white/15 text-white'
-                  : 'text-white/50 hover:text-white/80 hover:bg-white/5'
-                  }`}
-                title={collapsed && !sidebarOpen ? itemLabel : undefined}
-              >
-                <Icon className={`w-[17px] h-[17px] flex-shrink-0 ${isActive ? 'text-white' : ''}`} />
-                {(!collapsed || sidebarOpen) && <span>{itemLabel}</span>}
-              </Link>
-            );
-          })}
+          {visibleNav.map((item) => (
+            <Fragment key={item.href}>
+              {renderNavItem(item)}
+              {item.href === '/routing-crm/operations' && visibleEvolutionTools.length > 0 && (
+                <div className="mt-3 border-t border-white/10 pt-3">
+                  {(!collapsed || sidebarOpen) && (
+                    <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
+                      Evolution Workspace
+                    </p>
+                  )}
+                  <div className="space-y-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
+                    {visibleEvolutionTools.map((tool) => renderNavItem(tool, { block: true }))}
+                  </div>
+                </div>
+              )}
+            </Fragment>
+          ))}
         </nav>
 
         {/* User section (mobile only) */}

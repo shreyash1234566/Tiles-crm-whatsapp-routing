@@ -30,8 +30,8 @@ function DocRow({
   onReindex,
 }: {
   doc: KnowledgeDoc
-  onDelete: (id: string) => void
-  onReindex: (id: string) => void
+  onDelete: (id: string) => Promise<void>
+  onReindex: (id: string) => Promise<void>
 }) {
   const [open, setOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -41,7 +41,11 @@ function DocRow({
   const handleDelete = async () => {
     if (!confirm(`Delete "${doc.title}"? This cannot be undone.`)) return
     setDeleting(true)
-    onDelete(doc.id)
+    try {
+      await onDelete(doc.id)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   return (
@@ -125,7 +129,13 @@ A: [Answer]
 Q: [Second common question]
 A: [Answer]`
 
-export function KnowledgeBase() {
+interface KnowledgeBaseProps {
+  /** API root for the knowledge workspace. Kept configurable so the Evolution
+   * RAG UI does not have to call the legacy WhatsApp marketing endpoints. */
+  apiBase?: string
+}
+
+export function KnowledgeBase({ apiBase = '/api/whatsapp/agent/knowledge' }: KnowledgeBaseProps) {
   const [docs, setDocs] = useState<KnowledgeDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [showUpload, setShowUpload] = useState(false)
@@ -138,16 +148,23 @@ export function KnowledgeBase() {
 
   const fetchDocs = useCallback(async () => {
     try {
-      const res = await fetch('/api/whatsapp/agent/knowledge')
-      if (res.ok) setDocs(await res.json())
-    } catch {
-      // ignore
+      const res = await fetch(apiBase, { cache: 'no-store' })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.error ?? 'Unable to load knowledge documents')
+      if (!Array.isArray(body)) throw new Error('Knowledge API returned an invalid response')
+      setDocs(body)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load knowledge documents')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [apiBase])
 
-  useEffect(() => { fetchDocs() }, [fetchDocs])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void fetchDocs() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [fetchDocs])
 
   // Poll every 3s if any doc is in 'pending' state
   useEffect(() => {
@@ -176,7 +193,7 @@ export function KnowledgeBase() {
 
     setUploading(true)
     try {
-      const res = await fetch('/api/whatsapp/agent/knowledge', {
+      const res = await fetch(apiBase, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: title.trim(), raw_text: rawText }),
@@ -196,21 +213,27 @@ export function KnowledgeBase() {
     }
   }
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: string): Promise<void> => {
     try {
-      await fetch(`/api/whatsapp/agent/knowledge/${id}`, { method: 'DELETE' })
+      const res = await fetch(`${apiBase}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.error ?? 'Failed to delete document')
       setDocs(prev => prev.filter(d => d.id !== id))
-    } catch {
-      alert('Failed to delete document.')
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete document')
     }
   }
 
-  const handleReindex = async (id: string) => {
+  const handleReindex = async (id: string): Promise<void> => {
     try {
-      await fetch(`/api/whatsapp/agent/knowledge/${id}`, { method: 'POST' })
+      const res = await fetch(`${apiBase}/${encodeURIComponent(id)}`, { method: 'POST' })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.error ?? 'Failed to re-index document')
       setDocs(prev => prev.map(d => d.id === id ? { ...d, status: 'pending' } : d))
-    } catch {
-      // ignore
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to re-index document')
     }
   }
 
@@ -249,6 +272,13 @@ export function KnowledgeBase() {
           </button>
         </div>
       </div>
+
+      {error && !showUpload && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {error}
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">

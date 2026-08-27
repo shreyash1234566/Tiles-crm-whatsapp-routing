@@ -4,6 +4,7 @@ import { embedText } from '@/lib/ai-agent/embedder'
 import { retrieveChunks } from '@/lib/ai-agent/retriever'
 import { generateResponse } from '@/lib/ai-agent/responder'
 import { getGroqModelName } from '@/lib/ai-agent/groq'
+import { DEFAULT_SYSTEM_PROMPT } from '@/lib/ai-agent/system-prompt'
 import { sendEvolutionGroupText } from '@/lib/evolution-routing'
 import {
   agentAllowsGroup,
@@ -25,6 +26,23 @@ function compactHistory(messages: Array<{ fromMe: boolean; senderName: string | 
     .slice(-12)
     .map((message) => `${message.fromMe ? 'Team' : (message.senderName || 'Dealer')}: ${message.text}`)
     .join('\n')
+}
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: 'English',
+  hi: 'Hindi',
+  mr: 'Marathi',
+  gu: 'Gujarati',
+  ta: 'Tamil',
+  te: 'Telugu',
+  bn: 'Bengali',
+}
+
+function languageInstruction(languages: string[]): string {
+  const names = [...new Set(languages.map((language) => LANGUAGE_NAMES[language]).filter(Boolean))]
+  return names.length > 0
+    ? `Reply in the dealer's language. Supported response languages: ${names.join(', ')}.`
+    : "Reply in the dealer's language; use English if the language is uncertain."
 }
 
 function providerMessageId(value: unknown): string {
@@ -125,7 +143,20 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
   }
 
   const legacyConfig = await prisma.waAgentConfig.findUnique({ where: { user_id: String(payload.ownerUserId) } })
-  if (!legacyConfig?.enabled) return skip('Knowledge/RAG configuration is disabled')
+  // Detailed prompt settings are stored in the original agent row for
+  // backward compatibility. Evolution's own enabled/draft controls remain
+  // authoritative, while an explicitly disabled legacy row is still honored
+  // as a safety stop for existing deployments.
+  if (legacyConfig && !legacyConfig.enabled) return skip('Knowledge/RAG configuration is disabled')
+  const agentConfig = legacyConfig ?? {
+    agent_name: 'Assistant',
+    system_prompt: DEFAULT_SYSTEM_PROMPT,
+    fallback_message: 'Let me connect you with our team.',
+    confidence_threshold: config.confidenceThreshold,
+    max_response_tokens: config.maxResponseTokens,
+    response_delay_ms: config.responseDelayMs,
+    languages: ['en', 'hi'],
+  }
 
   let queryEmbedding: number[]
   try {
@@ -134,10 +165,10 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
     return skip(`Embedding failed: ${error instanceof Error ? error.message : 'unknown error'}`)
   }
 
-  const threshold = Math.max(config.confidenceThreshold, legacyConfig.confidence_threshold)
+  const threshold = Math.max(0, Math.min(1, config.confidenceThreshold))
   const chunks = await retrieveChunks(String(payload.ownerUserId), queryEmbedding, 3, threshold)
   if (chunks.length === 0) {
-    await prisma.evolutionAgentRun.update({ where: { id: run.id }, data: { status: 'HANDOFF', handoff: true, retrievalIds: [] } })
+    await prisma.evolutionAgentRun.update({ where: { id: run.id }, data: { status: 'HANDOFF', handoff: true, responseText: agentConfig.fallback_message, retrievalIds: [] } })
     await recordAudit({ ticketId: group.ticket.id, messageId: inbound.id, inquiryId: group.inquiry?.id, event: 'RAG_HANDOFF', reason: 'No knowledge chunk met the configured confidence threshold' })
     return
   }
@@ -145,12 +176,13 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
   let response: Awaited<ReturnType<typeof generateResponse>>
   try {
     response = await generateResponse({
-      agentName: legacyConfig.agent_name,
-      companyName: 'Tiles, Granite & Marble CRM',
-      companyContext: 'You assist only B2B dealers in a shared WhatsApp group. Never reveal internal cost, margin, supplier data, or unconfirmed stock. Draft a reply only from the supplied knowledge. Escalate price, exact lot, payment, dispatch, complaint, and any uncertainty to a human using [HANDOFF_NEEDED].',
+      agentName: agentConfig.agent_name,
+      companyName: process.env.TILES_COMPANY_NAME?.trim() || 'Tiles, Granite & Marble CRM',
+      companyContext: `You assist only B2B dealers in a shared WhatsApp group. Never reveal internal cost, margin, supplier data, or unconfirmed stock. Draft a reply only from the supplied knowledge. Escalate price, exact lot, payment, dispatch, complaint, and any uncertainty to a human using [HANDOFF_NEEDED]. ${languageInstruction(agentConfig.languages)}`,
       retrievedChunks: chunks.map((chunk) => chunk.content).join('\n\n---\n\n'),
       conversationHistory: compactHistory([...group.messages].reverse()),
       customerMessage: inbound.text,
+      systemPrompt: agentConfig.system_prompt,
       maxTokens: Math.min(Math.max(config.maxResponseTokens, 32), 500),
     })
   } catch (error) {
@@ -161,7 +193,7 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
   if (response.needsHandoff || !response.confidenceOk || !response.text.trim()) {
     await prisma.evolutionAgentRun.update({
       where: { id: run.id },
-      data: { status: 'HANDOFF', handoff: true, retrievalIds, responseText: response.text || null, model: getGroqModelName() },
+      data: { status: 'HANDOFF', handoff: true, retrievalIds, responseText: response.text?.trim() || agentConfig.fallback_message, model: getGroqModelName() },
     })
     await recordAudit({ ticketId: group.ticket.id, messageId: inbound.id, inquiryId: group.inquiry?.id, event: 'RAG_HANDOFF', reason: 'Model requested human handoff or returned low-confidence output', metadata: { retrievalIds } })
     return
@@ -227,7 +259,7 @@ export async function processEvolutionAgentJob(payload: EvolutionAgentJobPayload
         groupId: fresh.id,
         messageId: outboundMessageId,
         senderJid: 'crm-agent',
-        senderName: legacyConfig.agent_name,
+        senderName: agentConfig.agent_name,
         text: response.text,
         messageType: 'conversation',
         fromMe: true,

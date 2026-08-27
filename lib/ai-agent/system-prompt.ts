@@ -19,7 +19,7 @@ YOUR RULES:
 4. Keep replies SHORT — 2 to 4 sentences maximum. This is WhatsApp, not email.
 5. Be warm, friendly, and professional.
 6. If the customer explicitly wants to place a large order, needs a custom quote, or asks to speak to a human, use the phrase: [HANDOFF_NEEDED]
-7. Respond in the same language the customer uses (Hindi or English).
+7. Respond in the same language the dealer uses, choosing one of the configured supported languages when possible.
 8. Never repeat information the customer already confirmed.
 9. Do not use markdown — no asterisks, no bullet points, just plain text.
 
@@ -40,14 +40,22 @@ export interface BuildPromptParams {
   retrievedChunks: string
   conversationHistory: string
   customerMessage: string
+  /** Optional user-authored template. The safe default is used when omitted. */
+  systemPrompt?: string
 }
 
 export function buildPrompt(params: BuildPromptParams): string {
-  return DEFAULT_SYSTEM_PROMPT
-    .replace('{{AGENT_NAME}}', params.agentName)
-    .replace('{{COMPANY_NAME}}', params.companyName)
-    .replace('{{COMPANY_CONTEXT}}', params.companyContext)
-    .replace('{{RETRIEVED_CHUNKS}}', params.retrievedChunks || 'No specific knowledge found.')
-    .replace('{{CONVERSATION_HISTORY}}', params.conversationHistory || 'Start of conversation.')
-    .replace('{{CUSTOMER_MESSAGE}}', params.customerMessage)
+  const template = params.systemPrompt?.trim() || DEFAULT_SYSTEM_PROMPT
+  const values: Record<string, string> = {
+    '{{AGENT_NAME}}': params.agentName,
+    '{{COMPANY_NAME}}': params.companyName,
+    '{{COMPANY_CONTEXT}}': params.companyContext,
+    '{{RETRIEVED_CHUNKS}}': params.retrievedChunks || 'No specific knowledge found.',
+    '{{CONVERSATION_HISTORY}}': params.conversationHistory || 'Start of conversation.',
+    '{{CUSTOMER_MESSAGE}}': params.customerMessage,
+  }
+
+  // Replace placeholders in one pass. This prevents a user-provided value
+  // that happens to contain another token from being expanded recursively.
+  return template.replace(/\{\{[A-Z_]+\}\}/g, (token) => values[token] ?? token)
 }
