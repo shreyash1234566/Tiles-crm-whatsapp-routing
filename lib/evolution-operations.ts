@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { EvolutionInquiryStage } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { normalizeJid, normalizePhoneJid } from '@/lib/evolution-routing'
 
@@ -31,8 +32,12 @@ const STAGE_TRANSITIONS: Record<string, string[]> = {
   CANCELLED: [],
 }
 
+export function allowedEvolutionStageTransitions(from: string): EvolutionInquiryStage[] {
+  return (STAGE_TRANSITIONS[String(from || '').toUpperCase()] || []) as EvolutionInquiryStage[]
+}
+
 export function isValidEvolutionStageTransition(from: string, to: string): boolean {
-  return (STAGE_TRANSITIONS[String(from).toUpperCase()] || []).includes(String(to).toUpperCase())
+  return allowedEvolutionStageTransitions(from).includes(String(to).toUpperCase() as EvolutionInquiryStage)
 }
 
 export function isEvolutionInquiryStage(value: string): boolean {

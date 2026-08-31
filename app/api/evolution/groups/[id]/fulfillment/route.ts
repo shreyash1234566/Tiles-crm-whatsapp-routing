@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db'
 import { getSession } from '@/lib/auth-helpers'
 import { getEvolutionOwnerUserId } from '@/lib/evolution-routing'
 import { canAccessDepartmentWorkItem, isRoutingManager } from '@/lib/evolution-work-items'
-import { canMoveEvolutionStage, canPerformFulfillmentAction, dispatchCountdown, isUsableReceipt } from '@/lib/evolution-fulfillment'
+import { allowedFulfillmentTransitions, canMoveEvolutionStage, canPerformFulfillmentAction, dispatchCountdown, hasApprovedDealerCredit, isPricedFulfillmentOrder, isUsableReceipt } from '@/lib/evolution-fulfillment'
 import { evolutionPhoneCandidates, isValidEvolutionStageTransition, normalizeEvolutionPhone } from '@/lib/evolution-operations'
 import { deleteFile, uploadFile } from '@/lib/r2'
 
@@ -89,7 +89,7 @@ async function consumeReservations(tx: Prisma.TransactionClient, dealerOrderId: 
   }
 }
 function ensurePricedOrder(order: ScopedGroup['inquiry']['convertedOrder']) {
-  if (!order || order.items.length === 0 || order.total <= 0 || order.items.some((item) => !item.productId || item.quantity <= 0 || item.amount < 0)) throw new WorkflowError('Add priced product line items to the dealer-order draft before payment, allocation, or dispatch')
+  if (!isPricedFulfillmentOrder(order)) throw new WorkflowError('Add positively priced, inventory-linked product line items to the dealer-order draft before payment, allocation, or dispatch')
 }
 async function transitionInTransaction(tx: Prisma.TransactionClient, group: ScopedGroup, actorUserId: number, to: EvolutionInquiryStage, action: string, note: string, metadata: Prisma.InputJsonValue = {}) {
   const from = group.inquiry.stage; const update = stageMutation(to, TERMINAL_STAGES.has(to))
@@ -106,9 +106,13 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   const ownerUserId = await getEvolutionOwnerUserId(); if (!ownerUserId) return NextResponse.json({ error: 'No active Admin owner configured' }, { status: 503 })
   const { id } = await context.params; const group = await getScopedGroup(id, session.user, ownerUserId)
   if (!group) return NextResponse.json({ error: 'Ticket not found or not available to your active department work' }, { status: 404 })
-  const events = await prisma.evolutionFulfillmentEvent.findMany({ where: { ticketId: group.ticket.id }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, action: true, fromStage: true, toStage: true, note: true, createdAt: true } })
+  const [events, availableGodowns] = await Promise.all([
+    prisma.evolutionFulfillmentEvent.findMany({ where: { ticketId: group.ticket.id }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, action: true, fromStage: true, toStage: true, note: true, createdAt: true } }),
+    prisma.godown.findMany({ orderBy: [{ isDefault: 'desc' }, { name: 'asc' }], select: { id: true, name: true, type: true, isDefault: true } }),
+  ])
   const order = group.inquiry.convertedOrder
-  return NextResponse.json({ data: { group: { id: group.id, subject: group.subject }, ticket: { id: group.ticket.id, stage: group.ticket.stage, version: group.ticket.version }, inquiry: { id: group.inquiry.id, stage: group.inquiry.stage, dealerId: group.inquiry.dealerId, convertedOrderId: group.inquiry.convertedOrderId, dealer: group.inquiry.dealer }, order: order ? { ...order, countdown: dispatchCountdown(order.expectedDispatchDate) } : null, events } })
+  const allowedTransitions = allowedFulfillmentTransitions(session.user, group.inquiry.stage, { hasOrder: Boolean(order), isPricedOrder: isPricedFulfillmentOrder(order), orderStatus: order?.status, hasActiveAllocation: Boolean(order?.allocations.length) })
+  return NextResponse.json({ data: { group: { id: group.id, subject: group.subject }, ticket: { id: group.ticket.id, stage: group.ticket.stage, version: group.ticket.version }, inquiry: { id: group.inquiry.id, stage: group.inquiry.stage, dealerId: group.inquiry.dealerId, convertedOrderId: group.inquiry.convertedOrderId, dealer: group.inquiry.dealer }, order: order ? { ...order, countdown: dispatchCountdown(order.expectedDispatchDate) } : null, orderReady: isPricedFulfillmentOrder(order), allowedTransitions, availableGodowns, events } })
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -131,7 +135,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!reason) return NextResponse.json({ error: 'A transition reason is required' }, { status: 400 })
     if (!isValidEvolutionStageTransition(group.inquiry.stage, stage)) return NextResponse.json({ error: `Cannot move from ${group.inquiry.stage} to ${stage}` }, { status: 409 })
     if (stage === 'CONFIRMED' && !group.inquiry.dealerId) return NextResponse.json({ error: 'Link a dealer before confirming this inquiry' }, { status: 409 })
-    const result = await runMutation(async (tx) => { const released = stage === 'CANCELLED' && order ? await releaseReservations(tx, order.id, actorUserId) : 0; if (stage === 'CANCELLED' && order) await tx.dealerOrder.update({ where: { id: order.id }, data: { status: 'CANCELLED' } }); return transitionInTransaction(tx, group, actorUserId, stage, 'STAGE_CHANGED', reason, released ? { releasedReservationCount: released } : {}) })
+    const allowedTransitions = allowedFulfillmentTransitions(session.user, group.inquiry.stage, { hasOrder: Boolean(order), isPricedOrder: isPricedFulfillmentOrder(order), orderStatus: order?.status, hasActiveAllocation: Boolean(order?.allocations.length) })
+    if (!allowedTransitions.includes(stage)) {
+      const guidance = stage === 'ALLOCATED' ? 'Use Confirm allocation so stock is reserved safely.' : stage === 'DISPATCHED' ? 'Use Record dispatch with transporter and LR/Bilty proof.' : stage === 'DELIVERED' ? 'Use Mark delivered after dispatch.' : stage === 'PAYMENT_PENDING' ? (!order ? 'Create the dealer-order draft before starting payment.' : 'Add positively priced product lines before starting payment.') : stage === 'DISPATCH_PENDING' ? 'Confirm a real warehouse allocation before dispatch pending.' : 'This transition is not available for the current workflow state.'
+      return NextResponse.json({ error: guidance }, { status: 409 })
+    }
+    const result = await runMutation(async (tx) => { const cancelsOrder = (stage === 'CANCELLED' || stage === 'LOST') && order; const released = cancelsOrder ? await releaseReservations(tx, order.id, actorUserId) : 0; if (cancelsOrder) await tx.dealerOrder.update({ where: { id: order.id }, data: { status: 'CANCELLED' } }); return transitionInTransaction(tx, group, actorUserId, stage, 'STAGE_CHANGED', reason, released ? { releasedReservationCount: released } : {}) })
     return 'error' in result ? NextResponse.json({ error: result.error }, { status: result.status }) : NextResponse.json(result)
   }
   if (!order) return NextResponse.json({ error: 'Create a dealer-order draft from this confirmed inquiry before fulfillment actions' }, { status: 409 })
@@ -177,8 +186,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const lockedOrder = await tx.dealerOrder.findUniqueOrThrow({ where: { id: order.id }, select: fulfillmentOrderSelect })
       ensurePricedOrder(lockedOrder)
       if (await tx.dealerOrderAllocation.count({ where: { dealerOrderId: lockedOrder.id, releasedAt: null, dispatchedAt: null } })) throw new WorkflowError('This order already has an active warehouse allocation')
-      const creditDays = group.inquiry.dealer?.creditDays || 0; const creditLimit = group.inquiry.dealer?.creditLimit || 0
-      if (!lockedOrder.paymentVerifiedAt && (creditDays <= 0 || (creditLimit > 0 && lockedOrder.balanceDue > creditLimit))) throw new WorkflowError('Payment is not verified and the dealer does not have sufficient approved credit terms')
+      const approvedCredit = hasApprovedDealerCredit({ creditDays: group.inquiry.dealer?.creditDays, creditLimit: group.inquiry.dealer?.creditLimit, balanceDue: lockedOrder.balanceDue })
+      if (!lockedOrder.paymentVerifiedAt && !approvedCredit) throw new WorkflowError('Payment is not verified and the dealer does not have sufficient approved credit days and limit')
       for (const item of lockedOrder.items) {
         if (!item.productId) throw new WorkflowError(`Line item ${item.name} is not linked to an inventory product`)
         const [stock] = await tx.$queryRaw<Array<{ id: number; quantity: number; reservedQuantity: number }>>`SELECT "id", "quantity", "reservedQuantity" FROM "GodownStock" WHERE "godownId" = ${godown.id} AND "productId" = ${item.productId} FOR UPDATE`
@@ -213,8 +222,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return 'error' in result ? NextResponse.json({ error: result.error }, { status: result.status }) : NextResponse.json(result)
   }
 
-  const invoiceId = number(body.invoiceId); if (!Number.isInteger(invoiceId) || invoiceId! <= 0) return NextResponse.json({ error: 'A valid invoice is required' }, { status: 400 })
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId! }, select: { id: true, dealerOrderId: true, displayId: true, contact: { select: { phone: true } } } }); if (!invoice) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
+  const invoiceId = number(body.invoiceId); const invoiceReference = text(body.invoiceReference, 150)
+  if ((!Number.isInteger(invoiceId) || invoiceId! <= 0) && !invoiceReference) return NextResponse.json({ error: 'Enter a valid invoice number' }, { status: 400 })
+  const invoice = Number.isInteger(invoiceId) && invoiceId! > 0
+    ? await prisma.invoice.findUnique({ where: { id: invoiceId! }, select: { id: true, dealerOrderId: true, displayId: true, contact: { select: { phone: true } } } })
+    : await prisma.invoice.findUnique({ where: { displayId: invoiceReference }, select: { id: true, dealerOrderId: true, displayId: true, contact: { select: { phone: true } } } })
+  if (!invoice) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
   if (invoice.dealerOrderId && invoice.dealerOrderId !== order.id) return NextResponse.json({ error: 'This invoice is already linked to a different dealer order' }, { status: 409 })
   const dealerPhones = [group.inquiry.dealer?.phone, group.inquiry.dealer?.alternatePhone, group.inquiry.dealer?.whatsappNumber].flatMap(evolutionPhoneCandidates)
   const sameDealer = dealerPhones.includes(normalizeEvolutionPhone(invoice.contact.phone)); const overrideReason = text(body.overrideReason, 500); const override = isRoutingManager(session.user) && body.overrideDealerMatch === true && overrideReason
